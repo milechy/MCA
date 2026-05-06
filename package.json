@@ -9,6 +9,7 @@
   "scripts": {
     "test:e2e": "playwright test tests/e2e",
     "test:ralph": "playwright test --config=playwright.ralph.config.js",
+    "test:telegram": "playwright test --config=playwright.telegram.config.js",
     "test": "playwright test"
   },
   "repository": {
