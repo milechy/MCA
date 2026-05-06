@@ -102,13 +102,25 @@ test('Phase 5 manual smoke template preserves secret-safe handoff boundary', () 
   expect(template).toContain('Do not include token values, Telegram user ids, chat ids, private bot URLs, or raw log payloads containing private values.');
 });
 
+test('Phase 5 manual smoke template preserves guarded real read-only smoke flow', () => {
+  const template = read(PHASE5_TEMPLATE);
+
+  expect(template).toContain('npm run telegram:real-transport-guard');
+  expect(template).toContain('npm run telegram:real-readonly-smoke');
+  expect(template).toContain('allowed_commands=["/ping","/status","/policy"]');
+  expect(template).toContain('forbidden_commands includes /run-all, /approve, /deny, /modify, /mode fullauto, /confirm');
+  expect(template).toContain('If this command fails, do not run real Bot API smoke.');
+  expect(template).toContain('This runner is intentionally limited to:');
+});
+
 test('Phase 5 manual smoke template preserves default-off and explicit-gate sequence', () => {
   const template = read(PHASE5_TEMPLATE);
 
   expect(template).toContain('unset RALPH_TELEGRAM_RUN_ALL_ENABLED');
   expect(template).toContain('telegram_run_all_enabled=false');
   expect(template).toContain('READY_BUT_NOT_EXECUTED');
-  expect(template).toContain('Only proceed after stages 1-3 pass.');
+  expect(template).toContain('This stage is manual only and must not be run by `telegram:real-readonly-smoke`.');
+  expect(template).toContain('Only proceed after stages 1-3 pass and after separate operator confirmation.');
   expect(template).toContain('export RALPH_TELEGRAM_RUN_ALL_ENABLED=true');
   expect(template).toContain('Run-all execution completed.');
 });
