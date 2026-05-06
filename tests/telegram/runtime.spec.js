@@ -154,6 +154,37 @@ test('handleUpdate processes authorized command and returns response text', asyn
   expect(result.response_text).toBe('pong');
 });
 
+test('handleUpdate audits /policy as read-only with execution disconnected', async () => {
+  const rootDir = makeTempRoot();
+
+  const result = await handleUpdate(update('/policy'), {
+    rootDir,
+    config: runtimeConfig(),
+    roles: runtimeRoles(),
+    env: { [TELEGRAM_RUN_ALL_ENV]: 'true' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.response.wired_to_runtime).toBe(false);
+  expect(result.response.policy.telegram_run_all_enabled).toBe(true);
+  expect(result.response.policy.telegram_shell_execution_connected).toBe(true);
+  expect(result.response_text).toContain('Execution policy:');
+
+  const auditEvent = readAuditEvents(rootDir).at(-1);
+  expect(auditEvent).toMatchObject({
+    event: 'telegram_command',
+    command_type: 'policy',
+    ok: true,
+    reason: null,
+    execution_connected: false
+  });
+  expect(auditEvent).not.toHaveProperty('summary');
+  expectCompactAuditEvent(auditEvent);
+
+  const executionLog = fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8');
+  expect(executionLog).toBe('');
+});
+
 test('handleUpdate keeps /run-all preflight-only when Telegram run-all env gate is off', async () => {
   const rootDir = makeTempRoot();
   const plan = sampleRunAllPlan({ story_id: 'STORY-TELEGRAM-RUNTIME-RUN-ALL-DEFAULT-OFF' });
