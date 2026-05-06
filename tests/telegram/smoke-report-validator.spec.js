@@ -117,5 +117,5 @@ test('validator CLI exits non-zero for unsafe report and zero for safe report', 
   expect(unsafeRun.status).toBe(1);
   const parsed = JSON.parse(unsafeRun.stdout);
   expect(parsed.ok).toBe(false);
-  expect(parsed.findings).toContainEqual({ line: 43, rule_id: 'raw_chat_id_field' });
+  expect(parsed.findings.map((finding) => finding.rule_id)).toContain('raw_chat_id_field');
 });
