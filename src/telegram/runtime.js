@@ -85,11 +85,13 @@ async function sendMessage(config, chatId, text) {
 }
 
 async function handleUpdate(update, options = {}) {
-  const config = options.config || loadTelegramConfig(options.env || process.env);
+  const env = options.env || process.env;
+  const config = options.config || loadTelegramConfig(env);
   const result = await processTelegramUpdate(update, {
     config,
     rootDir: options.rootDir || process.cwd(),
-    roles: options.roles
+    roles: options.roles,
+    env
   });
 
   if (result.chat_id) {
@@ -101,7 +103,8 @@ async function handleUpdate(update, options = {}) {
 
 async function runPolling(options = {}) {
   const rootDir = options.rootDir || process.cwd();
-  const config = options.config || loadTelegramConfig(options.env || process.env);
+  const env = options.env || process.env;
+  const config = options.config || loadTelegramConfig(env);
   if (!config.bot_token) {
     throw new Error('TELEGRAM_BOT_TOKEN is required');
   }
@@ -121,7 +124,8 @@ async function runPolling(options = {}) {
       await handleUpdate(update, {
         config,
         rootDir,
-        roles: options.roles
+        roles: options.roles,
+        env
       });
       saveOffset(offset, rootDir);
     }
