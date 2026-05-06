@@ -20,3 +20,10 @@ test('parses approval verbs as disconnected command types', () => {
   expect(parseTelegramCommand('/deny APR-1')).toMatchObject({ type: 'deny', args: ['APR-1'] });
   expect(parseTelegramCommand('/modify APR-1 change scope')).toMatchObject({ type: 'modify', args: ['APR-1', 'change', 'scope'] });
 });
+
+test('parses execute-noop command', () => {
+  expect(parseTelegramCommand('/execute-noop APR-1 .ralph/tmp/plan.json')).toMatchObject({
+    type: 'execute_noop',
+    args: ['APR-1', '.ralph/tmp/plan.json']
+  });
+});
