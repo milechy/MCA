@@ -10,7 +10,7 @@ test('allows only scripts/gates/run-all.sh with no args from repo root', () => {
 
   expect(result.ok).toBe(true);
   expect(result.allowlist_entry.id).toBe('gates-run-all');
-  expect(result.dry_run_only).toBe(true);
+  expect(result.dry_run_only).toBe(false);
   expect(result.command_hash).toMatch(/^sha256:/);
 });
 
@@ -40,7 +40,7 @@ test('command hash is deterministic for same request', () => {
   expect(commandHash(request)).toBe(commandHash(request));
 });
 
-test('test-only allowlist injection can mark an entry as not dry-run-only without changing production allowlist', () => {
+test('test-only allowlist injection can override the production allowlist without mutating it', () => {
   const injectedAllowlist = [
     {
       id: 'gates-run-all-test',
@@ -48,7 +48,7 @@ test('test-only allowlist injection can mark an entry as not dry-run-only withou
       allowed_args: [],
       allowed_cwd: '.',
       phase: '3.7d-test-only',
-      dry_run_only: false
+      dry_run_only: true
     }
   ];
 
@@ -60,7 +60,7 @@ test('test-only allowlist injection can mark an entry as not dry-run-only withou
 
   expect(result.ok).toBe(true);
   expect(result.allowlist_entry.id).toBe('gates-run-all-test');
-  expect(result.dry_run_only).toBe(false);
+  expect(result.dry_run_only).toBe(true);
 
   const productionResult = validateCommandRequest({
     command: 'scripts/gates/run-all.sh',
@@ -70,5 +70,5 @@ test('test-only allowlist injection can mark an entry as not dry-run-only withou
 
   expect(productionResult.ok).toBe(true);
   expect(productionResult.allowlist_entry.id).toBe('gates-run-all');
-  expect(productionResult.dry_run_only).toBe(true);
+  expect(productionResult.dry_run_only).toBe(false);
 });
