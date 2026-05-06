@@ -1,0 +1,54 @@
+version: "phase0"
+
+mode: "read_only_bootstrap"
+
+filesystem:
+  read:
+    - "."
+  write:
+    - ".ralph/logs"
+  deny:
+    - ".env"
+    - ".env.local"
+    - ".env.production"
+    - "~/.ssh"
+    - "~/.aws"
+    - "/etc"
+    - "/var/run/docker.sock"
+
+network:
+  deny_by_default: true
+  allow:
+    - "api.moonshot.ai"
+    - "generativelanguage.googleapis.com"
+    - "api.telegram.org"
+    - "supabase.co"
+    - "github.com"
+    - "registry.npmjs.org"
+
+process:
+  allow:
+    - "node"
+    - "pnpm"
+    - "npm"
+    - "git"
+    - "supabase"
+    - "playwright"
+    - "opencode"
+  deny:
+    - "ssh"
+    - "scp"
+    - "curl"
+    - "wget"
+    - "docker"
+    - "git push"
+    - "git reset --hard"
+
+secrets:
+  injection: "disabled_in_phase0"
+  redact_stdout: true
+  redact_stderr: true
+
+audit:
+  enabled: true
+  output: ".ralph/logs/audit.jsonl"
