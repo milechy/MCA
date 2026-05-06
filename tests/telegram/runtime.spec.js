@@ -54,6 +54,17 @@ function expectCompressedRunAllText(text) {
   expect(text).not.toContain('policy');
 }
 
+function expectCompressedPolicyText(text) {
+  expect(text).toContain('Execution policy:');
+  expect(text).toContain('run_all_failure_reason_taxonomy');
+  expect(text).toContain('allowed_commands');
+  expect(text).not.toContain('stdout');
+  expect(text).not.toContain('execution_preflight');
+  expect(text).not.toContain('command_preflight');
+  expect(text).not.toContain('shell_execution_completed');
+  expect(text).not.toContain('approved_shell_execution_completed');
+}
+
 function readAuditEvents(rootDir) {
   return fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
@@ -86,7 +97,10 @@ test('handleUpdate audits /policy as read-only with execution disconnected', asy
   expect(result.response.wired_to_runtime).toBe(false);
   expect(result.response.policy.telegram_run_all_enabled).toBe(true);
   expect(result.response.policy.telegram_shell_execution_connected).toBe(true);
-  expect(result.response_text).toContain('Execution policy:');
+  expect(result.response.policy.run_all_failure_reason_taxonomy).toContain('shell_execution_failed');
+  expect(result.response.policy.run_all_failure_audit_summary_fields).toContain('duration_ms');
+  expect(result.response.policy.allowed_commands[0]).toMatchObject({ id: 'gates-run-all', command: 'scripts/gates/run-all.sh' });
+  expectCompressedPolicyText(result.response_text);
   const auditEvent = readAuditEvents(rootDir).at(-1);
   expect(auditEvent).toMatchObject({ event: 'telegram_command', command_type: 'policy', ok: true, reason: null, execution_connected: false });
   expect(auditEvent).not.toHaveProperty('summary');
