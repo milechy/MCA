@@ -118,6 +118,21 @@ test('/policy returns read-only execution policy status', () => {
   expect(result.text).toContain('Execution policy:');
 });
 
+test('/run-all is parsed but remains disconnected from shell execution', () => {
+  const result = handleTelegramCommand(parseTelegramCommand('/run-all APR-001 .ralph/tmp/plan.json'), {
+    rootDir: makeTempRoot(),
+    user_id: 3,
+    roles: roles()
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.result.ok).toBe(false);
+  expect(result.result.reason).toBe('telegram_run_all_not_connected');
+  expect(result.result.execution_connected).toBe(false);
+  expect(result.text).toContain('Run-all execution is not connected from Telegram.');
+});
+
 test('/mode fullauto creates token but does not immediately switch mode', () => {
   const rootDir = makeTempRoot();
   const result = handleTelegramCommand(parseTelegramCommand('/mode fullauto 6'), {
