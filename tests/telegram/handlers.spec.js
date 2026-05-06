@@ -15,6 +15,7 @@ const { processTelegramUpdate } = require('../../src/telegram/bot');
 const { MODES, loadMode } = require('../../src/ralph/mode-manager');
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
+const { COMMAND_ALLOWLIST } = require('../../src/ralph/command-allowlist');
 const { TELEGRAM_RUN_ALL_ENV } = require('../../src/telegram/execution-adapter');
 
 const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -64,6 +65,17 @@ function update(userId, chatId, text) {
 
 function allowedConfig() {
   return { allowed_user_ids: [1, 2, 3, 4], allowed_chat_ids: [10] };
+}
+
+function expectedAllowedCommandsFromAllowlist() {
+  return COMMAND_ALLOWLIST.map((entry) => ({
+    id: entry.id,
+    command: entry.command,
+    allowed_args: entry.allowed_args || [],
+    allowed_cwd: entry.allowed_cwd || '.',
+    phase: entry.phase,
+    dry_run_only: entry.dry_run_only === true
+  }));
 }
 
 function expectPolicyRunAllTaxonomy(policy) {
@@ -134,6 +146,13 @@ test('policy and handler run-all taxonomy do not drift', () => {
   expect(policyResult.policy.run_all_failure_reason_taxonomy).toEqual(POLICY_RUN_ALL_FAILURE_REASON_TAXONOMY);
   expect(policyResult.policy.run_all_failure_reason_taxonomy).toEqual(summary.reason_taxonomy);
   expect(policyResult.policy.run_all_failure_reason_normalization.plan_file_not_found).toBe(summary.reason);
+});
+
+test('policy allowed commands mirror command allowlist', () => {
+  const policyResult = handleTelegramCommand(parseTelegramCommand('/policy'), { rootDir: makeTempRoot(), user_id: 3, roles: roles(), env: {} });
+
+  expect(policyResult.policy.allowed_commands).toEqual(expectedAllowedCommandsFromAllowlist());
+  expect(policyResult.policy.allowed_commands).toHaveLength(COMMAND_ALLOWLIST.length);
 });
 
 test('summarizeRunAllResult normalizes failure reason and includes taxonomy', () => {
@@ -213,6 +232,7 @@ test('/policy returns read-only execution policy status with runtime gate off', 
   expect(result.policy.allow_real_execution_required).toBe(true);
   expect(result.policy.run_all_execution_conditions).toContain(`${TELEGRAM_RUN_ALL_ENV}=true`);
   expectPolicyRunAllTaxonomy(result.policy);
+  expect(result.policy.allowed_commands).toEqual(expectedAllowedCommandsFromAllowlist());
   expect(result.policy.allowed_commands[0]).toMatchObject({ id: 'gates-run-all', command: 'scripts/gates/run-all.sh', allowed_args: [], allowed_cwd: '.', dry_run_only: false });
   expect(result.text).toContain('Execution policy:');
 });
@@ -225,6 +245,7 @@ test('/policy returns read-only execution policy status with runtime gate true',
   expect(result.policy.telegram_shell_execution_connected).toBe(true);
   expect(result.policy.telegram_run_all_enabled).toBe(true);
   expect(result.policy.telegram_run_all_env).toBe(TELEGRAM_RUN_ALL_ENV);
+  expect(result.policy.allowed_commands).toEqual(expectedAllowedCommandsFromAllowlist());
   expectPolicyRunAllTaxonomy(result.policy);
 });
 
