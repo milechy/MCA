@@ -7,8 +7,10 @@ function telegramApiRequest(botToken, method, payload = {}) {
     const body = JSON.stringify(payload);
     const request = https.request({
       hostname: 'api.telegram.org',
+      family: 4,
       path: `/bot${botToken}/${method}`,
       method: 'POST',
+      timeout: 30_000,
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body)
@@ -32,6 +34,9 @@ function telegramApiRequest(botToken, method, payload = {}) {
       });
     });
 
+    request.on('timeout', () => {
+      request.destroy(new Error(`Telegram API ${method} timed out`));
+    });
     request.on('error', reject);
     request.write(body);
     request.end();
