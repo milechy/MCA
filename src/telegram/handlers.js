@@ -6,6 +6,26 @@ const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('.
 const { executeNoopFromTelegram, runAllFromTelegram } = require('./execution-adapter');
 const { executionPolicyStatus } = require('./policy-reader');
 
+const RUN_ALL_FAILURE_REASON_TAXONOMY = Object.freeze([
+  'approval_id_required',
+  'plan_path_not_allowed',
+  'plan_file_missing',
+  'approval_not_found',
+  'approval_not_approved',
+  'plan_hash_mismatch',
+  'diff_hash_mismatch',
+  'command_not_allowlisted',
+  'allowlist_entry_is_dry_run_only',
+  'real_shell_execution_not_enabled',
+  'shell_execution_failed'
+]);
+
+function normalizeRunAllReason(reason) {
+  if (reason === 'plan_file_not_found') return 'plan_file_missing';
+  if (reason === 'command_not_allowed') return 'command_not_allowlisted';
+  return reason || null;
+}
+
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
 }
@@ -25,9 +45,11 @@ function durationMs(startedAt, finishedAt) {
 function summarizeRunAllResult(result) {
   const startedAt = result.started_at || null;
   const finishedAt = result.finished_at || null;
+  const reason = normalizeRunAllReason(result.reason);
   return {
     ok: result.ok,
-    reason: result.reason || null,
+    reason,
+    reason_taxonomy: result.ok ? null : RUN_ALL_FAILURE_REASON_TAXONOMY,
     stage: result.stage || null,
     executor: result.executor || null,
     command: result.command || 'scripts/gates/run-all.sh',
@@ -49,14 +71,14 @@ function summarizeRunAllResult(result) {
 function runAllResponseText(result) {
   const summary = summarizeRunAllResult(result);
   if (!result.ok) {
-    return `Run-all failed: ${result.reason || 'unknown'}${jsonBlock(summary)}`;
+    return `Run-all failed: ${summary.reason || 'unknown'}${jsonBlock(summary)}`;
   }
 
   if (summary.commands_executed.length > 0) {
     return `Run-all execution completed.${jsonBlock(summary)}`;
   }
 
-  return `Run-all preflight passed. ${result.reason}.${jsonBlock(summary)}`;
+  return `Run-all preflight passed. ${summary.reason}.${jsonBlock(summary)}`;
 }
 
 function handleTelegramCommand(parsed, context = {}) {
@@ -140,10 +162,11 @@ function handleTelegramCommand(parsed, context = {}) {
     const [approvalId, planPath] = parsed.args;
     if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
     const result = runAllFromTelegram(approvalId, planPath, { rootDir, env: context.env });
-    return textResponse(runAllResponseText(result), { result, summary: summarizeRunAllResult(result), wired_to_runtime: result.wired_to_runtime === true });
+    const summary = summarizeRunAllResult(result);
+    return textResponse(runAllResponseText(result), { result, summary, wired_to_runtime: result.wired_to_runtime === true });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY };
