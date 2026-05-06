@@ -150,7 +150,7 @@ test('/mode approval switches back to approval for reviewer', () => {
   expect(loadMode(rootDir).mode).toBe(MODES.APPROVAL);
 });
 
-test('/approve is parsed only and runtime action remains unwired', () => {
+test('/approve performs dry-run validation and remains unwired', () => {
   const result = handleTelegramCommand(parseTelegramCommand('/approve APR-001'), {
     rootDir: makeTempRoot(),
     user_id: 3,
@@ -159,7 +159,9 @@ test('/approve is parsed only and runtime action remains unwired', () => {
 
   expect(result.ok).toBe(true);
   expect(result.wired_to_runtime).toBe(false);
-  expect(result.text).toContain('runtime action is not wired');
+  expect(result.result.ok).toBe(false);
+  expect(result.result.reason).toBe('approval_not_found');
+  expect(result.text).toContain('Dry-run approve validation failed');
 });
 
 test('processTelegramUpdate rejects unauthorized user or chat', async () => {
