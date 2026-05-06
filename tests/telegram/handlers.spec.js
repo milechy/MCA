@@ -9,6 +9,7 @@ const { processTelegramUpdate } = require('../../src/telegram/bot');
 const { MODES, loadMode } = require('../../src/ralph/mode-manager');
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
+const { TELEGRAM_RUN_ALL_ENV } = require('../../src/telegram/execution-adapter');
 
 const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
@@ -176,6 +177,31 @@ test('/run-all performs preflight only and does not execute shell', () => {
   expect(result.result.command_preflight.allowlist_entry.id).toBe('gates-run-all');
   expect(result.result.policy.reason).toBe('real_shell_execution_not_enabled');
   expect(result.text).toContain('Run-all preflight passed. READY_BUT_NOT_EXECUTED.');
+});
+
+test('/run-all reports ready for Telegram execution when env gate is true but still does not execute shell', () => {
+  const rootDir = makeTempRoot();
+  const plan = sampleRunAllPlan();
+  const planPath = writeTmpPlan(rootDir, 'run-all-plan.json', plan);
+  const approval = createApprovedPlan(rootDir, plan);
+
+  const result = handleTelegramCommand(parseTelegramCommand(`/run-all ${approval.approval_id} ${planPath}`), {
+    rootDir,
+    user_id: 3,
+    roles: roles(),
+    env: { [TELEGRAM_RUN_ALL_ENV]: 'true' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.result.ok).toBe(true);
+  expect(result.result.reason).toBe('READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED');
+  expect(result.result.run_all_enabled).toBe(true);
+  expect(result.result.execution_connected).toBe(false);
+  expect(result.result.commands_executed).toEqual([]);
+  expect(result.result.files_modified).toEqual([]);
+  expect(result.result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
+  expect(result.text).toContain('Run-all preflight passed. READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED.');
 });
 
 test('/run-all rejects unsafe or missing plan path before shell execution', () => {
