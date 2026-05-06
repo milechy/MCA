@@ -4,6 +4,7 @@ const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
 const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
 const { executeNoopFromTelegram } = require('./execution-adapter');
+const { executionPolicyStatus } = require('./policy-reader');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -23,6 +24,11 @@ function handleTelegramCommand(parsed, context = {}) {
   if (parsed.type === 'status') {
     const status = { state: loadState(rootDir), mode: loadMode(rootDir) };
     return textResponse(`Status:${jsonBlock(status)}`, { status });
+  }
+
+  if (parsed.type === 'policy') {
+    const policy = executionPolicyStatus();
+    return textResponse(`Execution policy:${jsonBlock(policy)}`, { policy, wired_to_runtime: false });
   }
 
   if (parsed.type === 'approvals') {
