@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createApproval, approveApproval, supersedeApprovalForModify } = require('../../src/ralph/approval-manager');
+const { createApproval, approveApproval, approveApprovalRecordOnly, supersedeApprovalForModify } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
 
 const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -13,6 +13,7 @@ function makeTempRoot() {
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '', 'utf8');
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), '', 'utf8');
   return rootDir;
 }
 
@@ -37,6 +38,7 @@ function createTestApproval(plan, risk, options = {}) {
     rootDir: options.rootDir,
     approval_id: options.approval_id,
     allowed_user_ids: options.allowed_user_ids || [123456789],
+    expires_at: options.expires_at,
     pre_exec_diff_hash: EMPTY_DIFF_HASH
   });
 }
@@ -105,4 +107,55 @@ test('modify supersedes the current approval and requires replan', () => {
   expect(result.status).toBe('superseded');
   expect(result.status_details.next_action).toBe('REPLAN_REQUIRED');
   expect(result.modify_instruction).toBe('Limit DB changes to staging only');
+});
+
+test('record-only approval marks pending approval as approved without execution', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan();
+  const risk = evaluateRisk(plan);
+
+  const approval = createTestApproval(plan, risk, {
+    rootDir,
+    approval_id: 'APR-TEST-RECORD-ONLY'
+  });
+
+  const result = approveApprovalRecordOnly(approval.approval_id, 123456789, { rootDir, channel: 'cli' });
+
+  expect(result.status).toBe('approved');
+  expect(result.approved_by).toBe('cli:123456789');
+  expect(result.execution_connected).toBe(false);
+  expect(result.execution_requires_hash_verification).toBe(true);
+});
+
+test('record-only approval fails for disallowed user', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan();
+  const risk = evaluateRisk(plan);
+
+  const approval = createTestApproval(plan, risk, {
+    rootDir,
+    approval_id: 'APR-TEST-RECORD-DISALLOWED'
+  });
+
+  const result = approveApprovalRecordOnly(approval.approval_id, 999, { rootDir, channel: 'cli' });
+
+  expect(result.status).toBe('failed_verification');
+  expect(result.status_details.reason).toBe('user_not_allowed');
+});
+
+test('record-only approval fails for expired approval', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan();
+  const risk = evaluateRisk(plan);
+
+  const approval = createTestApproval(plan, risk, {
+    rootDir,
+    approval_id: 'APR-TEST-RECORD-EXPIRED',
+    expires_at: new Date(Date.now() - 60_000).toISOString()
+  });
+
+  const result = approveApprovalRecordOnly(approval.approval_id, 123456789, { rootDir, channel: 'cli' });
+
+  expect(result.status).toBe('failed_verification');
+  expect(result.status_details.reason).toBe('approval_expired');
 });
