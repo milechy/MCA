@@ -7,6 +7,7 @@ const PHASE4_SMOKE_PLAN = path.join(process.cwd(), 'docs', 'telegram-bot-phase4-
 const PHASE3_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-run-all-phase3-checklist.md');
 const PHASE4_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase4-completion-checklist.md');
 const PHASE5_TEMPLATE = path.join(process.cwd(), 'docs', 'telegram-phase5-manual-smoke-template.md');
+const PHASE5_GO_NO_GO = path.join(process.cwd(), 'docs', 'telegram-phase5-readonly-go-no-go.md');
 
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -125,8 +126,33 @@ test('Phase 5 manual smoke template preserves default-off and explicit-gate sequ
   expect(template).toContain('Run-all execution completed.');
 });
 
+test('Phase 5 read-only go/no-go checklist preserves hard no-go and allowed command boundaries', () => {
+  const checklist = read(PHASE5_GO_NO_GO);
+
+  expect(checklist).toContain('It does not authorize real `/run-all` execution.');
+  expect(checklist).toContain('/ping\n/status\n/policy');
+  expect(checklist).toContain('/run-all\n/approve\n/deny\n/modify\n/mode fullauto\n/confirm');
+  expect(checklist).toContain('## Hard no-go conditions');
+  expect(checklist).toContain('`RALPH_TELEGRAM_RUN_ALL_ENABLED=true` is set');
+  expect(checklist).toContain('`npm run telegram:real-transport-guard` fails');
+});
+
+test('Phase 5 read-only go/no-go checklist preserves output redaction contract and deferred items', () => {
+  const checklist = read(PHASE5_GO_NO_GO);
+
+  expect(checklist).toContain('output_contract.no_raw_update=true');
+  expect(checklist).toContain('output_contract.no_raw_response_payload=true');
+  expect(checklist).toContain('output_contract.no_private_ids=true');
+  expect(checklist).toContain('raw user id');
+  expect(checklist).toContain('raw chat id');
+  expect(checklist).toContain('raw response_text');
+  expect(checklist).toContain('## Deferred items');
+  expect(checklist).toContain('real default-off `/run-all` smoke');
+  expect(checklist).toContain('CI job that performs gated `/run-all`');
+});
+
 test('Telegram docs do not instruct CI or repository-persistent real run-all enablement', () => {
-  const docs = [read(OPERATOR_RUNBOOK), read(PHASE4_SMOKE_PLAN), read(PHASE3_CHECKLIST), read(PHASE4_CHECKLIST), read(PHASE5_TEMPLATE)].join('\n');
+  const docs = [read(OPERATOR_RUNBOOK), read(PHASE4_SMOKE_PLAN), read(PHASE3_CHECKLIST), read(PHASE4_CHECKLIST), read(PHASE5_TEMPLATE), read(PHASE5_GO_NO_GO)].join('\n');
 
   expect(docs).not.toContain('secrets.RALPH_TELEGRAM_RUN_ALL_ENABLED');
   expect(docs).not.toContain('RALPH_TELEGRAM_RUN_ALL_ENABLED: "true"');
