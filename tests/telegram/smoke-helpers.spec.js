@@ -1,4 +1,5 @@
 const { test, expect } = require('@playwright/test');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -9,6 +10,7 @@ const { inspectLogs, readJsonl } = require('../../scripts/telegram/inspect-logs'
 function makeTempRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-smoke-helpers-'));
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'tmp'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), '', 'utf8');
   fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), '', 'utf8');
   return rootDir;
@@ -16,6 +18,14 @@ function makeTempRoot() {
 
 function appendJsonl(filePath, event) {
   fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+function runDefaultOffSmoke(args, { cwd = process.cwd(), env = {} } = {}) {
+  return spawnSync(process.execPath, [path.join(process.cwd(), 'scripts', 'telegram', 'default-off-smoke.js'), ...args], {
+    cwd,
+    env: { ...process.env, ...env },
+    encoding: 'utf8'
+  });
 }
 
 test('check-env redacts bot token without exposing full secret', () => {
@@ -104,4 +114,37 @@ test('inspect-logs returns bounded tails and extracts shell completion events', 
       approval_id: 'APR-1'
     }
   ]);
+});
+
+test('default-off-smoke CLI prints usage and exits without side effects when args are missing', () => {
+  const rootDir = makeTempRoot();
+  const result = runDefaultOffSmoke([], { cwd: rootDir, env: { [RUN_ALL_ENV]: '' } });
+
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain('Usage: node scripts/telegram/default-off-smoke.js <approval_id> <.ralph/tmp/plan.json>');
+  expect(result.stdout).toBe('');
+  expect(fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8')).toBe('');
+});
+
+test('default-off-smoke CLI refuses to run when Telegram run-all env gate is true', () => {
+  const rootDir = makeTempRoot();
+  const planPath = path.join(rootDir, '.ralph', 'tmp', 'plan.json');
+  fs.writeFileSync(planPath, '{}\n', 'utf8');
+
+  const result = runDefaultOffSmoke(['APR-TEST', '.ralph/tmp/plan.json'], { cwd: rootDir, env: { [RUN_ALL_ENV]: 'true' } });
+
+  expect(result.status).toBe(3);
+  expect(result.stderr).toContain('Refusing default-off smoke because RALPH_TELEGRAM_RUN_ALL_ENABLED=true. Unset it first.');
+  expect(result.stdout).toBe('');
+  expect(fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8')).toBe('');
+});
+
+test('default-off-smoke CLI fails safely when plan file is missing', () => {
+  const rootDir = makeTempRoot();
+  const result = runDefaultOffSmoke(['APR-TEST', '.ralph/tmp/missing.json'], { cwd: rootDir, env: { [RUN_ALL_ENV]: '' } });
+
+  expect(result.status).toBe(4);
+  expect(result.stderr).toContain('Plan file not found: .ralph/tmp/missing.json');
+  expect(result.stdout).toBe('');
+  expect(fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8')).toBe('');
 });
