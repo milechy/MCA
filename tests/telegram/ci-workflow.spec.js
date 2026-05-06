@@ -8,8 +8,7 @@ test('Phase 4 Telegram smoke workflow exists and runs only safe test commands', 
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
   expect(workflow).toContain('name: Phase 4 Telegram Smoke Safety');
-  expect(workflow).toContain('npm run telegram:check-env || true');
-  expect(workflow).toContain('npm run telegram:inspect-logs');
+  expect(workflow).toContain('npm run telegram:ci-smoke');
   expect(workflow).toContain('npm run test:ralph');
   expect(workflow).toContain('npm run test:telegram');
 });
