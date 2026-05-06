@@ -46,8 +46,9 @@ async function processTelegramUpdate(update, options = {}) {
     user_id: auth.user_id,
     chat_id: auth.chat_id,
     ok: response.ok,
-    reason: response.result?.reason || null,
-    execution_connected: response.wired_to_runtime === true
+    reason: response.result?.reason || response.summary?.reason || null,
+    execution_connected: response.wired_to_runtime === true,
+    summary: response.summary || null
   }, { rootDir });
 
   return {
