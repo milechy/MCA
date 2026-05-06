@@ -8,6 +8,8 @@ const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/a
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
 const { EMPTY_DIFF_HASH, TELEGRAM_RUN_ALL_ENV } = require('../../src/telegram/execution-adapter');
 
+const POLICY_RESPONSE_MAX_BYTES = 4096;
+
 function makeTempRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-runtime-'));
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
@@ -58,6 +60,7 @@ function expectCompressedPolicyText(text) {
   expect(text).toContain('Execution policy:');
   expect(text).toContain('run_all_failure_reason_taxonomy');
   expect(text).toContain('allowed_commands');
+  expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(POLICY_RESPONSE_MAX_BYTES);
   expect(text).not.toContain('stdout');
   expect(text).not.toContain('execution_preflight');
   expect(text).not.toContain('command_preflight');
@@ -106,6 +109,19 @@ test('handleUpdate audits /policy as read-only with execution disconnected', asy
   expect(auditEvent).not.toHaveProperty('summary');
   expectCompactAuditEvent(auditEvent);
   expect(fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8')).toBe('');
+});
+
+test('handleUpdate keeps /policy response under Telegram-safe size bound', async () => {
+  const rootDir = makeTempRoot();
+  const off = await handleUpdate(update('/policy'), { rootDir, config: runtimeConfig(), roles: runtimeRoles(), env: {} });
+  const on = await handleUpdate(update('/policy'), { rootDir, config: runtimeConfig(), roles: runtimeRoles(), env: { [TELEGRAM_RUN_ALL_ENV]: 'true' } });
+
+  expect(off.ok).toBe(true);
+  expect(on.ok).toBe(true);
+  expect(Buffer.byteLength(off.response_text, 'utf8')).toBeLessThanOrEqual(POLICY_RESPONSE_MAX_BYTES);
+  expect(Buffer.byteLength(on.response_text, 'utf8')).toBeLessThanOrEqual(POLICY_RESPONSE_MAX_BYTES);
+  expectCompressedPolicyText(off.response_text);
+  expectCompressedPolicyText(on.response_text);
 });
 
 test('handleUpdate keeps /run-all preflight-only when Telegram run-all env gate is off', async () => {
