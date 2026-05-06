@@ -3,7 +3,7 @@ const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = 
 const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
 const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
-const { executeNoopFromTelegram, preflightRunAllFromTelegram } = require('./execution-adapter');
+const { executeNoopFromTelegram, runAllFromTelegram } = require('./execution-adapter');
 const { executionPolicyStatus } = require('./policy-reader');
 
 function textResponse(text, extra = {}) {
@@ -94,8 +94,11 @@ function handleTelegramCommand(parsed, context = {}) {
   if (parsed.type === 'run_all') {
     const [approvalId, planPath] = parsed.args;
     if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
-    const result = preflightRunAllFromTelegram(approvalId, planPath, { rootDir, env: context.env });
-    return textResponse(result.ok ? `Run-all preflight passed. ${result.reason}.${jsonBlock(result)}` : `Run-all preflight failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+    const result = runAllFromTelegram(approvalId, planPath, { rootDir, env: context.env });
+    const prefix = result.ok && result.commands_executed && result.commands_executed.length > 0
+      ? 'Run-all execution completed.'
+      : `Run-all preflight passed. ${result.reason}.`;
+    return textResponse(result.ok ? `${prefix}${jsonBlock(result)}` : `Run-all failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: result.wired_to_runtime === true });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
