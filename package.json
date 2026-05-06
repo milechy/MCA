@@ -17,6 +17,7 @@
     "telegram:dry-transport-smoke": "node scripts/telegram/dry-transport-smoke.js",
     "telegram:real-transport-guard": "node scripts/telegram/real-transport-guard.js",
     "telegram:real-readonly-smoke": "node scripts/telegram/real-readonly-smoke.js",
+    "telegram:validate-smoke-report": "node scripts/telegram/validate-smoke-report.js",
     "telegram:ci-smoke": "npm run telegram:preflight-no-secrets && npm run telegram:check-env --if-present && npm run telegram:dry-transport-smoke && npm run telegram:inspect-logs --if-present",
     "test": "playwright test"
   },
