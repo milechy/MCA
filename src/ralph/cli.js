@@ -9,6 +9,7 @@ const { dryRunApprovalCommand } = require('./approval-validator');
 const { runExecutionHarness } = require('./execution-harness');
 const { dryRunShellCommand } = require('./shell-dry-run');
 const { runShellDryRunWithPreflight } = require('./shell-preflight-wrapper');
+const { runAllApprovedSmoke } = require('./run-all-smoke-helper');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -32,6 +33,7 @@ Commands:
   node src/ralph/cli.js execute-noop <approval_id> <plan.json> [--current-diff-hash sha256:...]
   node src/ralph/cli.js shell-dry-run <command>
   node src/ralph/cli.js shell-dry-run-approved <approval_id> <plan.json> <command> [--current-diff-hash sha256:...]
+  node src/ralph/cli.js smoke-run-all-approved <approval_id> <plan.json> [--current-diff-hash sha256:...]
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -170,6 +172,15 @@ function main(argv = process.argv.slice(2)) {
       args: [],
       cwd: '.'
     }, {
+      current_diff_hash: optionValue(args, '--current-diff-hash')
+    }), null, 2));
+    return;
+  }
+
+  if (command === 'smoke-run-all-approved') {
+    const [approvalId, planPath] = args;
+    const plan = readJson(planPath);
+    console.log(JSON.stringify(runAllApprovedSmoke(approvalId, plan, {
       current_diff_hash: optionValue(args, '--current-diff-hash')
     }), null, 2));
     return;
