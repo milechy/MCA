@@ -30,3 +30,8 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Ralph runtime state
+.ralph/approval-pending/*
+.ralph/tmp/*
+.ralph/approval-log.jsonl
