@@ -4,7 +4,12 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { parseTelegramCommand } = require('../../src/telegram/command-parser');
-const { handleTelegramCommand } = require('../../src/telegram/handlers');
+const {
+  handleTelegramCommand,
+  summarizeRunAllResult,
+  normalizeRunAllReason,
+  RUN_ALL_FAILURE_REASON_TAXONOMY
+} = require('../../src/telegram/handlers');
 const { processTelegramUpdate } = require('../../src/telegram/bot');
 const { MODES, loadMode } = require('../../src/ralph/mode-manager');
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
@@ -64,6 +69,81 @@ test('/ping returns pong', () => {
   const result = handleTelegramCommand(parseTelegramCommand('/ping'), { rootDir: makeTempRoot(), user_id: 3, roles: roles() });
   expect(result.ok).toBe(true);
   expect(result.text).toBe('pong');
+});
+
+test('run-all failure reason taxonomy is fixed', () => {
+  expect(RUN_ALL_FAILURE_REASON_TAXONOMY).toEqual([
+    'approval_id_required',
+    'plan_path_not_allowed',
+    'plan_file_missing',
+    'approval_not_found',
+    'approval_not_approved',
+    'plan_hash_mismatch',
+    'diff_hash_mismatch',
+    'command_not_allowlisted',
+    'allowlist_entry_is_dry_run_only',
+    'real_shell_execution_not_enabled',
+    'shell_execution_failed'
+  ]);
+  expect(normalizeRunAllReason('plan_file_not_found')).toBe('plan_file_missing');
+  expect(normalizeRunAllReason('command_not_allowed')).toBe('command_not_allowlisted');
+  expect(normalizeRunAllReason('approval_not_found')).toBe('approval_not_found');
+  expect(normalizeRunAllReason(null)).toBe(null);
+});
+
+test('summarizeRunAllResult normalizes failure reason and includes taxonomy', () => {
+  const summary = summarizeRunAllResult({
+    ok: false,
+    reason: 'command_not_allowed',
+    stage: 'command_allowlist',
+    command: 'scripts/gates/run-all.sh',
+    run_all_enabled: true,
+    wired_to_runtime: false,
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: []
+  });
+
+  expect(summary).toMatchObject({
+    ok: false,
+    reason: 'command_not_allowlisted',
+    reason_taxonomy: RUN_ALL_FAILURE_REASON_TAXONOMY,
+    stage: 'command_allowlist',
+    exit_code: null,
+    started_at: null,
+    finished_at: null,
+    duration_ms: null,
+    commands_executed: [],
+    files_modified: []
+  });
+});
+
+test('summarizeRunAllResult omits failure taxonomy for success and computes duration', () => {
+  const summary = summarizeRunAllResult({
+    ok: true,
+    executor: 'shell',
+    command: 'scripts/gates/run-all.sh',
+    exit_code: 0,
+    started_at: '2026-05-06T07:00:00.000Z',
+    finished_at: '2026-05-06T07:00:02.250Z',
+    run_all_enabled: true,
+    wired_to_runtime: true,
+    execution_connected: true,
+    commands_executed: ['scripts/gates/run-all.sh'],
+    files_modified: []
+  });
+
+  expect(summary).toMatchObject({
+    ok: true,
+    reason: null,
+    reason_taxonomy: null,
+    exit_code: 0,
+    started_at: '2026-05-06T07:00:00.000Z',
+    finished_at: '2026-05-06T07:00:02.250Z',
+    duration_ms: 2250,
+    commands_executed: ['scripts/gates/run-all.sh'],
+    files_modified: []
+  });
 });
 
 test('/status returns state and mode', () => {
@@ -156,7 +236,7 @@ test('/run-all rejects unsafe or missing plan path before shell execution', () =
   expect(result.result.ok).toBe(false);
   expect(result.result.reason).toBe('plan_path_not_allowed');
   expect(result.result.execution_connected).toBe(false);
-  expect(result.summary).toMatchObject({ ok: false, reason: 'plan_path_not_allowed', wired_to_runtime: false, execution_connected: false, commands_executed: [], files_modified: [], log_path: '.ralph/logs/execution.jsonl' });
+  expect(result.summary).toMatchObject({ ok: false, reason: 'plan_path_not_allowed', reason_taxonomy: RUN_ALL_FAILURE_REASON_TAXONOMY, wired_to_runtime: false, execution_connected: false, commands_executed: [], files_modified: [], log_path: '.ralph/logs/execution.jsonl' });
   expect(result.text).toContain('Run-all failed: plan_path_not_allowed');
   expect(result.text).not.toContain('stdout');
 });
