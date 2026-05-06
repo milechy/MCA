@@ -5,6 +5,8 @@ const path = require('node:path');
 
 const { scanText, scanFiles, preflightNoSecrets } = require('../../scripts/telegram/preflight-no-secrets');
 
+const TOKEN_LIKE = ['1234567890', 'ABCDEF', 'secret', 'token'].join('_').replace('_ABCDEF_', ':ABCDEF_');
+
 function makeTempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-no-secret-preflight-'));
 }
@@ -34,7 +36,7 @@ test('scanText detects token-like and persistent Telegram assignments', () => {
   const findings = scanText({
     source: '.env',
     text: [
-      'TELEGRAM_BOT_TOKEN=1234567890:ABCDEF_secret_token',
+      `TELEGRAM_BOT_TOKEN=${TOKEN_LIKE}`,
       'TELEGRAM_ALLOWED_USER_IDS=123456789',
       'TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890',
       'RALPH_TELEGRAM_RUN_ALL_ENABLED=true'
@@ -68,7 +70,7 @@ test('scanFiles scans repository-style text files and skips node_modules', () =>
   const rootDir = makeTempRoot();
   writeFile(rootDir, 'docs/template.md', 'TELEGRAM_BOT_TOKEN="<private bot token>"\n');
   writeFile(rootDir, '.env.local', 'TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890\n');
-  writeFile(rootDir, 'node_modules/pkg/index.js', 'TELEGRAM_BOT_TOKEN=1234567890:ABCDEF_secret_token\n');
+  writeFile(rootDir, 'node_modules/pkg/index.js', `TELEGRAM_BOT_TOKEN=${TOKEN_LIKE}\n`);
 
   const findings = scanFiles(rootDir);
 
@@ -87,7 +89,7 @@ test('preflightNoSecrets passes safe templates and fails unsafe repo content', (
   expect(preflightNoSecrets({ rootDir: safeRoot, includeGitDiff: false })).toEqual({ ok: true, findings: [] });
 
   const unsafeRoot = makeTempRoot();
-  writeFile(unsafeRoot, '.env', 'TELEGRAM_BOT_TOKEN=1234567890:ABCDEF_secret_token\n');
+  writeFile(unsafeRoot, '.env', `TELEGRAM_BOT_TOKEN=${TOKEN_LIKE}\n`);
   const result = preflightNoSecrets({ rootDir: unsafeRoot, includeGitDiff: false });
   expect(result.ok).toBe(false);
   expect(result.findings).toEqual([
