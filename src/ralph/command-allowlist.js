@@ -24,9 +24,13 @@ function commandHash(commandRequest) {
   })).digest('hex')}`;
 }
 
-function findAllowlistEntry(command) {
+function activeAllowlist(options = {}) {
+  return Array.isArray(options.allowlist) ? options.allowlist : COMMAND_ALLOWLIST;
+}
+
+function findAllowlistEntry(command, options = {}) {
   const normalized = normalizeRelativePath(command);
-  return COMMAND_ALLOWLIST.find((entry) => normalizeRelativePath(entry.command) === normalized) || null;
+  return activeAllowlist(options).find((entry) => normalizeRelativePath(entry.command) === normalized) || null;
 }
 
 function validateCommandRequest(commandRequest, options = {}) {
@@ -44,7 +48,7 @@ function validateCommandRequest(commandRequest, options = {}) {
     return { ok: false, reason: 'cwd_not_allowed', request };
   }
 
-  const entry = findAllowlistEntry(request.command);
+  const entry = findAllowlistEntry(request.command, options);
   if (!entry) {
     return { ok: false, reason: 'command_not_allowlisted', request };
   }
@@ -73,7 +77,9 @@ function validateCommandRequest(commandRequest, options = {}) {
 
 module.exports = {
   COMMAND_ALLOWLIST,
+  activeAllowlist,
   commandHash,
+  findAllowlistEntry,
   normalizeRelativePath,
   validateCommandRequest
 };
