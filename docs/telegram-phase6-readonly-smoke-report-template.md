@@ -176,16 +176,36 @@ Post-smoke:
 - working tree clean after smoke: yes|no
 - git diff contains token or Telegram IDs: no|yes
 - git diff --cached contains token or Telegram IDs: no|yes
+- secrets committed: no|yes
 
 Cleanup:
-- RALPH_TELEGRAM_RUN_ALL_ENABLED unset: yes|no
-- TELEGRAM_BOT_TOKEN unset: yes|no
-- TELEGRAM_ALLOWED_USER_IDS unset: yes|no
-- TELEGRAM_ALLOWED_CHAT_IDS unset: yes|no
+- run-all gate unset: yes|no
+- bot token unset: yes|no
+- allowed user ids unset: yes|no
+- allowed chat ids unset: yes|no
 
 Decision:
 - decision: pass-readonly-smoke|fail-readonly-smoke|abort-readonly-smoke
 ```
+
+## Report validator
+
+Before posting or sharing the report, save only the safe report body to a local scratch file outside the repository or to an ignored temporary file, then run:
+
+```bash
+npm run telegram:validate-smoke-report -- <report-file>
+```
+
+Expected:
+
+```json
+{
+  "ok": true,
+  "findings": []
+}
+```
+
+If the validator reports any finding, do not post the report. Remove private values or raw payloads, rerun the validator, and only share the report after it passes.
 
 ## Hard redaction rule
 
@@ -203,6 +223,12 @@ raw update payload
 raw response_text
 full audit log
 full execution log
+```
+
+The report body must pass:
+
+```bash
+npm run telegram:validate-smoke-report -- <report-file>
 ```
 
 ## Deferred after this report
