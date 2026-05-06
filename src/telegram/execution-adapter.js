@@ -4,6 +4,7 @@ const { runExecutionHarness } = require('../ralph/execution-harness');
 const { verifyExecutionPreflight } = require('../ralph/execution-preflight');
 const { validateCommandRequest } = require('../ralph/command-allowlist');
 const { evaluateShellExecutionPolicy } = require('../ralph/shell-execution-policy');
+const { runApprovedShellCommand } = require('../ralph/shell-approved-executor');
 
 const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const TELEGRAM_RUN_ALL_ENV = 'RALPH_TELEGRAM_RUN_ALL_ENABLED';
@@ -160,11 +161,51 @@ function preflightRunAllFromTelegram(approvalId, planPath, options = {}) {
   };
 }
 
+function runAllFromTelegram(approvalId, planPath, options = {}) {
+  const rootDir = options.rootDir || process.cwd();
+  const env = options.env || process.env;
+  const runAllEnabled = telegramRunAllEnabled(env);
+
+  if (!runAllEnabled) {
+    return preflightRunAllFromTelegram(approvalId, planPath, options);
+  }
+
+  if (!approvalId) {
+    return { ok: false, reason: 'approval_id_required', wired_to_runtime: false, execution_connected: false, run_all_enabled: false };
+  }
+
+  const planRead = readAllowedPlan(rootDir, planPath);
+  if (!planRead.ok) {
+    return { ...planRead, wired_to_runtime: false, execution_connected: false, run_all_enabled: true };
+  }
+
+  const result = runApprovedShellCommand(
+    approvalId,
+    planRead.plan,
+    { command: 'scripts/gates/run-all.sh', args: [], cwd: '.' },
+    {
+      rootDir,
+      current_diff_hash: options.current_diff_hash || EMPTY_DIFF_HASH,
+      allow_real_execution: true,
+      timeout_ms: options.timeout_ms || 180_000
+    }
+  );
+
+  return {
+    ...result,
+    wired_to_runtime: true,
+    execution_connected: true,
+    run_all_enabled: true,
+    plan_path: planPath
+  };
+}
+
 module.exports = {
   EMPTY_DIFF_HASH,
   TELEGRAM_RUN_ALL_ENV,
   isAllowedTmpPlanPath,
   telegramRunAllEnabled,
   executeNoopFromTelegram,
-  preflightRunAllFromTelegram
+  preflightRunAllFromTelegram,
+  runAllFromTelegram
 };
