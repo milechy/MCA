@@ -8,6 +8,7 @@ const PHASE3_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-run-all-phas
 const PHASE4_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase4-completion-checklist.md');
 const PHASE5_TEMPLATE = path.join(process.cwd(), 'docs', 'telegram-phase5-manual-smoke-template.md');
 const PHASE5_GO_NO_GO = path.join(process.cwd(), 'docs', 'telegram-phase5-readonly-go-no-go.md');
+const PHASE5_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase5-completion-checklist.md');
 
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -151,8 +152,40 @@ test('Phase 5 read-only go/no-go checklist preserves output redaction contract a
   expect(checklist).toContain('CI job that performs gated `/run-all`');
 });
 
+test('Phase 5 completion checklist preserves current command boundaries and manual-only real smoke', () => {
+  const checklist = read(PHASE5_CHECKLIST);
+
+  expect(checklist).toContain('manual real-smoke template with secrets-safe handoff');
+  expect(checklist).toContain('real read-only smoke runner skeleton');
+  expect(checklist).toContain('Manual-only commands requiring operator judgment:');
+  expect(checklist).toContain('npm run telegram:real-transport-guard');
+  expect(checklist).toContain('npm run telegram:real-readonly-smoke');
+  expect(checklist).toContain('`telegram:real-readonly-smoke` must remain manual-only');
+});
+
+test('Phase 5 completion checklist preserves CI disconnection and hard deferred items', () => {
+  const checklist = read(PHASE5_CHECKLIST);
+
+  expect(checklist).toContain('CI must not use:');
+  expect(checklist).toContain('secrets.TELEGRAM_BOT_TOKEN');
+  expect(checklist).toContain('telegram:real-readonly-smoke');
+  expect(checklist).toContain('CI must not perform real Telegram Bot API calls or real `/run-all` execution.');
+  expect(checklist).toContain('## Hard deferred items');
+  expect(checklist).toContain('explicit-gate real `/run-all` smoke');
+  expect(checklist).toContain('CI job that calls Telegram Bot API');
+  expect(checklist).toContain('production deploys from Telegram');
+});
+
 test('Telegram docs do not instruct CI or repository-persistent real run-all enablement', () => {
-  const docs = [read(OPERATOR_RUNBOOK), read(PHASE4_SMOKE_PLAN), read(PHASE3_CHECKLIST), read(PHASE4_CHECKLIST), read(PHASE5_TEMPLATE), read(PHASE5_GO_NO_GO)].join('\n');
+  const docs = [
+    read(OPERATOR_RUNBOOK),
+    read(PHASE4_SMOKE_PLAN),
+    read(PHASE3_CHECKLIST),
+    read(PHASE4_CHECKLIST),
+    read(PHASE5_TEMPLATE),
+    read(PHASE5_GO_NO_GO),
+    read(PHASE5_CHECKLIST)
+  ].join('\n');
 
   expect(docs).not.toContain('secrets.RALPH_TELEGRAM_RUN_ALL_ENABLED');
   expect(docs).not.toContain('RALPH_TELEGRAM_RUN_ALL_ENABLED: "true"');
