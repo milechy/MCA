@@ -9,6 +9,7 @@ const PHASE4_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase4-compl
 const PHASE5_TEMPLATE = path.join(process.cwd(), 'docs', 'telegram-phase5-manual-smoke-template.md');
 const PHASE5_GO_NO_GO = path.join(process.cwd(), 'docs', 'telegram-phase5-readonly-go-no-go.md');
 const PHASE5_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase5-completion-checklist.md');
+const PHASE6_REPORT = path.join(process.cwd(), 'docs', 'telegram-phase6-readonly-smoke-report-template.md');
 
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -176,6 +177,30 @@ test('Phase 5 completion checklist preserves CI disconnection and hard deferred 
   expect(checklist).toContain('production deploys from Telegram');
 });
 
+test('Phase 6 read-only smoke report template preserves secret-safe report shape', () => {
+  const report = read(PHASE6_REPORT);
+
+  expect(report).toContain('Do **not** include Telegram bot tokens, raw Telegram user IDs, raw Telegram chat IDs, private bot URLs, raw update payloads, raw response payloads, full audit logs, or full execution logs.');
+  expect(report).toContain('This report does not authorize or document real `/run-all` execution.');
+  expect(report).toContain('real-readonly smoke:');
+  expect(report).toContain('output_contract.no_raw_update: true|false');
+  expect(report).toContain('output_contract.no_raw_response_payload: true|false');
+  expect(report).toContain('output_contract.no_private_ids: true|false');
+});
+
+test('Phase 6 read-only smoke report template preserves cleanup and deferred boundaries', () => {
+  const report = read(PHASE6_REPORT);
+
+  expect(report).toContain('unset RALPH_TELEGRAM_RUN_ALL_ENABLED');
+  expect(report).toContain('unset TELEGRAM_BOT_TOKEN');
+  expect(report).toContain('unset TELEGRAM_ALLOWED_USER_IDS');
+  expect(report).toContain('unset TELEGRAM_ALLOWED_CHAT_IDS');
+  expect(report).toContain('## Deferred after this report');
+  expect(report).toContain('real default-off `/run-all` smoke');
+  expect(report).toContain('explicit-gate real `/run-all` smoke');
+  expect(report).toContain('CI job that calls Telegram Bot API');
+});
+
 test('Telegram docs do not instruct CI or repository-persistent real run-all enablement', () => {
   const docs = [
     read(OPERATOR_RUNBOOK),
@@ -184,7 +209,8 @@ test('Telegram docs do not instruct CI or repository-persistent real run-all ena
     read(PHASE4_CHECKLIST),
     read(PHASE5_TEMPLATE),
     read(PHASE5_GO_NO_GO),
-    read(PHASE5_CHECKLIST)
+    read(PHASE5_CHECKLIST),
+    read(PHASE6_REPORT)
   ].join('\n');
 
   expect(docs).not.toContain('secrets.RALPH_TELEGRAM_RUN_ALL_ENABLED');
