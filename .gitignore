@@ -35,3 +35,4 @@ node_modules/
 .ralph/approval-pending/*
 .ralph/tmp/*
 .ralph/approval-log.jsonl
+.ralph/roles.json
