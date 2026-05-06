@@ -39,3 +39,36 @@ test('command hash is deterministic for same request', () => {
   const request = { command: 'scripts/gates/run-all.sh', args: [], cwd: '.' };
   expect(commandHash(request)).toBe(commandHash(request));
 });
+
+test('test-only allowlist injection can mark an entry as not dry-run-only without changing production allowlist', () => {
+  const injectedAllowlist = [
+    {
+      id: 'gates-run-all-test',
+      command: 'scripts/gates/run-all.sh',
+      allowed_args: [],
+      allowed_cwd: '.',
+      phase: '3.7d-test-only',
+      dry_run_only: false
+    }
+  ];
+
+  const result = validateCommandRequest({
+    command: 'scripts/gates/run-all.sh',
+    args: [],
+    cwd: '.'
+  }, { allowlist: injectedAllowlist });
+
+  expect(result.ok).toBe(true);
+  expect(result.allowlist_entry.id).toBe('gates-run-all-test');
+  expect(result.dry_run_only).toBe(false);
+
+  const productionResult = validateCommandRequest({
+    command: 'scripts/gates/run-all.sh',
+    args: [],
+    cwd: '.'
+  });
+
+  expect(productionResult.ok).toBe(true);
+  expect(productionResult.allowlist_entry.id).toBe('gates-run-all');
+  expect(productionResult.dry_run_only).toBe(true);
+});
