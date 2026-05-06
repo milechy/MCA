@@ -161,6 +161,7 @@ test('Phase 5 completion checklist preserves current command boundaries and manu
   expect(checklist).toContain('Manual-only commands requiring operator judgment:');
   expect(checklist).toContain('npm run telegram:real-transport-guard');
   expect(checklist).toContain('npm run telegram:real-readonly-smoke');
+  expect(checklist).toContain('npm run telegram:validate-smoke-report -- <report-file>');
   expect(checklist).toContain('`telegram:real-readonly-smoke` must remain manual-only');
 });
 
@@ -186,6 +187,15 @@ test('Phase 6 read-only smoke report template preserves secret-safe report shape
   expect(report).toContain('output_contract.no_raw_update: true|false');
   expect(report).toContain('output_contract.no_raw_response_payload: true|false');
   expect(report).toContain('output_contract.no_private_ids: true|false');
+});
+
+test('Phase 6 read-only smoke report template preserves validator handoff', () => {
+  const report = read(PHASE6_REPORT);
+
+  expect(report).toContain('## Report validator');
+  expect(report).toContain('npm run telegram:validate-smoke-report -- <report-file>');
+  expect(report).toContain('If the validator reports any finding, do not post the report.');
+  expect(report).toContain('The report body must pass:');
 });
 
 test('Phase 6 read-only smoke report template preserves cleanup and deferred boundaries', () => {
