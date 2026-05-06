@@ -7,11 +7,17 @@ const { parseTelegramCommand } = require('../../src/telegram/command-parser');
 const { handleTelegramCommand } = require('../../src/telegram/handlers');
 const { processTelegramUpdate } = require('../../src/telegram/bot');
 const { MODES, loadMode } = require('../../src/ralph/mode-manager');
+const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
+const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
+
+const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 function makeTempRoot(initialMode = {}) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-handlers-'));
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'tmp'), { recursive: true });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '', 'utf8');
   fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), '', 'utf8');
   fs.writeFileSync(
     path.join(rootDir, '.ralph', 'state.json'),
@@ -53,6 +59,35 @@ function roles() {
     reviewer_user_ids: [3],
     observer_user_ids: [4]
   };
+}
+
+function sampleRunAllPlan() {
+  return {
+    story_id: 'STORY-TELEGRAM-RUN-ALL-PREFLIGHT',
+    mode: 'approval',
+    target_env: 'staging',
+    summary: 'Telegram run-all preflight test',
+    objective: 'Validate Telegram run-all preflight without executing shell',
+    planned_files: [],
+    migration_plan: { target: 'staging', sql: '' },
+    allowed_user_ids: [3]
+  };
+}
+
+function writeTmpPlan(rootDir, fileName, plan) {
+  const planPath = `.ralph/tmp/${fileName}`;
+  fs.writeFileSync(path.join(rootDir, planPath), `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
+  return planPath;
+}
+
+function createApprovedPlan(rootDir, plan) {
+  const approval = createApproval(plan, evaluateRisk(plan), {
+    rootDir,
+    approval_id: 'APR-TELEGRAM-RUN-ALL',
+    allowed_user_ids: [3],
+    pre_exec_diff_hash: EMPTY_DIFF_HASH
+  });
+  return approveApprovalRecordOnly(approval.approval_id, 3, { rootDir, channel: 'telegram' });
 }
 
 function update(userId, chatId, text) {
@@ -118,8 +153,32 @@ test('/policy returns read-only execution policy status', () => {
   expect(result.text).toContain('Execution policy:');
 });
 
-test('/run-all is parsed but remains disconnected from shell execution', () => {
-  const result = handleTelegramCommand(parseTelegramCommand('/run-all APR-001 .ralph/tmp/plan.json'), {
+test('/run-all performs preflight only and does not execute shell', () => {
+  const rootDir = makeTempRoot();
+  const plan = sampleRunAllPlan();
+  const planPath = writeTmpPlan(rootDir, 'run-all-plan.json', plan);
+  const approval = createApprovedPlan(rootDir, plan);
+
+  const result = handleTelegramCommand(parseTelegramCommand(`/run-all ${approval.approval_id} ${planPath}`), {
+    rootDir,
+    user_id: 3,
+    roles: roles()
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.result.ok).toBe(true);
+  expect(result.result.reason).toBe('READY_BUT_NOT_EXECUTED');
+  expect(result.result.execution_connected).toBe(false);
+  expect(result.result.commands_executed).toEqual([]);
+  expect(result.result.files_modified).toEqual([]);
+  expect(result.result.command_preflight.allowlist_entry.id).toBe('gates-run-all');
+  expect(result.result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
+  expect(result.text).toContain('Run-all preflight passed. READY_BUT_NOT_EXECUTED.');
+});
+
+test('/run-all rejects unsafe or missing plan path before shell execution', () => {
+  const result = handleTelegramCommand(parseTelegramCommand('/run-all APR-001 ../plan.json'), {
     rootDir: makeTempRoot(),
     user_id: 3,
     roles: roles()
@@ -128,9 +187,8 @@ test('/run-all is parsed but remains disconnected from shell execution', () => {
   expect(result.ok).toBe(true);
   expect(result.wired_to_runtime).toBe(false);
   expect(result.result.ok).toBe(false);
-  expect(result.result.reason).toBe('telegram_run_all_not_connected');
+  expect(result.result.reason).toBe('plan_path_not_allowed');
   expect(result.result.execution_connected).toBe(false);
-  expect(result.text).toContain('Run-all execution is not connected from Telegram.');
 });
 
 test('/mode fullauto creates token but does not immediately switch mode', () => {
