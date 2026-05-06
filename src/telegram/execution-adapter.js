@@ -6,12 +6,17 @@ const { validateCommandRequest } = require('../ralph/command-allowlist');
 const { evaluateShellExecutionPolicy } = require('../ralph/shell-execution-policy');
 
 const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const TELEGRAM_RUN_ALL_ENV = 'RALPH_TELEGRAM_RUN_ALL_ENABLED';
 
 function isAllowedTmpPlanPath(planPath) {
   if (!planPath || typeof planPath !== 'string') return false;
   if (path.isAbsolute(planPath)) return false;
   if (planPath.includes('..')) return false;
   return /^\.ralph\/tmp\/[A-Za-z0-9._-]+\.json$/.test(planPath);
+}
+
+function telegramRunAllEnabled(env = process.env) {
+  return env[TELEGRAM_RUN_ALL_ENV] === 'true';
 }
 
 function readAllowedPlan(rootDir, planPath) {
@@ -63,6 +68,8 @@ function executeNoopFromTelegram(approvalId, planPath, options = {}) {
 
 function preflightRunAllFromTelegram(approvalId, planPath, options = {}) {
   const rootDir = options.rootDir || process.cwd();
+  const env = options.env || process.env;
+  const runAllEnabled = telegramRunAllEnabled(env);
 
   if (!approvalId) {
     return { ok: false, reason: 'approval_id_required', wired_to_runtime: false, execution_connected: false };
@@ -87,6 +94,7 @@ function preflightRunAllFromTelegram(approvalId, planPath, options = {}) {
       execution_preflight: executionPreflight,
       wired_to_runtime: false,
       execution_connected: false,
+      run_all_enabled: runAllEnabled,
       plan_path: planPath
     };
   }
@@ -106,16 +114,17 @@ function preflightRunAllFromTelegram(approvalId, planPath, options = {}) {
       command_preflight: commandPreflight,
       wired_to_runtime: false,
       execution_connected: false,
+      run_all_enabled: runAllEnabled,
       plan_path: planPath
     };
   }
 
   const policy = evaluateShellExecutionPolicy(commandPreflight, {
-    allow_real_execution: true,
+    allow_real_execution: runAllEnabled,
     timeout_ms: options.timeout_ms || 180_000
   });
 
-  if (!policy.ok) {
+  if (!policy.ok && policy.reason !== 'real_shell_execution_not_enabled') {
     return {
       ok: false,
       reason: policy.reason,
@@ -125,13 +134,14 @@ function preflightRunAllFromTelegram(approvalId, planPath, options = {}) {
       policy,
       wired_to_runtime: false,
       execution_connected: false,
+      run_all_enabled: runAllEnabled,
       plan_path: planPath
     };
   }
 
   return {
     ok: true,
-    reason: 'READY_BUT_NOT_EXECUTED',
+    reason: runAllEnabled ? 'READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED' : 'READY_BUT_NOT_EXECUTED',
     stage: 'ready_but_not_executed',
     execution_preflight: executionPreflight,
     command_preflight: commandPreflight,
@@ -143,14 +153,18 @@ function preflightRunAllFromTelegram(approvalId, planPath, options = {}) {
     files_modified: [],
     wired_to_runtime: false,
     execution_connected: false,
+    run_all_enabled: runAllEnabled,
+    required_env: TELEGRAM_RUN_ALL_ENV,
     plan_path: planPath,
-    next_action: 'READY_BUT_NOT_EXECUTED'
+    next_action: runAllEnabled ? 'READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED' : 'READY_BUT_NOT_EXECUTED'
   };
 }
 
 module.exports = {
   EMPTY_DIFF_HASH,
+  TELEGRAM_RUN_ALL_ENV,
   isAllowedTmpPlanPath,
+  telegramRunAllEnabled,
   executeNoopFromTelegram,
   preflightRunAllFromTelegram
 };
