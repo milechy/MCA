@@ -150,7 +150,7 @@ test('/mode approval switches back to approval for reviewer', () => {
   expect(loadMode(rootDir).mode).toBe(MODES.APPROVAL);
 });
 
-test('/approve is parsed only and execution remains disconnected in skeleton', () => {
+test('/approve is parsed only and runtime action remains unwired', () => {
   const result = handleTelegramCommand(parseTelegramCommand('/approve APR-001'), {
     rootDir: makeTempRoot(),
     user_id: 3,
@@ -158,8 +158,8 @@ test('/approve is parsed only and execution remains disconnected in skeleton', (
   });
 
   expect(result.ok).toBe(true);
-  expect(result.execution_connected).toBe(false);
-  expect(result.text).toContain('execution is not connected');
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.text).toContain('runtime action is not wired');
 });
 
 test('processTelegramUpdate rejects unauthorized user or chat', async () => {
