@@ -1,6 +1,7 @@
 const { loadState } = require('../ralph/state-machine');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = require('../ralph/mode-manager');
 const { loadRoles } = require('../ralph/roles');
+const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -15,16 +16,25 @@ function handleTelegramCommand(parsed, context = {}) {
   const userId = context.user_id;
   const roles = context.roles || loadRoles(rootDir);
 
-  if (parsed.type === 'ping') {
-    return textResponse('pong');
-  }
+  if (parsed.type === 'ping') return textResponse('pong');
 
   if (parsed.type === 'status') {
-    const status = {
-      state: loadState(rootDir),
-      mode: loadMode(rootDir)
-    };
+    const status = { state: loadState(rootDir), mode: loadMode(rootDir) };
     return textResponse(`Status:${jsonBlock(status)}`, { status });
+  }
+
+  if (parsed.type === 'approvals') {
+    const approvals = listApprovals({ rootDir, status: parsed.args[0] || null }).map(summarizeApproval);
+    return textResponse(`Approvals:${jsonBlock(approvals)}`, { approvals, wired_to_runtime: false });
+  }
+
+  if (parsed.type === 'approval_detail') {
+    const [approvalId] = parsed.args;
+    if (!approvalId) return textResponse('Usage: /approval <approval_id>', { wired_to_runtime: false });
+    const approval = getApproval(approvalId, { rootDir });
+    if (!approval) return textResponse(`Approval not found: ${approvalId}`, { wired_to_runtime: false });
+    const summary = summarizeApproval(approval);
+    return textResponse(`Approval:${jsonBlock(summary)}`, { approval: summary, wired_to_runtime: false });
   }
 
   if (parsed.type === 'mode_approval') {
@@ -46,15 +56,10 @@ function handleTelegramCommand(parsed, context = {}) {
   }
 
   if (['approve', 'deny', 'modify'].includes(parsed.type)) {
-    return textResponse(`${parsed.type} command parsed but execution is not connected in Phase 2 skeleton.`, {
-      parsed,
-      execution_connected: false
-    });
+    return textResponse(`${parsed.type} command parsed but runtime action is not wired in Phase 2.`, { parsed, wired_to_runtime: false });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = {
-  handleTelegramCommand
-};
+module.exports = { handleTelegramCommand };
