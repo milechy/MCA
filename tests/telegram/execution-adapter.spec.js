@@ -9,6 +9,7 @@ const {
   isAllowedTmpPlanPath,
   executeNoopFromTelegram,
   preflightRunAllFromTelegram,
+  runAllFromTelegram,
   telegramRunAllEnabled,
   EMPTY_DIFF_HASH,
   TELEGRAM_RUN_ALL_ENV
@@ -32,6 +33,13 @@ function makeTempRoot() {
     updated_at: new Date().toISOString()
   }, null, 2)}\n`, 'utf8');
   return rootDir;
+}
+
+function writeExecutableRunAll(rootDir) {
+  const scriptPath = path.join(rootDir, 'scripts', 'gates', 'run-all.sh');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\necho "telegram run-all smoke"\n', 'utf8');
+  fs.chmodSync(scriptPath, 0o755);
 }
 
 function samplePlan(overrides = {}) {
@@ -155,4 +163,45 @@ test('preflightRunAllFromTelegram reports ready for execution when env gate is t
   expect(result.commands_executed).toEqual([]);
   expect(result.files_modified).toEqual([]);
   expect(result.execution_connected).toBe(false);
+});
+
+test('runAllFromTelegram remains preflight-only when env gate is off', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan({ planned_files: [], migration_plan: { target: 'staging', sql: '' } });
+  const approval = createApprovedApproval(rootDir, plan);
+  const planPath = writePlan(rootDir, plan, 'run-all-plan.json');
+
+  const result = runAllFromTelegram(approval.approval_id, planPath, { rootDir, env: {} });
+
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('READY_BUT_NOT_EXECUTED');
+  expect(result.execution_connected).toBe(false);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.commands_executed).toEqual([]);
+  expect(result.files_modified).toEqual([]);
+});
+
+test('runAllFromTelegram executes production allowlisted run-all when env gate is true', () => {
+  const rootDir = makeTempRoot();
+  writeExecutableRunAll(rootDir);
+  const plan = samplePlan({ planned_files: [], migration_plan: { target: 'staging', sql: '' } });
+  const approval = createApprovedApproval(rootDir, plan);
+  const planPath = writePlan(rootDir, plan, 'run-all-plan.json');
+
+  const result = runAllFromTelegram(approval.approval_id, planPath, {
+    rootDir,
+    env: { [TELEGRAM_RUN_ALL_ENV]: 'true' },
+    timeout_ms: 10_000
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.executor).toBe('shell');
+  expect(result.command).toBe('scripts/gates/run-all.sh');
+  expect(result.exit_code).toBe(0);
+  expect(result.stdout.trim()).toBe('telegram run-all smoke');
+  expect(result.run_all_enabled).toBe(true);
+  expect(result.execution_connected).toBe(true);
+  expect(result.wired_to_runtime).toBe(true);
+  expect(result.commands_executed).toEqual(['scripts/gates/run-all.sh']);
+  expect(result.files_modified).toEqual([]);
 });
