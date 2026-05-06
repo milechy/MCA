@@ -10,6 +10,7 @@ const {
   normalizeRunAllReason,
   RUN_ALL_FAILURE_REASON_TAXONOMY
 } = require('../../src/telegram/handlers');
+const { RUN_ALL_FAILURE_REASON_TAXONOMY: POLICY_RUN_ALL_FAILURE_REASON_TAXONOMY } = require('../../src/telegram/policy-reader');
 const { processTelegramUpdate } = require('../../src/telegram/bot');
 const { MODES, loadMode } = require('../../src/ralph/mode-manager');
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
@@ -113,10 +114,26 @@ test('run-all failure reason taxonomy is fixed', () => {
     'real_shell_execution_not_enabled',
     'shell_execution_failed'
   ]);
+  expect(POLICY_RUN_ALL_FAILURE_REASON_TAXONOMY).toEqual(RUN_ALL_FAILURE_REASON_TAXONOMY);
   expect(normalizeRunAllReason('plan_file_not_found')).toBe('plan_file_missing');
   expect(normalizeRunAllReason('command_not_allowed')).toBe('command_not_allowlisted');
   expect(normalizeRunAllReason('approval_not_found')).toBe('approval_not_found');
   expect(normalizeRunAllReason(null)).toBe(null);
+});
+
+test('policy and handler run-all taxonomy do not drift', () => {
+  const summary = summarizeRunAllResult({
+    ok: false,
+    reason: 'plan_file_not_found',
+    stage: 'plan_read',
+    commands_executed: [],
+    files_modified: []
+  });
+  const policyResult = handleTelegramCommand(parseTelegramCommand('/policy'), { rootDir: makeTempRoot(), user_id: 3, roles: roles(), env: {} });
+
+  expect(policyResult.policy.run_all_failure_reason_taxonomy).toEqual(POLICY_RUN_ALL_FAILURE_REASON_TAXONOMY);
+  expect(policyResult.policy.run_all_failure_reason_taxonomy).toEqual(summary.reason_taxonomy);
+  expect(policyResult.policy.run_all_failure_reason_normalization.plan_file_not_found).toBe(summary.reason);
 });
 
 test('summarizeRunAllResult normalizes failure reason and includes taxonomy', () => {
