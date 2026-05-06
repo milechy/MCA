@@ -7,8 +7,8 @@ const COMMAND_ALLOWLIST = [
     command: 'scripts/gates/run-all.sh',
     allowed_args: [],
     allowed_cwd: '.',
-    phase: '3.3',
-    dry_run_only: true
+    phase: '3.9',
+    dry_run_only: false
   }
 ];
 
