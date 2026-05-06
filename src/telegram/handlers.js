@@ -14,7 +14,17 @@ function jsonBlock(value) {
   return `\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
+function durationMs(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return null;
+  const started = Date.parse(startedAt);
+  const finished = Date.parse(finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return null;
+  return Math.max(0, finished - started);
+}
+
 function summarizeRunAllResult(result) {
+  const startedAt = result.started_at || null;
+  const finishedAt = result.finished_at || null;
   return {
     ok: result.ok,
     reason: result.reason || null,
@@ -22,6 +32,9 @@ function summarizeRunAllResult(result) {
     executor: result.executor || null,
     command: result.command || 'scripts/gates/run-all.sh',
     exit_code: typeof result.exit_code === 'number' ? result.exit_code : null,
+    started_at: startedAt,
+    finished_at: finishedAt,
+    duration_ms: durationMs(startedAt, finishedAt),
     run_all_enabled: result.run_all_enabled === true,
     wired_to_runtime: result.wired_to_runtime === true,
     execution_connected: result.execution_connected === true,
@@ -133,4 +146,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs };
