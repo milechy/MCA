@@ -1,12 +1,16 @@
 {
   "name": "mca",
   "version": "1.0.0",
-  "description": "",
+  "description": "24-hour autonomous development system foundation",
   "main": "index.js",
   "directories": {
     "doc": "docs"
   },
-  "scripts": {},
+  "scripts": {
+    "test:e2e": "playwright test tests/e2e",
+    "test:ralph": "playwright test tests/ralph",
+    "test": "playwright test"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/milechy/MCA.git"
