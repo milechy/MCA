@@ -5,26 +5,10 @@ const { listApprovals, getApproval, summarizeApproval } = require('../ralph/appr
 const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
 const { executeNoopFromTelegram, runAllFromTelegram } = require('./execution-adapter');
 const { executionPolicyStatus } = require('./policy-reader');
-
-const RUN_ALL_FAILURE_REASON_TAXONOMY = Object.freeze([
-  'approval_id_required',
-  'plan_path_not_allowed',
-  'plan_file_missing',
-  'approval_not_found',
-  'approval_not_approved',
-  'plan_hash_mismatch',
-  'diff_hash_mismatch',
-  'command_not_allowlisted',
-  'allowlist_entry_is_dry_run_only',
-  'real_shell_execution_not_enabled',
-  'shell_execution_failed'
-]);
-
-function normalizeRunAllReason(reason) {
-  if (reason === 'plan_file_not_found') return 'plan_file_missing';
-  if (reason === 'command_not_allowed') return 'command_not_allowlisted';
-  return reason || null;
-}
+const {
+  RUN_ALL_FAILURE_REASON_TAXONOMY,
+  normalizeRunAllReason
+} = require('./run-all-taxonomy');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
