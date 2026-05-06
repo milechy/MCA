@@ -36,3 +36,4 @@ node_modules/
 .ralph/tmp/*
 .ralph/approval-log.jsonl
 .ralph/roles.json
+.ralph/telegram-offset.json
