@@ -2,7 +2,7 @@ const { loadState } = require('../ralph/state-machine');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = require('../ralph/mode-manager');
 const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
-const { dryRunApprovalCommand } = require('../ralph/approval-validator');
+const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -59,22 +59,22 @@ function handleTelegramCommand(parsed, context = {}) {
   if (parsed.type === 'approve') {
     const [approvalId] = parsed.args;
     if (!approvalId) return textResponse('Usage: /approve <approval_id>', { wired_to_runtime: false });
-    const result = dryRunApprovalCommand('approve', approvalId, userId, { rootDir });
-    return textResponse(result.ok ? `Dry-run approve validation passed.${jsonBlock(result)}` : `Dry-run approve validation failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+    const result = approveFromTelegram(approvalId, userId, { rootDir });
+    return textResponse(result.ok ? `Approval marked approved. Execution remains disconnected.${jsonBlock(result)}` : `Approve failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   if (parsed.type === 'deny') {
     const [approvalId] = parsed.args;
     if (!approvalId) return textResponse('Usage: /deny <approval_id>', { wired_to_runtime: false });
-    const result = dryRunApprovalCommand('deny', approvalId, userId, { rootDir });
-    return textResponse(result.ok ? `Dry-run deny validation passed.${jsonBlock(result)}` : `Dry-run deny validation failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+    const result = denyFromTelegram(approvalId, userId, { rootDir });
+    return textResponse(result.ok ? `Approval denied. Execution remains disconnected.${jsonBlock(result)}` : `Deny failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   if (parsed.type === 'modify') {
     const [approvalId, ...instructionParts] = parsed.args;
     if (!approvalId || instructionParts.length === 0) return textResponse('Usage: /modify <approval_id> <instruction>', { wired_to_runtime: false });
-    const result = dryRunApprovalCommand('modify', approvalId, userId, { rootDir });
-    return textResponse(result.ok ? `Dry-run modify validation passed. Replan would be required.${jsonBlock({ ...result, instruction: instructionParts.join(' ') })}` : `Dry-run modify validation failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+    const result = modifyFromTelegram(approvalId, userId, instructionParts.join(' '), { rootDir });
+    return textResponse(result.ok ? `Approval superseded. Replan required. Execution remains disconnected.${jsonBlock(result)}` : `Modify failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
