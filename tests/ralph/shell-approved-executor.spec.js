@@ -77,7 +77,7 @@ const nodeVersionTestOnlyAllowlist = [
   }
 ];
 
-test('approved shell command is blocked by production dry-run-only allowlist', () => {
+test('approved shell command can run production allowlisted run-all command', () => {
   const rootDir = makeTempRoot();
   const plan = samplePlan();
   const approval = createApprovedRecordOnly(rootDir, plan);
@@ -85,15 +85,16 @@ test('approved shell command is blocked by production dry-run-only allowlist', (
   const result = runApprovedShellCommand(approval.approval_id, plan, gatesCommand, {
     rootDir,
     current_diff_hash: EMPTY_DIFF_HASH,
-    allow_real_execution: true
+    allow_real_execution: true,
+    timeout_ms: 180_000
   });
 
   expect(result.ok).toBe(false);
-  expect(result.reason).toBe('allowlist_entry_is_dry_run_only');
-  expect(result.stage).toBe('shell_execution_policy');
-  expect(result.commands_executed).toEqual([]);
+  expect(result.reason).toBe('shell_execution_failed');
+  expect(result.commands_executed).toEqual(['scripts/gates/run-all.sh']);
   expect(result.files_modified).toEqual([]);
-  expect(result.log.event).toBe('approved_shell_execution_blocked');
+  expect(result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
+  expect(result.log.event).toBe('approved_shell_execution_failed');
 });
 
 test('approved shell command is blocked before command policy when execution preflight fails', () => {
