@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 const fs = require('node:fs');
 const { evaluateRisk, decideControlAction, targetEnv } = require('./risk-evaluator');
-const { createApproval, approveApproval, denyApproval, supersedeApprovalForModify, expirePendingApprovals } = require('./approval-manager');
+const { createApproval, approveApproval, approveApprovalRecordOnly, denyApproval, supersedeApprovalForModify, expirePendingApprovals } = require('./approval-manager');
 const { phaseForControlDecision, transitionState, triggerSecurityStop, loadState } = require('./state-machine');
 const { loadRoles } = require('./roles');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode, autoRevertExpiredMode } = require('./mode-manager');
+const { dryRunApprovalCommand } = require('./approval-validator');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -17,6 +18,8 @@ Commands:
   node src/ralph/cli.js risk <plan.json>
   node src/ralph/cli.js create-approval <plan.json>
   node src/ralph/cli.js approve <approval_id> <user_id> <plan.json>
+  node src/ralph/cli.js approve-record-only <approval_id> <user_id>
+  node src/ralph/cli.js approval-dry-run <approve|deny|modify> <approval_id> <user_id>
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -116,6 +119,18 @@ function main(argv = process.argv.slice(2)) {
     }
 
     console.log(JSON.stringify({ approval, decision }, null, 2));
+    return;
+  }
+
+  if (command === 'approval-dry-run') {
+    const [action, approvalId, userId] = args;
+    console.log(JSON.stringify(dryRunApprovalCommand(action, approvalId, Number(userId)), null, 2));
+    return;
+  }
+
+  if (command === 'approve-record-only') {
+    const [approvalId, userId] = args;
+    console.log(JSON.stringify(approveApprovalRecordOnly(approvalId, Number(userId), { channel: 'cli' }), null, 2));
     return;
   }
 
