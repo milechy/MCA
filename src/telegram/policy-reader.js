@@ -1,19 +1,10 @@
 const { COMMAND_ALLOWLIST } = require('../ralph/command-allowlist');
 const { TELEGRAM_RUN_ALL_ENV, telegramRunAllEnabled } = require('./execution-adapter');
-
-const RUN_ALL_FAILURE_REASON_TAXONOMY = Object.freeze([
-  'approval_id_required',
-  'plan_path_not_allowed',
-  'plan_file_missing',
-  'approval_not_found',
-  'approval_not_approved',
-  'plan_hash_mismatch',
-  'diff_hash_mismatch',
-  'command_not_allowlisted',
-  'allowlist_entry_is_dry_run_only',
-  'real_shell_execution_not_enabled',
-  'shell_execution_failed'
-]);
+const {
+  RUN_ALL_FAILURE_REASON_TAXONOMY,
+  RUN_ALL_FAILURE_REASON_NORMALIZATION,
+  RUN_ALL_FAILURE_AUDIT_SUMMARY_FIELDS
+} = require('./run-all-taxonomy');
 
 function listExecutionCommands() {
   return COMMAND_ALLOWLIST.map((entry) => ({
@@ -51,30 +42,8 @@ function executionPolicyStatus(env = process.env) {
       `${TELEGRAM_RUN_ALL_ENV}=true`
     ],
     run_all_failure_reason_taxonomy: RUN_ALL_FAILURE_REASON_TAXONOMY,
-    run_all_failure_reason_normalization: {
-      plan_file_not_found: 'plan_file_missing',
-      command_not_allowed: 'command_not_allowlisted'
-    },
-    run_all_failure_audit_summary_fields: [
-      'ok',
-      'reason',
-      'reason_taxonomy',
-      'stage',
-      'executor',
-      'command',
-      'exit_code',
-      'started_at',
-      'finished_at',
-      'duration_ms',
-      'run_all_enabled',
-      'wired_to_runtime',
-      'execution_connected',
-      'commands_executed',
-      'files_modified',
-      'approval_id',
-      'plan_path',
-      'log_path'
-    ],
+    run_all_failure_reason_normalization: RUN_ALL_FAILURE_REASON_NORMALIZATION,
+    run_all_failure_audit_summary_fields: RUN_ALL_FAILURE_AUDIT_SUMMARY_FIELDS,
     allowed_commands: listExecutionCommands(),
     unsupported_from_telegram: [
       'OpenCode execution',
