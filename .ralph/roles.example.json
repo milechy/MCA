@@ -1,0 +1,6 @@
+{
+  "owner_user_ids": [1],
+  "admin_user_ids": [2],
+  "reviewer_user_ids": [3],
+  "observer_user_ids": [4]
+}
