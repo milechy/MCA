@@ -113,6 +113,13 @@ function runtimeRoles() {
   };
 }
 
+function expectCompressedRunAllText(text) {
+  expect(text).not.toContain('stdout');
+  expect(text).not.toContain('execution_preflight');
+  expect(text).not.toContain('command_preflight');
+  expect(text).not.toContain('policy');
+}
+
 test('sendMessage does not call Telegram API in dry-run mode', async () => {
   const result = await sendMessage({ dry_run: true }, 10, 'pong');
 
@@ -151,6 +158,17 @@ test('handleUpdate keeps /run-all preflight-only when Telegram run-all env gate 
   expect(result.response.result.execution_connected).toBe(false);
   expect(result.response.result.commands_executed).toEqual([]);
   expect(result.response.result.files_modified).toEqual([]);
+  expect(result.response.summary).toMatchObject({
+    ok: true,
+    reason: 'READY_BUT_NOT_EXECUTED',
+    run_all_enabled: false,
+    wired_to_runtime: false,
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    log_path: '.ralph/logs/execution.jsonl'
+  });
+  expectCompressedRunAllText(result.response_text);
 
   const executionLog = fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8');
   expect(executionLog).not.toContain('shell_execution_completed');
@@ -182,8 +200,54 @@ test('handleUpdate executes /run-all when Telegram run-all env gate is true whil
   expect(result.response.result.execution_connected).toBe(true);
   expect(result.response.result.commands_executed).toEqual(['scripts/gates/run-all.sh']);
   expect(result.response.result.files_modified).toEqual([]);
+  expect(result.response.summary).toMatchObject({
+    ok: true,
+    executor: 'shell',
+    command: 'scripts/gates/run-all.sh',
+    exit_code: 0,
+    run_all_enabled: true,
+    wired_to_runtime: true,
+    execution_connected: true,
+    commands_executed: ['scripts/gates/run-all.sh'],
+    files_modified: [],
+    log_path: '.ralph/logs/execution.jsonl'
+  });
+  expectCompressedRunAllText(result.response_text);
+  expect(result.response_text).not.toContain('telegram runtime run-all smoke');
 
   const executionLog = fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8');
   expect(executionLog).toContain('shell_execution_completed');
   expect(executionLog).toContain('approved_shell_execution_completed');
+});
+
+test('handleUpdate returns compressed /run-all failure response', async () => {
+  const rootDir = makeTempRoot();
+
+  const result = await handleUpdate(update('/run-all APR-MISSING ../unsafe-plan.json'), {
+    rootDir,
+    config: runtimeConfig(),
+    roles: runtimeRoles(),
+    env: { [TELEGRAM_RUN_ALL_ENV]: 'true' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.response.wired_to_runtime).toBe(false);
+  expect(result.response.result.ok).toBe(false);
+  expect(result.response.result.reason).toBe('plan_path_not_allowed');
+  expect(result.response.summary).toMatchObject({
+    ok: false,
+    reason: 'plan_path_not_allowed',
+    run_all_enabled: false,
+    wired_to_runtime: false,
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    log_path: '.ralph/logs/execution.jsonl'
+  });
+  expect(result.response_text).toContain('Run-all failed: plan_path_not_allowed');
+  expectCompressedRunAllText(result.response_text);
+
+  const executionLog = fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8');
+  expect(executionLog).not.toContain('shell_execution_completed');
+  expect(executionLog).not.toContain('approved_shell_execution_completed');
 });
