@@ -97,6 +97,27 @@ test('/status returns state and mode', () => {
   expect(result.text).toContain('Status:');
 });
 
+test('/policy returns read-only execution policy status', () => {
+  const result = handleTelegramCommand(parseTelegramCommand('/policy'), {
+    rootDir: makeTempRoot(),
+    user_id: 3,
+    roles: roles()
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.policy.telegram_shell_execution_connected).toBe(false);
+  expect(result.policy.allow_real_execution_required).toBe(true);
+  expect(result.policy.allowed_commands[0]).toMatchObject({
+    id: 'gates-run-all',
+    command: 'scripts/gates/run-all.sh',
+    allowed_args: [],
+    allowed_cwd: '.',
+    dry_run_only: false
+  });
+  expect(result.text).toContain('Execution policy:');
+});
+
 test('/mode fullauto creates token but does not immediately switch mode', () => {
   const rootDir = makeTempRoot();
   const result = handleTelegramCommand(parseTelegramCommand('/mode fullauto 6'), {
