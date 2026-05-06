@@ -6,6 +6,8 @@ const path = require('node:path');
 const { handleUpdate } = require('../../src/telegram/runtime');
 const { realTransportGuard, READ_ONLY_COMMANDS } = require('./real-transport-guard');
 
+const MAX_RESPONSE_PREVIEW_CHARS = 160;
+
 function parseList(value) {
   if (!value) return [];
   return String(value)
@@ -78,6 +80,47 @@ function makeUpdate(command, { userId, chatId, updateId }) {
   };
 }
 
+function responseKind(command, responseText) {
+  if (command === '/ping') return responseText === 'pong' ? 'pong' : 'unexpected';
+  if (command === '/status') return String(responseText || '').startsWith('Status:') ? 'status' : 'unexpected';
+  if (command === '/policy') return String(responseText || '').startsWith('Execution policy:') ? 'policy' : 'unexpected';
+  return 'unknown';
+}
+
+function safeResponsePreview(responseText) {
+  if (!responseText) return null;
+  const oneLine = String(responseText).replace(/\s+/g, ' ').trim();
+  return oneLine.length > MAX_RESPONSE_PREVIEW_CHARS
+    ? `${oneLine.slice(0, MAX_RESPONSE_PREVIEW_CHARS)}…`
+    : oneLine;
+}
+
+function summarizeSmokeResponse(command, response) {
+  const responseText = response.response_text || '';
+  return {
+    command,
+    ok: response.ok,
+    reason: response.reason || null,
+    response_kind: responseKind(command, responseText),
+    response_preview: safeResponsePreview(responseText),
+    response_length: responseText.length
+  };
+}
+
+function safeGuardSummary(guard) {
+  return {
+    ok: guard.ok,
+    stage: guard.stage,
+    allowed_commands: guard.allowed_commands,
+    forbidden_commands: guard.forbidden_commands,
+    run_all_enabled: guard.run_all_enabled,
+    telegram_env_ok: guard.telegram_env_ok,
+    token_redacted: guard.token_redacted,
+    repo_secret_preflight_ok: guard.repo_secret_preflight_ok,
+    findings_count: Array.isArray(guard.findings) ? guard.findings.length : 0
+  };
+}
+
 async function runRealReadOnlySmoke({
   rootDir = process.cwd(),
   env = process.env,
@@ -91,7 +134,7 @@ async function runRealReadOnlySmoke({
     return {
       ok: false,
       reason: 'real_transport_guard_failed',
-      guard,
+      guard: safeGuardSummary(guard),
       results: []
     };
   }
@@ -105,7 +148,7 @@ async function runRealReadOnlySmoke({
     return {
       ok: false,
       reason: 'telegram_ids_parse_failed',
-      guard,
+      guard: safeGuardSummary(guard),
       results: []
     };
   }
@@ -136,27 +179,19 @@ async function runRealReadOnlySmoke({
       env: { ...env, RALPH_TELEGRAM_RUN_ALL_ENABLED: '' }
     });
 
-    results.push({
-      command,
-      ok: response.ok,
-      reason: response.reason || null,
-      response_text: response.response_text || null
-    });
+    results.push(summarizeSmokeResponse(command, response));
   }
 
   return {
     ok: results.every((result) => result.ok === true),
     reason: results.every((result) => result.ok === true) ? null : 'real_readonly_smoke_failed',
-    guard: {
-      ok: guard.ok,
-      stage: guard.stage,
-      allowed_commands: guard.allowed_commands,
-      forbidden_commands: guard.forbidden_commands,
-      run_all_enabled: guard.run_all_enabled,
-      telegram_env_ok: guard.telegram_env_ok,
-      token_redacted: guard.token_redacted,
-      repo_secret_preflight_ok: guard.repo_secret_preflight_ok
+    output_contract: {
+      no_raw_update: true,
+      no_raw_response_payload: true,
+      no_private_ids: true,
+      response_preview_max_chars: MAX_RESPONSE_PREVIEW_CHARS
     },
+    guard: safeGuardSummary(guard),
     dry_run_telegram_send: dryRunTelegramSend,
     commands,
     results
@@ -177,9 +212,13 @@ if (require.main === module) {
 }
 
 module.exports = {
+  MAX_RESPONSE_PREVIEW_CHARS,
   parseList,
   ensureRuntimeState,
   assertReadOnlyCommands,
   makeUpdate,
+  responseKind,
+  safeResponsePreview,
+  summarizeSmokeResponse,
   runRealReadOnlySmoke
 };
