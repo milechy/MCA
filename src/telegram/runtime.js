@@ -1,6 +1,26 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const https = require('node:https');
 const { loadTelegramConfig } = require('./config');
 const { processTelegramUpdate } = require('./bot');
+
+function telegramOffsetPath(rootDir = process.cwd()) {
+  return path.join(rootDir, '.ralph', 'telegram-offset.json');
+}
+
+function loadOffset(rootDir = process.cwd()) {
+  const filePath = telegramOffsetPath(rootDir);
+  if (!fs.existsSync(filePath)) return 0;
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  return Number(parsed.offset || 0);
+}
+
+function saveOffset(offset, rootDir = process.cwd()) {
+  const filePath = telegramOffsetPath(rootDir);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify({ offset, updated_at: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+  return offset;
+}
 
 function telegramApiRequest(botToken, method, payload = {}) {
   return new Promise((resolve, reject) => {
@@ -80,16 +100,17 @@ async function handleUpdate(update, options = {}) {
 }
 
 async function runPolling(options = {}) {
+  const rootDir = options.rootDir || process.cwd();
   const config = options.config || loadTelegramConfig(options.env || process.env);
   if (!config.bot_token) {
     throw new Error('TELEGRAM_BOT_TOKEN is required');
   }
 
-  let offset = options.offset || 0;
+  let offset = options.offset ?? loadOffset(rootDir);
   const maxIterations = options.maxIterations || Infinity;
   let iterations = 0;
 
-  console.log(`[telegram-runtime] polling started dry_run=${config.dry_run}`);
+  console.log(`[telegram-runtime] polling started dry_run=${config.dry_run} offset=${offset}`);
 
   while (iterations < maxIterations) {
     iterations += 1;
@@ -99,9 +120,14 @@ async function runPolling(options = {}) {
       offset = update.update_id + 1;
       await handleUpdate(update, {
         config,
-        rootDir: options.rootDir || process.cwd(),
+        rootDir,
         roles: options.roles
       });
+      saveOffset(offset, rootDir);
+    }
+
+    if (updates.length === 0) {
+      saveOffset(offset, rootDir);
     }
   }
 
@@ -109,6 +135,9 @@ async function runPolling(options = {}) {
 }
 
 module.exports = {
+  telegramOffsetPath,
+  loadOffset,
+  saveOffset,
   telegramApiRequest,
   getUpdates,
   sendMessage,
