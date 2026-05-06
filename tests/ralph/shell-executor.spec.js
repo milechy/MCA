@@ -12,7 +12,7 @@ function makeTempRoot() {
   return rootDir;
 }
 
-test('shell executor blocks dry-run-only allowlist entries by default', () => {
+test('shell executor blocks allowlisted command unless real execution is explicitly enabled', () => {
   const rootDir = makeTempRoot();
   const result = executeShellCommand({
     command: 'scripts/gates/run-all.sh',
@@ -21,7 +21,7 @@ test('shell executor blocks dry-run-only allowlist entries by default', () => {
   }, { rootDir });
 
   expect(result.ok).toBe(false);
-  expect(result.reason).toBe('allowlist_entry_is_dry_run_only');
+  expect(result.reason).toBe('real_shell_execution_not_enabled');
   expect(result.commands_executed).toEqual([]);
   expect(result.files_modified).toEqual([]);
   expect(result.log.event).toBe('shell_execution_blocked');
