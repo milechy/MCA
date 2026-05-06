@@ -6,6 +6,7 @@ const { phaseForControlDecision, transitionState, triggerSecurityStop, loadState
 const { loadRoles } = require('./roles');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode, autoRevertExpiredMode } = require('./mode-manager');
 const { dryRunApprovalCommand } = require('./approval-validator');
+const { runExecutionHarness } = require('./execution-harness');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -20,6 +21,7 @@ Commands:
   node src/ralph/cli.js approve <approval_id> <user_id> <plan.json>
   node src/ralph/cli.js approve-record-only <approval_id> <user_id>
   node src/ralph/cli.js approval-dry-run <approve|deny|modify> <approval_id> <user_id>
+  node src/ralph/cli.js execute-noop <approval_id> <plan.json>
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -131,6 +133,13 @@ function main(argv = process.argv.slice(2)) {
   if (command === 'approve-record-only') {
     const [approvalId, userId] = args;
     console.log(JSON.stringify(approveApprovalRecordOnly(approvalId, Number(userId), { channel: 'cli' }), null, 2));
+    return;
+  }
+
+  if (command === 'execute-noop') {
+    const [approvalId, planPath] = args;
+    const plan = readJson(planPath);
+    console.log(JSON.stringify(runExecutionHarness(approvalId, plan, { executor: 'noop' }), null, 2));
     return;
   }
 
