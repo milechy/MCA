@@ -126,7 +126,18 @@ function summarizeResponse(command, response) {
   };
 }
 
-async function runDryTransportSmoke({ rootDir = process.cwd(), env = process.env } = {}) {
+async function withOptionalConsoleSilence(enabled, callback) {
+  if (!enabled) return callback();
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.log = originalLog;
+  }
+}
+
+async function runDryTransportSmoke({ rootDir = process.cwd(), env = process.env, quiet = false } = {}) {
   if (env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true') {
     return {
       ok: false,
@@ -135,49 +146,51 @@ async function runDryTransportSmoke({ rootDir = process.cwd(), env = process.env
     };
   }
 
-  ensureRuntimeState(rootDir);
-  const options = runtimeOptions(rootDir, env);
-  const approved = createApprovedDryPlan(rootDir);
+  return withOptionalConsoleSilence(quiet, async () => {
+    ensureRuntimeState(rootDir);
+    const options = runtimeOptions(rootDir, env);
+    const approved = createApprovedDryPlan(rootDir);
 
-  const commands = [
-    '/ping',
-    '/status',
-    '/policy',
-    `/run-all ${approved.approval_id} ${approved.plan_path}`,
-    '/run-all APR-UNSAFE ../../tmp/evil.json'
-  ];
+    const commands = [
+      '/ping',
+      '/status',
+      '/policy',
+      `/run-all ${approved.approval_id} ${approved.plan_path}`,
+      '/run-all APR-UNSAFE ../../tmp/evil.json'
+    ];
 
-  const results = [];
-  for (const command of commands) {
-    const response = await handleUpdate(telegramUpdate(command), options);
-    results.push(summarizeResponse(command, response));
-  }
+    const results = [];
+    for (const command of commands) {
+      const response = await handleUpdate(telegramUpdate(command), options);
+      results.push(summarizeResponse(command, response));
+    }
 
-  const runAllDefaultOff = results.find((result) => result.command.startsWith('/run-all APR-TELEGRAM-DRY-TRANSPORT-SMOKE'));
-  const unsafe = results.find((result) => result.command.startsWith('/run-all APR-UNSAFE'));
+    const runAllDefaultOff = results.find((result) => result.command.startsWith('/run-all APR-TELEGRAM-DRY-TRANSPORT-SMOKE'));
+    const unsafe = results.find((result) => result.command.startsWith('/run-all APR-UNSAFE'));
 
-  const ok = results.every((result) => result.ok === true)
-    && runAllDefaultOff
-    && runAllDefaultOff.summary
-    && runAllDefaultOff.summary.reason === 'READY_BUT_NOT_EXECUTED'
-    && runAllDefaultOff.summary.run_all_enabled === false
-    && runAllDefaultOff.summary.execution_connected === false
-    && unsafe
-    && unsafe.summary
-    && unsafe.summary.reason === 'plan_path_not_allowed'
-    && unsafe.summary.execution_connected === false;
+    const ok = results.every((result) => result.ok === true)
+      && runAllDefaultOff
+      && runAllDefaultOff.summary
+      && runAllDefaultOff.summary.reason === 'READY_BUT_NOT_EXECUTED'
+      && runAllDefaultOff.summary.run_all_enabled === false
+      && runAllDefaultOff.summary.execution_connected === false
+      && unsafe
+      && unsafe.summary
+      && unsafe.summary.reason === 'plan_path_not_allowed'
+      && unsafe.summary.execution_connected === false;
 
-  return {
-    ok: Boolean(ok),
-    reason: ok ? null : 'dry_transport_smoke_failed',
-    dry_run: true,
-    run_all_enabled: false,
-    results
-  };
+    return {
+      ok: Boolean(ok),
+      reason: ok ? null : 'dry_transport_smoke_failed',
+      dry_run: true,
+      run_all_enabled: false,
+      results
+    };
+  });
 }
 
 async function main() {
-  const result = await runDryTransportSmoke({ rootDir: process.cwd(), env: process.env });
+  const result = await runDryTransportSmoke({ rootDir: process.cwd(), env: process.env, quiet: true });
   console.log(JSON.stringify(result, null, 2));
   if (!result.ok) process.exitCode = 1;
 }
