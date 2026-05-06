@@ -4,6 +4,7 @@ const { parseTelegramCommand } = require('../../src/telegram/command-parser');
 test('parses basic Telegram commands', () => {
   expect(parseTelegramCommand('/ping').type).toBe('ping');
   expect(parseTelegramCommand('/status').type).toBe('status');
+  expect(parseTelegramCommand('/policy').type).toBe('policy');
   expect(parseTelegramCommand('/mode approval').type).toBe('mode_approval');
   expect(parseTelegramCommand('/mode fullauto 6')).toMatchObject({ type: 'mode_fullauto_request', args: ['6'] });
   expect(parseTelegramCommand('/confirm MODE-123')).toMatchObject({ type: 'confirm', args: ['MODE-123'] });
