@@ -22,9 +22,13 @@ test('parses approval verbs as disconnected command types', () => {
   expect(parseTelegramCommand('/modify APR-1 change scope')).toMatchObject({ type: 'modify', args: ['APR-1', 'change', 'scope'] });
 });
 
-test('parses execute-noop command', () => {
+test('parses execution-shaped commands without connecting shell execution', () => {
   expect(parseTelegramCommand('/execute-noop APR-1 .ralph/tmp/plan.json')).toMatchObject({
     type: 'execute_noop',
+    args: ['APR-1', '.ralph/tmp/plan.json']
+  });
+  expect(parseTelegramCommand('/run-all APR-1 .ralph/tmp/plan.json')).toMatchObject({
+    type: 'run_all',
     args: ['APR-1', '.ralph/tmp/plan.json']
   });
 });
