@@ -41,3 +41,36 @@ test('shell executor blocks non-allowlisted command even when real execution is 
   expect(result.files_modified).toEqual([]);
   expect(result.log.event).toBe('shell_execution_blocked');
 });
+
+test('shell executor can run a test-only allowlisted read-only command', () => {
+  const rootDir = makeTempRoot();
+  const result = executeShellCommand({
+    command: 'node',
+    args: ['--version'],
+    cwd: '.'
+  }, {
+    rootDir,
+    allow_real_execution: true,
+    timeout_ms: 10_000,
+    allowlist: [
+      {
+        id: 'node-version-test-only',
+        command: 'node',
+        allowed_args: ['--version'],
+        allowed_cwd: '.',
+        phase: '3.7e-test-only',
+        dry_run_only: false
+      }
+    ]
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.executor).toBe('shell');
+  expect(result.command).toBe('node');
+  expect(result.args).toEqual(['--version']);
+  expect(result.exit_code).toBe(0);
+  expect(result.stdout.trim()).toMatch(/^v\d+\.\d+\.\d+/);
+  expect(result.commands_executed).toEqual(['node']);
+  expect(result.files_modified).toEqual([]);
+  expect(result.log.event).toBe('shell_execution_completed');
+});
