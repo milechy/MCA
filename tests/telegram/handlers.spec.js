@@ -169,11 +169,12 @@ test('/run-all performs preflight only and does not execute shell', () => {
   expect(result.wired_to_runtime).toBe(false);
   expect(result.result.ok).toBe(true);
   expect(result.result.reason).toBe('READY_BUT_NOT_EXECUTED');
+  expect(result.result.run_all_enabled).toBe(false);
   expect(result.result.execution_connected).toBe(false);
   expect(result.result.commands_executed).toEqual([]);
   expect(result.result.files_modified).toEqual([]);
   expect(result.result.command_preflight.allowlist_entry.id).toBe('gates-run-all');
-  expect(result.result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
+  expect(result.result.policy.reason).toBe('real_shell_execution_not_enabled');
   expect(result.text).toContain('Run-all preflight passed. READY_BUT_NOT_EXECUTED.');
 });
 
