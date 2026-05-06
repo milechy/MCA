@@ -6,7 +6,7 @@ const path = require('node:path');
 const { sendMessage, handleUpdate } = require('../../src/telegram/runtime');
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
-const { EMPTY_DIFF_HASH } = require('../../src/telegram/execution-adapter');
+const { EMPTY_DIFF_HASH, TELEGRAM_RUN_ALL_ENV } = require('../../src/telegram/execution-adapter');
 
 function makeTempRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-runtime-'));
@@ -48,16 +48,24 @@ function makeTempRoot() {
   return rootDir;
 }
 
-function sampleRunAllPlan() {
+function writeExecutableRunAll(rootDir) {
+  const scriptPath = path.join(rootDir, 'scripts', 'gates', 'run-all.sh');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\necho "telegram runtime run-all smoke"\n', 'utf8');
+  fs.chmodSync(scriptPath, 0o755);
+}
+
+function sampleRunAllPlan(overrides = {}) {
   return {
-    story_id: 'STORY-TELEGRAM-RUNTIME-RUN-ALL-DEFAULT-OFF',
+    story_id: 'STORY-TELEGRAM-RUNTIME-RUN-ALL',
     mode: 'approval',
     target_env: 'staging',
-    summary: 'Telegram runtime run-all default-off smoke test',
-    objective: 'Ensure runtime dry-run keeps run-all execution disabled by default',
+    summary: 'Telegram runtime run-all smoke test',
+    objective: 'Ensure runtime dry-run respects Telegram run-all execution gate',
     planned_files: [],
     migration_plan: { target: 'staging', sql: '' },
-    allowed_user_ids: [3]
+    allowed_user_ids: [3],
+    ...overrides
   };
 }
 
@@ -124,7 +132,7 @@ test('handleUpdate processes authorized command and returns response text', asyn
 
 test('handleUpdate keeps /run-all preflight-only when Telegram run-all env gate is off', async () => {
   const rootDir = makeTempRoot();
-  const plan = sampleRunAllPlan();
+  const plan = sampleRunAllPlan({ story_id: 'STORY-TELEGRAM-RUNTIME-RUN-ALL-DEFAULT-OFF' });
   const planPath = writeTmpPlan(rootDir, 'runtime-run-all-plan.json', plan);
   const approval = createApprovedPlan(rootDir, plan);
 
@@ -147,4 +155,35 @@ test('handleUpdate keeps /run-all preflight-only when Telegram run-all env gate 
   const executionLog = fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8');
   expect(executionLog).not.toContain('shell_execution_completed');
   expect(executionLog).not.toContain('approved_shell_execution_completed');
+});
+
+test('handleUpdate executes /run-all when Telegram run-all env gate is true while Telegram send stays dry-run', async () => {
+  const rootDir = makeTempRoot();
+  writeExecutableRunAll(rootDir);
+  const plan = sampleRunAllPlan({ story_id: 'STORY-TELEGRAM-RUNTIME-RUN-ALL-GATE-TRUE' });
+  const planPath = writeTmpPlan(rootDir, 'runtime-run-all-plan.json', plan);
+  const approval = createApprovedPlan(rootDir, plan);
+
+  const result = await handleUpdate(update(`/run-all ${approval.approval_id} ${planPath}`), {
+    rootDir,
+    config: runtimeConfig(),
+    roles: runtimeRoles(),
+    env: { [TELEGRAM_RUN_ALL_ENV]: 'true' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.response.wired_to_runtime).toBe(true);
+  expect(result.response.result.ok).toBe(true);
+  expect(result.response.result.executor).toBe('shell');
+  expect(result.response.result.command).toBe('scripts/gates/run-all.sh');
+  expect(result.response.result.exit_code).toBe(0);
+  expect(result.response.result.stdout.trim()).toBe('telegram runtime run-all smoke');
+  expect(result.response.result.run_all_enabled).toBe(true);
+  expect(result.response.result.execution_connected).toBe(true);
+  expect(result.response.result.commands_executed).toEqual(['scripts/gates/run-all.sh']);
+  expect(result.response.result.files_modified).toEqual([]);
+
+  const executionLog = fs.readFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), 'utf8');
+  expect(executionLog).toContain('shell_execution_completed');
+  expect(executionLog).toContain('approved_shell_execution_completed');
 });
