@@ -37,11 +37,8 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
 
-      - name: Check Telegram helper environment stays default-off
-        run: npm run telegram:check-env || true
-
-      - name: Inspect Telegram logs safely
-        run: npm run telegram:inspect-logs
+      - name: Run CI-safe Telegram smoke helpers
+        run: npm run telegram:ci-smoke
 
       - name: Run Ralph tests
         run: npm run test:ralph
