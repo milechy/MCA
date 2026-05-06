@@ -94,8 +94,8 @@ function handleTelegramCommand(parsed, context = {}) {
   if (parsed.type === 'run_all') {
     const [approvalId, planPath] = parsed.args;
     if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
-    const result = preflightRunAllFromTelegram(approvalId, planPath, { rootDir });
-    return textResponse(result.ok ? `Run-all preflight passed. READY_BUT_NOT_EXECUTED.${jsonBlock(result)}` : `Run-all preflight failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+    const result = preflightRunAllFromTelegram(approvalId, planPath, { rootDir, env: context.env });
+    return textResponse(result.ok ? `Run-all preflight passed. ${result.reason}.${jsonBlock(result)}` : `Run-all preflight failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
