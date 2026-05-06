@@ -65,6 +65,34 @@ function allowedConfig() {
   return { allowed_user_ids: [1, 2, 3, 4], allowed_chat_ids: [10] };
 }
 
+function expectPolicyRunAllTaxonomy(policy) {
+  expect(policy.run_all_failure_reason_taxonomy).toEqual(RUN_ALL_FAILURE_REASON_TAXONOMY);
+  expect(policy.run_all_failure_reason_normalization).toEqual({
+    plan_file_not_found: 'plan_file_missing',
+    command_not_allowed: 'command_not_allowlisted'
+  });
+  expect(policy.run_all_failure_audit_summary_fields).toEqual([
+    'ok',
+    'reason',
+    'reason_taxonomy',
+    'stage',
+    'executor',
+    'command',
+    'exit_code',
+    'started_at',
+    'finished_at',
+    'duration_ms',
+    'run_all_enabled',
+    'wired_to_runtime',
+    'execution_connected',
+    'commands_executed',
+    'files_modified',
+    'approval_id',
+    'plan_path',
+    'log_path'
+  ]);
+}
+
 test('/ping returns pong', () => {
   const result = handleTelegramCommand(parseTelegramCommand('/ping'), { rootDir: makeTempRoot(), user_id: 3, roles: roles() });
   expect(result.ok).toBe(true);
@@ -167,6 +195,7 @@ test('/policy returns read-only execution policy status with runtime gate off', 
   expect(result.policy.telegram_run_all_required_value).toBe('true');
   expect(result.policy.allow_real_execution_required).toBe(true);
   expect(result.policy.run_all_execution_conditions).toContain(`${TELEGRAM_RUN_ALL_ENV}=true`);
+  expectPolicyRunAllTaxonomy(result.policy);
   expect(result.policy.allowed_commands[0]).toMatchObject({ id: 'gates-run-all', command: 'scripts/gates/run-all.sh', allowed_args: [], allowed_cwd: '.', dry_run_only: false });
   expect(result.text).toContain('Execution policy:');
 });
@@ -179,6 +208,7 @@ test('/policy returns read-only execution policy status with runtime gate true',
   expect(result.policy.telegram_shell_execution_connected).toBe(true);
   expect(result.policy.telegram_run_all_enabled).toBe(true);
   expect(result.policy.telegram_run_all_env).toBe(TELEGRAM_RUN_ALL_ENV);
+  expectPolicyRunAllTaxonomy(result.policy);
 });
 
 test('/run-all performs preflight only and does not execute shell when env gate is off', () => {
