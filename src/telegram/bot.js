@@ -2,16 +2,27 @@ const { loadTelegramConfig } = require('./config');
 const { isAllowedTelegramUpdate, getTelegramChatId } = require('./auth');
 const { parseTelegramCommand } = require('./command-parser');
 const { handleTelegramCommand } = require('./handlers');
+const { auditTelegramCommand } = require('./audit');
 
 function extractMessageText(update) {
   return update?.message?.text || update?.callback_query?.data || '';
 }
 
 async function processTelegramUpdate(update, options = {}) {
+  const rootDir = options.rootDir || process.cwd();
   const config = options.config || loadTelegramConfig(options.env || process.env);
   const auth = isAllowedTelegramUpdate(update, config);
 
   if (!auth.ok) {
+    auditTelegramCommand({
+      command_type: 'unauthorized',
+      user_id: auth.user_id || null,
+      chat_id: auth.chat_id || getTelegramChatId(update),
+      ok: false,
+      reason: auth.reason,
+      execution_connected: false
+    }, { rootDir });
+
     return {
       ok: false,
       reason: auth.reason,
@@ -22,11 +33,20 @@ async function processTelegramUpdate(update, options = {}) {
 
   const parsed = parseTelegramCommand(extractMessageText(update));
   const response = handleTelegramCommand(parsed, {
-    rootDir: options.rootDir || process.cwd(),
+    rootDir,
     user_id: auth.user_id,
     chat_id: auth.chat_id,
     roles: options.roles
   });
+
+  auditTelegramCommand({
+    command_type: parsed.type,
+    user_id: auth.user_id,
+    chat_id: auth.chat_id,
+    ok: response.ok,
+    reason: response.result?.reason || null,
+    execution_connected: response.wired_to_runtime === true
+  }, { rootDir });
 
   return {
     ok: true,
@@ -37,7 +57,4 @@ async function processTelegramUpdate(update, options = {}) {
   };
 }
 
-module.exports = {
-  extractMessageText,
-  processTelegramUpdate
-};
+module.exports = { extractMessageText, processTelegramUpdate };
