@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const { handleUpdate } = require('../../src/telegram/runtime');
 const { realTransportGuard, READ_ONLY_COMMANDS } = require('./real-transport-guard');
 
@@ -9,6 +12,52 @@ function parseList(value) {
     .split(',')
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isFinite(item));
+}
+
+function ensureRuntimeState(rootDir) {
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'tmp'), { recursive: true });
+
+  const files = [
+    ['.ralph/approval-log.jsonl', ''],
+    ['.ralph/logs/audit.jsonl', ''],
+    ['.ralph/logs/execution.jsonl', '']
+  ];
+
+  for (const [relativePath, content] of files) {
+    const filePath = path.join(rootDir, relativePath);
+    if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, content, 'utf8');
+  }
+
+  const statePath = path.join(rootDir, '.ralph', 'state.json');
+  if (!fs.existsSync(statePath)) {
+    fs.writeFileSync(statePath, `${JSON.stringify({
+      loop_id: 'telegram-real-readonly-smoke',
+      phase: 'IDLE',
+      current_story_id: null,
+      iteration: 0,
+      consecutive_failures: 0,
+      active_mode: 'approval',
+      current_approval_id: null,
+      last_green_commit: null,
+      security_stop: false,
+      updated_at: '2026-05-06T00:00:00+09:00'
+    }, null, 2)}\n`, 'utf8');
+  }
+
+  const modePath = path.join(rootDir, '.ralph', 'mode.json');
+  if (!fs.existsSync(modePath)) {
+    fs.writeFileSync(modePath, `${JSON.stringify({
+      mode: 'approval',
+      effective_until: null,
+      auto_revert_to: null,
+      changed_by: { channel: 'manual', user: 'telegram-real-readonly-smoke' },
+      policy_version: 'approval-policy-v1.4',
+      reason: 'telegram_real_readonly_smoke_setup',
+      updated_at: '2026-05-06T00:00:00+09:00'
+    }, null, 2)}\n`, 'utf8');
+  }
 }
 
 function assertReadOnlyCommands(commands) {
@@ -60,6 +109,8 @@ async function runRealReadOnlySmoke({
       results: []
     };
   }
+
+  ensureRuntimeState(rootDir);
 
   const config = {
     dry_run: dryRunTelegramSend,
@@ -127,6 +178,7 @@ if (require.main === module) {
 
 module.exports = {
   parseList,
+  ensureRuntimeState,
   assertReadOnlyCommands,
   makeUpdate,
   runRealReadOnlySmoke
