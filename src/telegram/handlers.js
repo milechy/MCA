@@ -2,6 +2,7 @@ const { loadState } = require('../ralph/state-machine');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = require('../ralph/mode-manager');
 const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
+const { dryRunApprovalCommand } = require('../ralph/approval-validator');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -55,8 +56,25 @@ function handleTelegramCommand(parsed, context = {}) {
     return textResponse(result.ok ? `Fullauto enabled.${jsonBlock(result.mode)}` : `Confirm failed: ${result.reason}`, { result });
   }
 
-  if (['approve', 'deny', 'modify'].includes(parsed.type)) {
-    return textResponse(`${parsed.type} command parsed but runtime action is not wired in Phase 2.`, { parsed, wired_to_runtime: false });
+  if (parsed.type === 'approve') {
+    const [approvalId] = parsed.args;
+    if (!approvalId) return textResponse('Usage: /approve <approval_id>', { wired_to_runtime: false });
+    const result = dryRunApprovalCommand('approve', approvalId, userId, { rootDir });
+    return textResponse(result.ok ? `Dry-run approve validation passed.${jsonBlock(result)}` : `Dry-run approve validation failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+  }
+
+  if (parsed.type === 'deny') {
+    const [approvalId] = parsed.args;
+    if (!approvalId) return textResponse('Usage: /deny <approval_id>', { wired_to_runtime: false });
+    const result = dryRunApprovalCommand('deny', approvalId, userId, { rootDir });
+    return textResponse(result.ok ? `Dry-run deny validation passed.${jsonBlock(result)}` : `Dry-run deny validation failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+  }
+
+  if (parsed.type === 'modify') {
+    const [approvalId, ...instructionParts] = parsed.args;
+    if (!approvalId || instructionParts.length === 0) return textResponse('Usage: /modify <approval_id> <instruction>', { wired_to_runtime: false });
+    const result = dryRunApprovalCommand('modify', approvalId, userId, { rootDir });
+    return textResponse(result.ok ? `Dry-run modify validation passed. Replan would be required.${jsonBlock({ ...result, instruction: instructionParts.join(' ') })}` : `Dry-run modify validation failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
