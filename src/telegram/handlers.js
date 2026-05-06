@@ -59,7 +59,7 @@ function handleTelegramCommand(parsed, context = {}) {
   }
 
   if (parsed.type === 'policy') {
-    const policy = executionPolicyStatus();
+    const policy = executionPolicyStatus(context.env || process.env);
     return textResponse(`Execution policy:${jsonBlock(policy)}`, { policy, wired_to_runtime: false });
   }
 
