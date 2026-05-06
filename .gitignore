@@ -17,3 +17,10 @@ test-results/
 
 # OS
 .DS_Store
+
+# Supabase local
+
+supabase/.branches/
+
+supabase/.temp/
+
