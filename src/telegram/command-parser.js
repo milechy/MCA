@@ -14,6 +14,7 @@ function parseTelegramCommand(text) {
   if (command === '/approvals') return { type: 'approvals', raw, args };
   if (command === '/approval') return { type: 'approval_detail', raw, args };
   if (command === '/execute-noop') return { type: 'execute_noop', raw, args };
+  if (command === '/run-all') return { type: 'run_all', raw, args };
 
   if (command === '/mode') {
     const [modeAction, ...modeArgs] = args;
