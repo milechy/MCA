@@ -3,6 +3,7 @@ const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = 
 const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
 const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
+const { executeNoopFromTelegram } = require('./execution-adapter');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -75,6 +76,13 @@ function handleTelegramCommand(parsed, context = {}) {
     if (!approvalId || instructionParts.length === 0) return textResponse('Usage: /modify <approval_id> <instruction>', { wired_to_runtime: false });
     const result = modifyFromTelegram(approvalId, userId, instructionParts.join(' '), { rootDir });
     return textResponse(result.ok ? `Approval superseded. Replan required. Execution remains disconnected.${jsonBlock(result)}` : `Modify failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+  }
+
+  if (parsed.type === 'execute_noop') {
+    const [approvalId, planPath] = parsed.args;
+    if (!approvalId || !planPath) return textResponse('Usage: /execute-noop <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
+    const result = executeNoopFromTelegram(approvalId, planPath, { rootDir });
+    return textResponse(result.ok ? `No-op execution completed. Execution remains disconnected.${jsonBlock(result)}` : `No-op execution failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
