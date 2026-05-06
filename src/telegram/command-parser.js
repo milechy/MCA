@@ -12,6 +12,7 @@ function parseTelegramCommand(text) {
   if (command === '/confirm') return { type: 'confirm', raw, args };
   if (command === '/approvals') return { type: 'approvals', raw, args };
   if (command === '/approval') return { type: 'approval_detail', raw, args };
+  if (command === '/execute-noop') return { type: 'execute_noop', raw, args };
 
   if (command === '/mode') {
     const [modeAction, ...modeArgs] = args;
