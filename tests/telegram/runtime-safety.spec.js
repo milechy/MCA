@@ -73,19 +73,32 @@ function readAuditEvents(rootDir) {
   return content.split('\n').map((line) => JSON.parse(line));
 }
 
-function expectNoAuditOrExecutionSideEffects(rootDir) {
-  expect(readFile(rootDir, '.ralph/logs/audit.jsonl')).toBe('');
+function expectNoExecutionSideEffects(rootDir) {
   expect(readFile(rootDir, '.ralph/logs/execution.jsonl')).toBe('');
 }
 
-function expectNoShellExecution(rootDir) {
+function expectUnauthorizedAudit(rootDir, expected) {
+  const events = readAuditEvents(rootDir);
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({
+    event: 'telegram_command',
+    command_type: 'unauthorized',
+    ok: false,
+    execution_connected: false,
+    ...expected
+  });
+  expect(events[0]).not.toHaveProperty('summary');
+  expect(events[0]).not.toHaveProperty('result');
+  expect(events[0]).not.toHaveProperty('response');
+}
+
+function expectNoShellCompletion(rootDir) {
   const executionLog = readFile(rootDir, '.ralph/logs/execution.jsonl');
   expect(executionLog).not.toContain('shell_execution_completed');
   expect(executionLog).not.toContain('approved_shell_execution_completed');
-  expect(executionLog).not.toContain('scripts/gates/run-all.sh');
 }
 
-test('unauthorized Telegram user leaves no audit or execution side effects', async () => {
+test('unauthorized Telegram user is audited compactly but never reaches execution', async () => {
   const rootDir = makeTempRoot();
   const result = await handleUpdate(update({ text: '/run-all APR-ANY .ralph/tmp/any.json', userId: 999, chatId: 10 }), {
     rootDir,
@@ -96,10 +109,11 @@ test('unauthorized Telegram user leaves no audit or execution side effects', asy
 
   expect(result.ok).toBe(false);
   expect(result.reason).toBe('telegram_user_not_allowed');
-  expectNoAuditOrExecutionSideEffects(rootDir);
+  expectUnauthorizedAudit(rootDir, { user_id: 999, chat_id: 10, reason: 'telegram_user_not_allowed' });
+  expectNoExecutionSideEffects(rootDir);
 });
 
-test('unauthorized Telegram chat leaves no audit or execution side effects', async () => {
+test('unauthorized Telegram chat is audited compactly but never reaches execution', async () => {
   const rootDir = makeTempRoot();
   const result = await handleUpdate(update({ text: '/run-all APR-ANY .ralph/tmp/any.json', userId: 3, chatId: 999 }), {
     rootDir,
@@ -110,7 +124,8 @@ test('unauthorized Telegram chat leaves no audit or execution side effects', asy
 
   expect(result.ok).toBe(false);
   expect(result.reason).toBe('telegram_chat_not_allowed');
-  expectNoAuditOrExecutionSideEffects(rootDir);
+  expectUnauthorizedAudit(rootDir, { user_id: 3, chat_id: 999, reason: 'telegram_chat_not_allowed' });
+  expectNoExecutionSideEffects(rootDir);
 });
 
 test('unknown command is audited compactly but never touches execution log', async () => {
@@ -124,7 +139,7 @@ test('unknown command is audited compactly but never touches execution log', asy
 
   expect(result.ok).toBe(true);
   expect(result.response_text).toContain('Unknown or unsupported command');
-  expectNoShellExecution(rootDir);
+  expectNoExecutionSideEffects(rootDir);
   const event = readAuditEvents(rootDir).at(-1);
   expect(event).toMatchObject({ event: 'telegram_command', command_type: 'unknown', ok: true, reason: null, execution_connected: false });
   expect(event).not.toHaveProperty('summary');
@@ -132,7 +147,7 @@ test('unknown command is audited compactly but never touches execution log', asy
   expect(event).not.toHaveProperty('response');
 });
 
-test('policy env gate true matches run-all execution gate true', async () => {
+test('policy env gate true matches run-all runtime wiring', async () => {
   const rootDir = makeTempRoot();
   const policy = await handleUpdate(update({ text: '/policy' }), {
     rootDir,
@@ -155,9 +170,12 @@ test('policy env gate true matches run-all execution gate true', async () => {
   });
 
   expect(runAll.response.summary.run_all_enabled).toBe(true);
-  expect(runAll.response.summary.execution_connected).toBe(false);
+  expect(runAll.response.summary.wired_to_runtime).toBe(true);
+  expect(runAll.response.summary.execution_connected).toBe(true);
   expect(runAll.response.summary.reason).toBe('shell_execution_failed');
-  expectNoShellExecution(rootDir);
+  expect(runAll.response.summary.commands_executed).toEqual(['scripts/gates/run-all.sh']);
+  expect(runAll.response.summary.files_modified).toEqual([]);
+  expectNoShellCompletion(rootDir);
 });
 
 test('policy env gate off matches run-all preflight-only behavior', async () => {
@@ -186,7 +204,7 @@ test('policy env gate off matches run-all preflight-only behavior', async () => 
   expect(runAll.response.summary.wired_to_runtime).toBe(false);
   expect(runAll.response.summary.execution_connected).toBe(false);
   expect(runAll.response.summary.reason).toBe('READY_BUT_NOT_EXECUTED');
-  expectNoShellExecution(rootDir);
+  expectNoShellCompletion(rootDir);
 });
 
 test('unsafe run-all path never reaches shell execution even when env gate is true', async () => {
@@ -208,5 +226,5 @@ test('unsafe run-all path never reaches shell execution even when env gate is tr
     commands_executed: [],
     files_modified: []
   });
-  expectNoShellExecution(rootDir);
+  expectNoShellCompletion(rootDir);
 });
