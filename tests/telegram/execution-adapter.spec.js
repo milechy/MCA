@@ -5,7 +5,14 @@ const path = require('node:path');
 
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
-const { isAllowedTmpPlanPath, executeNoopFromTelegram, EMPTY_DIFF_HASH } = require('../../src/telegram/execution-adapter');
+const {
+  isAllowedTmpPlanPath,
+  executeNoopFromTelegram,
+  preflightRunAllFromTelegram,
+  telegramRunAllEnabled,
+  EMPTY_DIFF_HASH,
+  TELEGRAM_RUN_ALL_ENV
+} = require('../../src/telegram/execution-adapter');
 
 function makeTempRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-execution-adapter-'));
@@ -69,6 +76,13 @@ test('isAllowedTmpPlanPath only allows .ralph/tmp json files', () => {
   expect(isAllowedTmpPlanPath('.ralph/tmp/plan.txt')).toBe(false);
 });
 
+test('telegramRunAllEnabled requires explicit true string', () => {
+  expect(telegramRunAllEnabled({})).toBe(false);
+  expect(telegramRunAllEnabled({ [TELEGRAM_RUN_ALL_ENV]: 'false' })).toBe(false);
+  expect(telegramRunAllEnabled({ [TELEGRAM_RUN_ALL_ENV]: 'TRUE' })).toBe(false);
+  expect(telegramRunAllEnabled({ [TELEGRAM_RUN_ALL_ENV]: 'true' })).toBe(true);
+});
+
 test('executeNoopFromTelegram rejects disallowed plan path', () => {
   const rootDir = makeTempRoot();
   const result = executeNoopFromTelegram('APR-1', '../plan.json', { rootDir });
@@ -100,4 +114,45 @@ test('executeNoopFromTelegram runs no-op execution after approval and preflight'
   expect(result.commands_executed).toEqual([]);
   expect(result.files_modified).toEqual([]);
   expect(result.log.event).toBe('execution_noop_completed');
+});
+
+test('preflightRunAllFromTelegram defaults to ready but not executed when env gate is off', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan({ planned_files: [], migration_plan: { target: 'staging', sql: '' } });
+  const approval = createApprovedApproval(rootDir, plan);
+  const planPath = writePlan(rootDir, plan, 'run-all-plan.json');
+
+  const result = preflightRunAllFromTelegram(approval.approval_id, planPath, {
+    rootDir,
+    env: {}
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('READY_BUT_NOT_EXECUTED');
+  expect(result.run_all_enabled).toBe(false);
+  expect(result.policy.ok).toBe(false);
+  expect(result.policy.reason).toBe('real_shell_execution_not_enabled');
+  expect(result.commands_executed).toEqual([]);
+  expect(result.files_modified).toEqual([]);
+});
+
+test('preflightRunAllFromTelegram reports ready for execution when env gate is true but still does not execute', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan({ planned_files: [], migration_plan: { target: 'staging', sql: '' } });
+  const approval = createApprovedApproval(rootDir, plan);
+  const planPath = writePlan(rootDir, plan, 'run-all-plan.json');
+
+  const result = preflightRunAllFromTelegram(approval.approval_id, planPath, {
+    rootDir,
+    env: { [TELEGRAM_RUN_ALL_ENV]: 'true' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED');
+  expect(result.run_all_enabled).toBe(true);
+  expect(result.policy.ok).toBe(true);
+  expect(result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
+  expect(result.commands_executed).toEqual([]);
+  expect(result.files_modified).toEqual([]);
+  expect(result.execution_connected).toBe(false);
 });
