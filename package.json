@@ -10,6 +10,10 @@
     "test:e2e": "playwright test tests/e2e",
     "test:ralph": "playwright test --config=playwright.ralph.config.js",
     "test:telegram": "playwright test --config=playwright.telegram.config.js",
+    "telegram:check-env": "node scripts/telegram/check-env.js",
+    "telegram:inspect-logs": "node scripts/telegram/inspect-logs.js",
+    "telegram:default-off-smoke": "node scripts/telegram/default-off-smoke.js",
+    "telegram:ci-smoke": "npm run telegram:check-env --if-present && npm run telegram:inspect-logs --if-present",
     "test": "playwright test"
   },
   "repository": {
