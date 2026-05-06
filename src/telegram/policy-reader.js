@@ -1,6 +1,19 @@
 const { COMMAND_ALLOWLIST } = require('../ralph/command-allowlist');
 const { TELEGRAM_RUN_ALL_ENV, telegramRunAllEnabled } = require('./execution-adapter');
-const { RUN_ALL_FAILURE_REASON_TAXONOMY } = require('./handlers');
+
+const RUN_ALL_FAILURE_REASON_TAXONOMY = Object.freeze([
+  'approval_id_required',
+  'plan_path_not_allowed',
+  'plan_file_missing',
+  'approval_not_found',
+  'approval_not_approved',
+  'plan_hash_mismatch',
+  'diff_hash_mismatch',
+  'command_not_allowlisted',
+  'allowlist_entry_is_dry_run_only',
+  'real_shell_execution_not_enabled',
+  'shell_execution_failed'
+]);
 
 function listExecutionCommands() {
   return COMMAND_ALLOWLIST.map((entry) => ({
@@ -73,6 +86,7 @@ function executionPolicyStatus(env = process.env) {
 }
 
 module.exports = {
+  RUN_ALL_FAILURE_REASON_TAXONOMY,
   executionPolicyStatus,
   listExecutionCommands
 };
