@@ -17,6 +17,7 @@ Phase 5 completed:
 - real read-only smoke documentation and drift tests
 - real read-only output redaction contract
 - read-only go/no-go checklist
+- post-smoke report validator handoff
 
 ## Current repository commands
 
@@ -36,6 +37,7 @@ Manual-only commands requiring operator judgment:
 ```bash
 npm run telegram:real-transport-guard
 npm run telegram:real-readonly-smoke
+npm run telegram:validate-smoke-report -- <report-file>
 ```
 
 `telegram:real-readonly-smoke` must remain manual-only and must not be added to CI unless a separate Phase explicitly adds Bot API CI with secrets isolation.
@@ -69,6 +71,7 @@ Before running real Bot API smoke, the operator must read:
 ```text
 docs/telegram-phase5-manual-smoke-template.md
 docs/telegram-phase5-readonly-go-no-go.md
+docs/telegram-phase6-readonly-smoke-report-template.md
 ```
 
 The operator must set Telegram secrets only in the active shell session:
@@ -125,6 +128,25 @@ raw response_text
 full audit payload
 full execution payload
 ```
+
+## Post-smoke report validation
+
+Before sharing a Phase 6 report, save only the safe report body to a local scratch file outside the repository or to an ignored temporary file, then run:
+
+```bash
+npm run telegram:validate-smoke-report -- <report-file>
+```
+
+Expected:
+
+```json
+{
+  "ok": true,
+  "findings": []
+}
+```
+
+If the validator reports any finding, do not post the report.
 
 ## Hard deferred items
 
