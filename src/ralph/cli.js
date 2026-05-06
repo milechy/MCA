@@ -12,6 +12,12 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
+function optionValue(args, name) {
+  const index = args.indexOf(name);
+  if (index === -1) return undefined;
+  return args[index + 1];
+}
+
 function usage() {
   console.log(`Ralph CLI
 
@@ -21,7 +27,7 @@ Commands:
   node src/ralph/cli.js approve <approval_id> <user_id> <plan.json>
   node src/ralph/cli.js approve-record-only <approval_id> <user_id>
   node src/ralph/cli.js approval-dry-run <approve|deny|modify> <approval_id> <user_id>
-  node src/ralph/cli.js execute-noop <approval_id> <plan.json>
+  node src/ralph/cli.js execute-noop <approval_id> <plan.json> [--current-diff-hash sha256:...]
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -139,7 +145,10 @@ function main(argv = process.argv.slice(2)) {
   if (command === 'execute-noop') {
     const [approvalId, planPath] = args;
     const plan = readJson(planPath);
-    console.log(JSON.stringify(runExecutionHarness(approvalId, plan, { executor: 'noop' }), null, 2));
+    console.log(JSON.stringify(runExecutionHarness(approvalId, plan, {
+      executor: 'noop',
+      current_diff_hash: optionValue(args, '--current-diff-hash')
+    }), null, 2));
     return;
   }
 
@@ -176,4 +185,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main };
+module.exports = { main, optionValue };
