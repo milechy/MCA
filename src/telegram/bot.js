@@ -10,7 +10,8 @@ function extractMessageText(update) {
 
 async function processTelegramUpdate(update, options = {}) {
   const rootDir = options.rootDir || process.cwd();
-  const config = options.config || loadTelegramConfig(options.env || process.env);
+  const env = options.env || process.env;
+  const config = options.config || loadTelegramConfig(env);
   const auth = isAllowedTelegramUpdate(update, config);
 
   if (!auth.ok) {
@@ -36,7 +37,8 @@ async function processTelegramUpdate(update, options = {}) {
     rootDir,
     user_id: auth.user_id,
     chat_id: auth.chat_id,
-    roles: options.roles
+    roles: options.roles,
+    env
   });
 
   auditTelegramCommand({
