@@ -1,0 +1,19 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Ralph runtime artifacts
+.ralph/logs/*
+.ralph/snapshots/*
+.ralph/test-history/*
+!.ralph/logs/.gitkeep
+!.ralph/snapshots/.gitkeep
+!.ralph/test-history/.gitkeep
+
+# Playwright
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
