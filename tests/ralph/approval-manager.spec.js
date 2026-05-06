@@ -6,6 +6,8 @@ const path = require('node:path');
 const { createApproval, approveApproval, supersedeApprovalForModify } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
 
+const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
 function makeTempRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-approval-'));
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
@@ -30,15 +32,23 @@ function samplePlan(overrides = {}) {
   };
 }
 
+function createTestApproval(plan, risk, options = {}) {
+  return createApproval(plan, risk, {
+    rootDir: options.rootDir,
+    approval_id: options.approval_id,
+    allowed_user_ids: options.allowed_user_ids || [123456789],
+    pre_exec_diff_hash: EMPTY_DIFF_HASH
+  });
+}
+
 test('approval succeeds for an allowed user and unchanged plan', () => {
   const rootDir = makeTempRoot();
   const plan = samplePlan();
   const risk = evaluateRisk(plan);
 
-  const approval = createApproval(plan, risk, {
+  const approval = createTestApproval(plan, risk, {
     rootDir,
-    approval_id: 'APR-TEST-ALLOW',
-    allowed_user_ids: [123456789]
+    approval_id: 'APR-TEST-ALLOW'
   });
 
   const approved = approveApproval(approval.approval_id, 123456789, plan, { rootDir });
@@ -52,10 +62,9 @@ test('approval fails for a disallowed user', () => {
   const plan = samplePlan();
   const risk = evaluateRisk(plan);
 
-  const approval = createApproval(plan, risk, {
+  const approval = createTestApproval(plan, risk, {
     rootDir,
-    approval_id: 'APR-TEST-DENY',
-    allowed_user_ids: [123456789]
+    approval_id: 'APR-TEST-DENY'
   });
 
   const result = approveApproval(approval.approval_id, 999, plan, { rootDir });
@@ -69,10 +78,9 @@ test('approval fails when plan hash changes', () => {
   const plan = samplePlan();
   const risk = evaluateRisk(plan);
 
-  const approval = createApproval(plan, risk, {
+  const approval = createTestApproval(plan, risk, {
     rootDir,
-    approval_id: 'APR-TEST-HASH',
-    allowed_user_ids: [123456789]
+    approval_id: 'APR-TEST-HASH'
   });
 
   const modifiedPlan = samplePlan({ objective: 'Changed objective after approval request' });
@@ -87,10 +95,9 @@ test('modify supersedes the current approval and requires replan', () => {
   const plan = samplePlan();
   const risk = evaluateRisk(plan);
 
-  const approval = createApproval(plan, risk, {
+  const approval = createTestApproval(plan, risk, {
     rootDir,
-    approval_id: 'APR-TEST-MODIFY',
-    allowed_user_ids: [123456789]
+    approval_id: 'APR-TEST-MODIFY'
   });
 
   const result = supersedeApprovalForModify(approval.approval_id, 'Limit DB changes to staging only', { rootDir });
