@@ -99,6 +99,22 @@ function verifyApproval(rootDir, approval, plan, options = {}) {
   return { ok: true };
 }
 
+function validateApprovalRecordForUser(approval, userId) {
+  if (approval.status !== APPROVAL_STATUSES.PENDING) {
+    return { ok: false, reason: `approval_status_${approval.status}` };
+  }
+
+  if (new Date(approval.expires_at).getTime() < Date.now()) {
+    return { ok: false, reason: 'approval_expired' };
+  }
+
+  if (approval.allowed_user_ids.length > 0 && !approval.allowed_user_ids.includes(userId)) {
+    return { ok: false, reason: 'user_not_allowed', user_id: userId };
+  }
+
+  return { ok: true };
+}
+
 function approveApproval(approvalId, userId, plan, options = {}) {
   const rootDir = options.rootDir || process.cwd();
   const approval = readApproval(rootDir, approvalId);
@@ -120,6 +136,27 @@ function approveApproval(approvalId, userId, plan, options = {}) {
   return approval;
 }
 
+function approveApprovalRecordOnly(approvalId, userId, options = {}) {
+  const rootDir = options.rootDir || process.cwd();
+  const channel = options.channel || 'cli';
+  const approval = readApproval(rootDir, approvalId);
+  const validation = validateApprovalRecordForUser(approval, userId);
+
+  if (!validation.ok) {
+    return updateApprovalStatus(rootDir, approval, APPROVAL_STATUSES.FAILED_VERIFICATION, validation);
+  }
+
+  approval.status = APPROVAL_STATUSES.APPROVED;
+  approval.approved_by = `${channel}:${userId}`;
+  approval.approved_at = nowIso();
+  approval.execution_connected = false;
+  approval.execution_requires_hash_verification = true;
+  writeApproval(rootDir, approval);
+  appendApprovalLog(rootDir, { approval_id: approvalId, action: 'approved_record_only', approved_by: approval.approved_by });
+  appendAuditEvent({ event: 'approval_approved_record_only', approval_id: approvalId, approved_by: approval.approved_by }, { filePath: path.join(rootDir, '.ralph', 'logs', 'audit.jsonl') });
+  return approval;
+}
+
 function updateApprovalStatus(rootDir, approval, status, details = {}) {
   approval.status = status;
   approval.status_details = details;
@@ -130,8 +167,9 @@ function updateApprovalStatus(rootDir, approval, status, details = {}) {
 
 function denyApproval(approvalId, userId, options = {}) {
   const rootDir = options.rootDir || process.cwd();
+  const channel = options.channel || 'cli';
   const approval = readApproval(rootDir, approvalId);
-  approval.denied_by = `cli:${userId}`;
+  approval.denied_by = `${channel}:${userId}`;
   approval.denied_at = nowIso();
   return updateApprovalStatus(rootDir, approval, APPROVAL_STATUSES.DENIED);
 }
@@ -164,8 +202,10 @@ module.exports = {
   createApproval,
   readApproval,
   approveApproval,
+  approveApprovalRecordOnly,
   denyApproval,
   supersedeApprovalForModify,
   verifyApproval,
+  validateApprovalRecordForUser,
   expirePendingApprovals
 };
