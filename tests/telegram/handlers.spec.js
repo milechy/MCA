@@ -20,6 +20,7 @@ function makeTempRoot(initialMode = {}) {
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '', 'utf8');
   fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), '', 'utf8');
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'execution.jsonl'), '', 'utf8');
   fs.writeFileSync(
     path.join(rootDir, '.ralph', 'state.json'),
     `${JSON.stringify({
@@ -51,6 +52,13 @@ function makeTempRoot(initialMode = {}) {
     'utf8'
   );
   return rootDir;
+}
+
+function writeExecutableRunAll(rootDir) {
+  const scriptPath = path.join(rootDir, 'scripts', 'gates', 'run-all.sh');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\necho "telegram handler run-all smoke"\n', 'utf8');
+  fs.chmodSync(scriptPath, 0o755);
 }
 
 function roles() {
@@ -154,7 +162,7 @@ test('/policy returns read-only execution policy status', () => {
   expect(result.text).toContain('Execution policy:');
 });
 
-test('/run-all performs preflight only and does not execute shell', () => {
+test('/run-all performs preflight only and does not execute shell when env gate is off', () => {
   const rootDir = makeTempRoot();
   const plan = sampleRunAllPlan();
   const planPath = writeTmpPlan(rootDir, 'run-all-plan.json', plan);
@@ -179,8 +187,9 @@ test('/run-all performs preflight only and does not execute shell', () => {
   expect(result.text).toContain('Run-all preflight passed. READY_BUT_NOT_EXECUTED.');
 });
 
-test('/run-all reports ready for Telegram execution when env gate is true but still does not execute shell', () => {
+test('/run-all executes allowlisted shell command when env gate is true', () => {
   const rootDir = makeTempRoot();
+  writeExecutableRunAll(rootDir);
   const plan = sampleRunAllPlan();
   const planPath = writeTmpPlan(rootDir, 'run-all-plan.json', plan);
   const approval = createApprovedPlan(rootDir, plan);
@@ -193,15 +202,16 @@ test('/run-all reports ready for Telegram execution when env gate is true but st
   });
 
   expect(result.ok).toBe(true);
-  expect(result.wired_to_runtime).toBe(false);
+  expect(result.wired_to_runtime).toBe(true);
   expect(result.result.ok).toBe(true);
-  expect(result.result.reason).toBe('READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED');
+  expect(result.result.executor).toBe('shell');
+  expect(result.result.command).toBe('scripts/gates/run-all.sh');
+  expect(result.result.exit_code).toBe(0);
   expect(result.result.run_all_enabled).toBe(true);
-  expect(result.result.execution_connected).toBe(false);
-  expect(result.result.commands_executed).toEqual([]);
+  expect(result.result.execution_connected).toBe(true);
+  expect(result.result.commands_executed).toEqual(['scripts/gates/run-all.sh']);
   expect(result.result.files_modified).toEqual([]);
-  expect(result.result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
-  expect(result.text).toContain('Run-all preflight passed. READY_FOR_TELEGRAM_EXECUTION_BUT_NOT_EXECUTED.');
+  expect(result.text).toContain('Run-all execution completed.');
 });
 
 test('/run-all rejects unsafe or missing plan path before shell execution', () => {
