@@ -26,3 +26,18 @@ test('shell executor blocks dry-run-only allowlist entries by default', () => {
   expect(result.files_modified).toEqual([]);
   expect(result.log.event).toBe('shell_execution_blocked');
 });
+
+test('shell executor blocks non-allowlisted command even when real execution is requested', () => {
+  const rootDir = makeTempRoot();
+  const result = executeShellCommand({
+    command: 'npm',
+    args: ['test'],
+    cwd: '.'
+  }, { rootDir, allow_real_execution: true });
+
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('command_not_allowlisted');
+  expect(result.commands_executed).toEqual([]);
+  expect(result.files_modified).toEqual([]);
+  expect(result.log.event).toBe('shell_execution_blocked');
+});
