@@ -71,6 +71,7 @@ Check helper output:
 
 ```bash
 npm run telegram:check-env
+npm run telegram:preflight-no-secrets
 ```
 
 Expected:
@@ -78,6 +79,78 @@ Expected:
 ```text
 TELEGRAM_BOT_TOKEN is present and redacted
 telegram_run_all_enabled=false
+preflight-no-secrets ok=true
+```
+
+## Real read-only transport guard
+
+Before any real Bot API read-only smoke, run:
+
+```bash
+npm run telegram:real-transport-guard
+```
+
+Expected:
+
+```text
+ok=true
+stage=real_transport_read_only_guard
+allowed_commands=["/ping","/status","/policy"]
+forbidden_commands includes /run-all, /approve, /deny, /modify, /mode fullauto, /confirm
+run_all_enabled=false
+telegram_env_ok=true
+repo_secret_preflight_ok=true
+```
+
+If this command fails, do not run real Bot API smoke.
+
+## Real read-only Bot API smoke
+
+Only after the guard passes, run:
+
+```bash
+npm run telegram:real-readonly-smoke
+```
+
+This runner is intentionally limited to:
+
+```text
+/ping
+/status
+/policy
+```
+
+It must not send:
+
+```text
+/run-all
+/approve
+/deny
+/modify
+/mode fullauto
+/confirm
+```
+
+Expected:
+
+```text
+ok=true
+commands=["/ping","/status","/policy"]
+dry_run_telegram_send=false
+run_all_enabled=false
+```
+
+Inspect logs:
+
+```bash
+npm run telegram:inspect-logs
+```
+
+Expected:
+
+```text
+compact audit events exist
+no shell completion events from read-only commands
 ```
 
 ## Smoke worksheet
@@ -86,7 +159,7 @@ Record only non-secret results.
 
 ### Stage 1: read-only transport
 
-Commands sent:
+Commands sent by real-readonly runner:
 
 ```text
 /ping
@@ -115,13 +188,15 @@ no shell completion events from read-only commands
 
 ### Stage 2: default-off `/run-all`
 
+This stage is manual only and must not be run by `telegram:real-readonly-smoke`.
+
 Ensure gate is unset:
 
 ```bash
 unset RALPH_TELEGRAM_RUN_ALL_ENABLED
 ```
 
-Command sent:
+Command sent manually only after read-only smoke passes:
 
 ```text
 /run-all <approval_id> .ralph/tmp/<approved-plan>.json
@@ -140,7 +215,7 @@ files_modified=[]
 
 ### Stage 3: unsafe input
 
-Command sent:
+Command sent manually only after read-only smoke passes:
 
 ```text
 /run-all APR-ANY ../../tmp/evil.json
@@ -158,7 +233,7 @@ files_modified=[]
 
 ### Stage 4: explicit-gate real `/run-all`
 
-Only proceed after stages 1-3 pass.
+Only proceed after stages 1-3 pass and after separate operator confirmation.
 
 Enable in active shell only:
 
@@ -166,7 +241,7 @@ Enable in active shell only:
 export RALPH_TELEGRAM_RUN_ALL_ENABLED=true
 ```
 
-Command sent:
+Command sent manually:
 
 ```text
 /run-all <approval_id> .ralph/tmp/<approved-plan>.json
@@ -234,12 +309,13 @@ Use this format when reporting results in issue comments or chat:
 
 ```text
 Phase 5 manual Telegram smoke:
-- /ping: pass|fail
-- /status: pass|fail
-- /policy: pass|fail
-- default-off /run-all: READY_BUT_NOT_EXECUTED pass|fail
-- unsafe path: plan_path_not_allowed pass|fail
-- explicit-gate /run-all: completed|skipped|failed
+- real transport guard: pass|fail
+- real-readonly /ping: pass|fail
+- real-readonly /status: pass|fail
+- real-readonly /policy: pass|fail
+- default-off /run-all: READY_BUT_NOT_EXECUTED pass|fail|not-run
+- unsafe path: plan_path_not_allowed pass|fail|not-run
+- explicit-gate /run-all: completed|skipped|failed|not-run
 - files_modified: []|non-empty
 - logs preserved: yes|no
 - secrets committed: no
