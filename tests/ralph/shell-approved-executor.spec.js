@@ -60,6 +60,23 @@ const gatesCommand = {
   cwd: '.'
 };
 
+const nodeVersionCommand = {
+  command: 'node',
+  args: ['--version'],
+  cwd: '.'
+};
+
+const nodeVersionTestOnlyAllowlist = [
+  {
+    id: 'node-version-test-only',
+    command: 'node',
+    allowed_args: ['--version'],
+    allowed_cwd: '.',
+    phase: '3.7h-test-only',
+    dry_run_only: false
+  }
+];
+
 test('approved shell command is blocked by production dry-run-only allowlist', () => {
   const rootDir = makeTempRoot();
   const plan = samplePlan();
@@ -97,4 +114,29 @@ test('approved shell command is blocked before command policy when execution pre
   expect(result.commands_executed).toEqual([]);
   expect(result.files_modified).toEqual([]);
   expect(result.log.event).toBe('approved_shell_execution_blocked');
+});
+
+test('approved shell command can run a test-only allowlisted read-only command', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan({ planned_files: [] });
+  const approval = createApprovedRecordOnly(rootDir, plan);
+
+  const result = runApprovedShellCommand(approval.approval_id, plan, nodeVersionCommand, {
+    rootDir,
+    current_diff_hash: EMPTY_DIFF_HASH,
+    allow_real_execution: true,
+    timeout_ms: 10_000,
+    allowlist: nodeVersionTestOnlyAllowlist
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.executor).toBe('shell');
+  expect(result.command).toBe('node');
+  expect(result.args).toEqual(['--version']);
+  expect(result.exit_code).toBe(0);
+  expect(result.stdout.trim()).toMatch(/^v\d+\.\d+\.\d+/);
+  expect(result.commands_executed).toEqual(['node']);
+  expect(result.files_modified).toEqual([]);
+  expect(result.policy.reason).toBe('real_shell_execution_allowed_by_policy');
+  expect(result.log.event).toBe('approved_shell_execution_completed');
 });
