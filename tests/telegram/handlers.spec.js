@@ -184,7 +184,20 @@ test('/run-all performs preflight only and does not execute shell when env gate 
   expect(result.result.files_modified).toEqual([]);
   expect(result.result.command_preflight.allowlist_entry.id).toBe('gates-run-all');
   expect(result.result.policy.reason).toBe('real_shell_execution_not_enabled');
+  expect(result.summary).toMatchObject({
+    ok: true,
+    reason: 'READY_BUT_NOT_EXECUTED',
+    command: 'scripts/gates/run-all.sh',
+    run_all_enabled: false,
+    wired_to_runtime: false,
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    log_path: '.ralph/logs/execution.jsonl'
+  });
   expect(result.text).toContain('Run-all preflight passed. READY_BUT_NOT_EXECUTED.');
+  expect(result.text).not.toContain('execution_preflight');
+  expect(result.text).not.toContain('command_preflight');
 });
 
 test('/run-all executes allowlisted shell command when env gate is true', () => {
@@ -207,11 +220,28 @@ test('/run-all executes allowlisted shell command when env gate is true', () => 
   expect(result.result.executor).toBe('shell');
   expect(result.result.command).toBe('scripts/gates/run-all.sh');
   expect(result.result.exit_code).toBe(0);
+  expect(result.result.stdout.trim()).toBe('telegram handler run-all smoke');
   expect(result.result.run_all_enabled).toBe(true);
   expect(result.result.execution_connected).toBe(true);
   expect(result.result.commands_executed).toEqual(['scripts/gates/run-all.sh']);
   expect(result.result.files_modified).toEqual([]);
+  expect(result.summary).toMatchObject({
+    ok: true,
+    executor: 'shell',
+    command: 'scripts/gates/run-all.sh',
+    exit_code: 0,
+    run_all_enabled: true,
+    wired_to_runtime: true,
+    execution_connected: true,
+    commands_executed: ['scripts/gates/run-all.sh'],
+    files_modified: [],
+    log_path: '.ralph/logs/execution.jsonl'
+  });
   expect(result.text).toContain('Run-all execution completed.');
+  expect(result.text).not.toContain('telegram handler run-all smoke');
+  expect(result.text).not.toContain('stdout');
+  expect(result.text).not.toContain('execution_preflight');
+  expect(result.text).not.toContain('command_preflight');
 });
 
 test('/run-all rejects unsafe or missing plan path before shell execution', () => {
@@ -226,6 +256,17 @@ test('/run-all rejects unsafe or missing plan path before shell execution', () =
   expect(result.result.ok).toBe(false);
   expect(result.result.reason).toBe('plan_path_not_allowed');
   expect(result.result.execution_connected).toBe(false);
+  expect(result.summary).toMatchObject({
+    ok: false,
+    reason: 'plan_path_not_allowed',
+    wired_to_runtime: false,
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    log_path: '.ralph/logs/execution.jsonl'
+  });
+  expect(result.text).toContain('Run-all failed: plan_path_not_allowed');
+  expect(result.text).not.toContain('stdout');
 });
 
 test('/mode fullauto creates token but does not immediately switch mode', () => {
