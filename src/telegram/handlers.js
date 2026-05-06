@@ -91,6 +91,28 @@ function handleTelegramCommand(parsed, context = {}) {
     return textResponse(result.ok ? `No-op execution completed. Execution remains disconnected.${jsonBlock(result)}` : `No-op execution failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
+  if (parsed.type === 'run_all') {
+    const [approvalId, planPath] = parsed.args;
+    if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
+    return textResponse(`Run-all execution is not connected from Telegram.${jsonBlock({
+      ok: false,
+      reason: 'telegram_run_all_not_connected',
+      approval_id: approvalId,
+      plan_path: planPath,
+      execution_connected: false,
+      next_step: 'Use local approved shell executor smoke only until Telegram execution is explicitly enabled.'
+    })}`, {
+      result: {
+        ok: false,
+        reason: 'telegram_run_all_not_connected',
+        approval_id: approvalId,
+        plan_path: planPath,
+        execution_connected: false
+      },
+      wired_to_runtime: false
+    });
+  }
+
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
