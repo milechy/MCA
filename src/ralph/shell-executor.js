@@ -26,7 +26,7 @@ function executeShellCommand(commandRequest, options = {}) {
   const rootDir = options.rootDir || process.cwd();
   const timeoutMs = options.timeout_ms || 120_000;
 
-  const validation = validateCommandRequest(commandRequest);
+  const validation = validateCommandRequest(commandRequest, { allowlist: options.allowlist });
   if (!validation.ok) {
     return block(validation.reason, { validation }, { rootDir });
   }
