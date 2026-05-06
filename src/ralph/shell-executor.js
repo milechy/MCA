@@ -1,5 +1,6 @@
 const { execFileSync } = require('node:child_process');
 const { validateCommandRequest } = require('./command-allowlist');
+const { evaluateShellExecutionPolicy } = require('./shell-execution-policy');
 const { appendExecutionLog } = require('./execution-log');
 
 function block(reason, details = {}, options = {}) {
@@ -23,7 +24,6 @@ function block(reason, details = {}, options = {}) {
 
 function executeShellCommand(commandRequest, options = {}) {
   const rootDir = options.rootDir || process.cwd();
-  const allowRealExecution = options.allow_real_execution === true;
   const timeoutMs = options.timeout_ms || 120_000;
 
   const validation = validateCommandRequest(commandRequest);
@@ -31,12 +31,13 @@ function executeShellCommand(commandRequest, options = {}) {
     return block(validation.reason, { validation }, { rootDir });
   }
 
-  if (validation.allowlist_entry.dry_run_only === true) {
-    return block('allowlist_entry_is_dry_run_only', { validation }, { rootDir });
-  }
+  const policy = evaluateShellExecutionPolicy(validation, {
+    allow_real_execution: options.allow_real_execution === true,
+    timeout_ms: timeoutMs
+  });
 
-  if (!allowRealExecution) {
-    return block('real_shell_execution_not_enabled', { validation }, { rootDir });
+  if (!policy.ok) {
+    return block(policy.reason, { validation, policy }, { rootDir });
   }
 
   const startedAt = new Date().toISOString();
@@ -44,7 +45,7 @@ function executeShellCommand(commandRequest, options = {}) {
     const stdout = execFileSync(validation.request.command, validation.request.args, {
       cwd: rootDir,
       encoding: 'utf8',
-      timeout: timeoutMs,
+      timeout: policy.timeout_ms,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -56,7 +57,7 @@ function executeShellCommand(commandRequest, options = {}) {
       args: validation.request.args,
       cwd: validation.request.cwd,
       command_hash: validation.command_hash,
-      timeout_ms: timeoutMs,
+      timeout_ms: policy.timeout_ms,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
       exit_code: 0,
@@ -69,10 +70,11 @@ function executeShellCommand(commandRequest, options = {}) {
     const log = appendExecutionLog({
       event: 'shell_execution_completed',
       command_hash: validation.command_hash,
+      policy,
       result
     }, { rootDir });
 
-    return { ...result, log };
+    return { ...result, policy, log };
   } catch (error) {
     const result = {
       ok: false,
@@ -82,7 +84,7 @@ function executeShellCommand(commandRequest, options = {}) {
       args: validation.request.args,
       cwd: validation.request.cwd,
       command_hash: validation.command_hash,
-      timeout_ms: timeoutMs,
+      timeout_ms: policy.timeout_ms,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
       exit_code: typeof error.status === 'number' ? error.status : null,
@@ -95,10 +97,11 @@ function executeShellCommand(commandRequest, options = {}) {
     const log = appendExecutionLog({
       event: 'shell_execution_failed',
       command_hash: validation.command_hash,
+      policy,
       result
     }, { rootDir });
 
-    return { ...result, log };
+    return { ...result, policy, log };
   }
 }
 
