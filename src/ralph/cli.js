@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const { evaluateRisk, decideControlAction, targetEnv } = require('./risk-evaluator');
 const { createApproval, approveApproval, denyApproval, supersedeApprovalForModify, expirePendingApprovals } = require('./approval-manager');
 const { phaseForControlDecision, transitionState, triggerSecurityStop, loadState } = require('./state-machine');
+const { loadRoles } = require('./roles');
+const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode, autoRevertExpiredMode } = require('./mode-manager');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -19,7 +21,48 @@ Commands:
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
   node src/ralph/cli.js state
+  node src/ralph/cli.js mode
+  node src/ralph/cli.js mode approval <user_id>
+  node src/ralph/cli.js mode fullauto-request <user_id> [hours]
+  node src/ralph/cli.js mode fullauto-confirm <token> <user_id>
+  node src/ralph/cli.js mode auto-revert
 `);
+}
+
+function handleModeCommand(args) {
+  const [subcommand, ...rest] = args;
+  const roles = loadRoles();
+
+  if (!subcommand) {
+    console.log(JSON.stringify(loadMode(), null, 2));
+    return;
+  }
+
+  if (subcommand === 'approval') {
+    const [userId] = rest;
+    console.log(JSON.stringify(setApprovalMode(Number(userId), { roles }), null, 2));
+    return;
+  }
+
+  if (subcommand === 'fullauto-request') {
+    const [userId, hours] = rest;
+    console.log(JSON.stringify(requestFullautoMode(Number(userId), { roles, hours: hours ? Number(hours) : undefined }), null, 2));
+    return;
+  }
+
+  if (subcommand === 'fullauto-confirm') {
+    const [token, userId] = rest;
+    console.log(JSON.stringify(confirmFullautoMode(token, Number(userId), { roles }), null, 2));
+    return;
+  }
+
+  if (subcommand === 'auto-revert') {
+    console.log(JSON.stringify(autoRevertExpiredMode(), null, 2));
+    return;
+  }
+
+  usage();
+  process.exitCode = 1;
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -32,6 +75,11 @@ function main(argv = process.argv.slice(2)) {
 
   if (command === 'state') {
     console.log(JSON.stringify(loadState(), null, 2));
+    return;
+  }
+
+  if (command === 'mode') {
+    handleModeCommand(args);
     return;
   }
 
