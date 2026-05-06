@@ -5,8 +5,9 @@ const path = require('node:path');
 const REQUIRED_SCRIPTS = Object.freeze({
   'telegram:check-env': 'node scripts/telegram/check-env.js',
   'telegram:inspect-logs': 'node scripts/telegram/inspect-logs.js',
+  'telegram:preflight-no-secrets': 'node scripts/telegram/preflight-no-secrets.js',
   'telegram:default-off-smoke': 'node scripts/telegram/default-off-smoke.js',
-  'telegram:ci-smoke': 'npm run telegram:check-env --if-present && npm run telegram:inspect-logs --if-present'
+  'telegram:ci-smoke': 'npm run telegram:preflight-no-secrets && npm run telegram:check-env --if-present && npm run telegram:inspect-logs --if-present'
 });
 
 test('package.json exposes CI-safe Telegram smoke helper scripts', () => {
