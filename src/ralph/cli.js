@@ -7,6 +7,7 @@ const { loadRoles } = require('./roles');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode, autoRevertExpiredMode } = require('./mode-manager');
 const { dryRunApprovalCommand } = require('./approval-validator');
 const { runExecutionHarness } = require('./execution-harness');
+const { dryRunShellCommand } = require('./shell-dry-run');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -28,6 +29,7 @@ Commands:
   node src/ralph/cli.js approve-record-only <approval_id> <user_id>
   node src/ralph/cli.js approval-dry-run <approve|deny|modify> <approval_id> <user_id>
   node src/ralph/cli.js execute-noop <approval_id> <plan.json> [--current-diff-hash sha256:...]
+  node src/ralph/cli.js shell-dry-run <command>
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -149,6 +151,12 @@ function main(argv = process.argv.slice(2)) {
       executor: 'noop',
       current_diff_hash: optionValue(args, '--current-diff-hash')
     }), null, 2));
+    return;
+  }
+
+  if (command === 'shell-dry-run') {
+    const [shellCommand] = args;
+    console.log(JSON.stringify(dryRunShellCommand({ command: shellCommand, args: [], cwd: '.' }), null, 2));
     return;
   }
 
