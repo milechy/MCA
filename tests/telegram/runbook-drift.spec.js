@@ -5,6 +5,7 @@ const path = require('node:path');
 const OPERATOR_RUNBOOK = path.join(process.cwd(), 'docs', 'telegram-bot-operator-runbook.md');
 const PHASE4_SMOKE_PLAN = path.join(process.cwd(), 'docs', 'telegram-bot-phase4-smoke.md');
 const PHASE3_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-run-all-phase3-checklist.md');
+const PHASE4_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase4-completion-checklist.md');
 
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -67,8 +68,31 @@ test('Phase 3 checklist preserves execution model and deferred production bounda
   expect(checklist).toContain('multi-command allowlist expansion');
 });
 
+test('Phase 4 completion checklist preserves CI-safe and manual-smoke boundaries', () => {
+  const checklist = read(PHASE4_CHECKLIST);
+
+  expect(checklist).toContain('## Current safe CI boundary');
+  expect(checklist).toContain('CI must not set:');
+  expect(checklist).toContain('RALPH_TELEGRAM_RUN_ALL_ENABLED=true');
+  expect(checklist).toContain('CI must not reference:');
+  expect(checklist).toContain('secrets.TELEGRAM_BOT_TOKEN');
+  expect(checklist).toContain('## Manual smoke readiness');
+  expect(checklist).toContain('The operator has read `docs/telegram-bot-operator-runbook.md`.');
+  expect(checklist).toContain('## Deferred to Phase 5+');
+  expect(checklist).toContain('CI job that performs real gated `/run-all`');
+});
+
+test('Phase 4 completion checklist preserves permanent safety invariant', () => {
+  const checklist = read(PHASE4_CHECKLIST);
+
+  expect(checklist).toContain('## Safety invariant');
+  expect(checklist).toContain('No repository, CI workflow, npm script, or document should make real Telegram `/run-all` execution persistent or automatic.');
+  expect(checklist).toContain('export RALPH_TELEGRAM_RUN_ALL_ENABLED=true');
+  expect(checklist).toContain('authorization, approval, hash, command allowlist, and shell execution policy gates');
+});
+
 test('Telegram docs do not instruct CI or repository-persistent real run-all enablement', () => {
-  const docs = [read(OPERATOR_RUNBOOK), read(PHASE4_SMOKE_PLAN), read(PHASE3_CHECKLIST)].join('\n');
+  const docs = [read(OPERATOR_RUNBOOK), read(PHASE4_SMOKE_PLAN), read(PHASE3_CHECKLIST), read(PHASE4_CHECKLIST)].join('\n');
 
   expect(docs).not.toContain('secrets.RALPH_TELEGRAM_RUN_ALL_ENABLED');
   expect(docs).not.toContain('RALPH_TELEGRAM_RUN_ALL_ENABLED: "true"');
