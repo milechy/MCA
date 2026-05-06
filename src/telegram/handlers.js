@@ -3,7 +3,7 @@ const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = 
 const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
 const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
-const { executeNoopFromTelegram } = require('./execution-adapter');
+const { executeNoopFromTelegram, preflightRunAllFromTelegram } = require('./execution-adapter');
 const { executionPolicyStatus } = require('./policy-reader');
 
 function textResponse(text, extra = {}) {
@@ -94,23 +94,8 @@ function handleTelegramCommand(parsed, context = {}) {
   if (parsed.type === 'run_all') {
     const [approvalId, planPath] = parsed.args;
     if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
-    return textResponse(`Run-all execution is not connected from Telegram.${jsonBlock({
-      ok: false,
-      reason: 'telegram_run_all_not_connected',
-      approval_id: approvalId,
-      plan_path: planPath,
-      execution_connected: false,
-      next_step: 'Use local approved shell executor smoke only until Telegram execution is explicitly enabled.'
-    })}`, {
-      result: {
-        ok: false,
-        reason: 'telegram_run_all_not_connected',
-        approval_id: approvalId,
-        plan_path: planPath,
-        execution_connected: false
-      },
-      wired_to_runtime: false
-    });
+    const result = preflightRunAllFromTelegram(approvalId, planPath, { rootDir });
+    return textResponse(result.ok ? `Run-all preflight passed. READY_BUT_NOT_EXECUTED.${jsonBlock(result)}` : `Run-all preflight failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
