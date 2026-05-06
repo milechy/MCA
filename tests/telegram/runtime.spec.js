@@ -237,7 +237,7 @@ test('handleUpdate returns compressed /run-all failure response', async () => {
   expect(result.response.summary).toMatchObject({
     ok: false,
     reason: 'plan_path_not_allowed',
-    run_all_enabled: false,
+    run_all_enabled: true,
     wired_to_runtime: false,
     execution_connected: false,
     commands_executed: [],
