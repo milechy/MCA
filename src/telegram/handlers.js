@@ -14,6 +14,38 @@ function jsonBlock(value) {
   return `\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
+function summarizeRunAllResult(result) {
+  return {
+    ok: result.ok,
+    reason: result.reason || null,
+    stage: result.stage || null,
+    executor: result.executor || null,
+    command: result.command || 'scripts/gates/run-all.sh',
+    exit_code: typeof result.exit_code === 'number' ? result.exit_code : null,
+    run_all_enabled: result.run_all_enabled === true,
+    wired_to_runtime: result.wired_to_runtime === true,
+    execution_connected: result.execution_connected === true,
+    commands_executed: result.commands_executed || [],
+    files_modified: result.files_modified || [],
+    approval_id: result.approval_id || result.execution_preflight?.approval?.approval_id || null,
+    plan_path: result.plan_path || null,
+    log_path: '.ralph/logs/execution.jsonl'
+  };
+}
+
+function runAllResponseText(result) {
+  const summary = summarizeRunAllResult(result);
+  if (!result.ok) {
+    return `Run-all failed: ${result.reason || 'unknown'}${jsonBlock(summary)}`;
+  }
+
+  if (summary.commands_executed.length > 0) {
+    return `Run-all execution completed.${jsonBlock(summary)}`;
+  }
+
+  return `Run-all preflight passed. ${result.reason}.${jsonBlock(summary)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -95,13 +127,10 @@ function handleTelegramCommand(parsed, context = {}) {
     const [approvalId, planPath] = parsed.args;
     if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
     const result = runAllFromTelegram(approvalId, planPath, { rootDir, env: context.env });
-    const prefix = result.ok && result.commands_executed && result.commands_executed.length > 0
-      ? 'Run-all execution completed.'
-      : `Run-all preflight passed. ${result.reason}.`;
-    return textResponse(result.ok ? `${prefix}${jsonBlock(result)}` : `Run-all failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: result.wired_to_runtime === true });
+    return textResponse(runAllResponseText(result), { result, summary: summarizeRunAllResult(result), wired_to_runtime: result.wired_to_runtime === true });
   }
 
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText };
