@@ -152,7 +152,7 @@ test('real read-only smoke fails closed when guard fails without exposing guard 
   expect(result.guard).not.toHaveProperty('findings');
 });
 
-test('real read-only smoke fails before runtime when ids cannot be parsed', async () => {
+test('real read-only smoke fails at guard when ids are malformed', async () => {
   const result = await runRealReadOnlySmoke({
     rootDir: makeTempRoot(),
     env: {
@@ -165,6 +165,11 @@ test('real read-only smoke fails before runtime when ids cannot be parsed', asyn
   });
 
   expect(result.ok).toBe(false);
-  expect(result.reason).toBe('telegram_ids_parse_failed');
+  expect(result.reason).toBe('real_transport_guard_failed');
+  expect(result.guard).toMatchObject({
+    ok: false,
+    stage: 'real_transport_read_only_guard',
+    telegram_env_ok: false
+  });
   expect(result.results).toEqual([]);
 });
