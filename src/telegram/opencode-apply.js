@@ -39,6 +39,12 @@ function gitChangedFiles(rootDir) {
     .sort();
 }
 
+function changedFilesFromTouched(filesTouched, rootDir) {
+  return (filesTouched || [])
+    .filter((file) => fs.existsSync(path.join(rootDir, file)))
+    .sort();
+}
+
 function blocked(reason, extra = {}) {
   const now = new Date().toISOString();
   return {
@@ -94,11 +100,10 @@ function applyOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id, pat
   });
   const finishedAt = now().toISOString();
   const changedFiles = gitChangedFiles(rootDir);
-  const filesTouched = preflight.files_touched || [];
-  const repositoryFilesModified = changedFiles.filter((file) => filesTouched.includes(file));
   const exitCode = typeof result.status === 'number' ? result.status : null;
   const timedOut = result.error && result.error.code === 'ETIMEDOUT';
   const ok = exitCode === 0 && !timedOut;
+  const repositoryFilesModified = ok ? changedFilesFromTouched(preflight.files_touched, rootDir) : [];
 
   return {
     ok,
@@ -130,4 +135,4 @@ function applyOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id, pat
   };
 }
 
-module.exports = { applyOpenCodeCandidatePatch, gitChangedFiles, parsePorcelainPath };
+module.exports = { applyOpenCodeCandidatePatch, gitChangedFiles, parsePorcelainPath, changedFilesFromTouched };
