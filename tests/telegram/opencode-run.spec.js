@@ -39,12 +39,12 @@ function makeApprovedSandboxPreflight(rootDir, approvalId = 'APR-OPENCODE-RUN-1'
     approval_type: 'plan',
     requested_action: 'opencode_sandbox_run',
     allowed_user_ids: [3],
-    expires_at: '2026-05-07T01:00:00.000Z'
+    expires_at: '2099-01-01T00:00:00.000Z'
   });
   approveApprovalRecordOnly(approvalId, 3, { rootDir });
   gitCommit(rootDir, `approval ${approvalId}`);
 
-  return opencodeSandboxRunnerPreflight({
+  const preflight = opencodeSandboxRunnerPreflight({
     rootDir,
     approval_id: approvalId,
     sandbox_root: plan.sandbox_root,
@@ -53,6 +53,8 @@ function makeApprovedSandboxPreflight(rootDir, approvalId = 'APR-OPENCODE-RUN-1'
     env: { [OPENCODE_SANDBOX_ENV]: 'true' },
     now: new Date('2026-05-07T00:00:00.000Z')
   });
+  expect(preflight.ok).toBe(true);
+  return preflight;
 }
 
 test('parseTelegramCommand parses /opencode-run', () => {
