@@ -12,6 +12,7 @@ const { runOpenCodeCandidatePatch } = require('./opencode-run');
 const { previewOpenCodeCandidatePatch } = require('./opencode-patch-preview');
 const { createOpenCodePatchPreviewApproval } = require('./opencode-patch-approval');
 const { approvedOpenCodeApplyPreflight } = require('./opencode-apply-preflight');
+const { applyOpenCodeCandidatePatch } = require('./opencode-apply');
 const {
   RUN_ALL_FAILURE_REASON_TAXONOMY,
   normalizeRunAllReason
@@ -103,6 +104,11 @@ function openCodeApplyPreflightResponseText(result) {
   return `OpenCode apply preflight passed. Patch may be applied by controlled apply step.${jsonBlock(result)}`;
 }
 
+function openCodeApplyResponseText(result) {
+  if (!result.ok) return `OpenCode apply failed: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode apply completed. Review diff and run gates.${jsonBlock(result)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -153,6 +159,11 @@ function handleTelegramCommand(parsed, context = {}) {
     const result = approvedOpenCodeApplyPreflight({ rootDir, approval_id: approvalId, patch_hash: patchHash });
     return textResponse(openCodeApplyPreflightResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false, apply_allowed: result.apply_allowed === true });
   }
+  if (parsed.type === 'opencode_apply') {
+    const [approvalId, patchHash] = parsed.args;
+    const result = applyOpenCodeCandidatePatch({ rootDir, approval_id: approvalId, patch_hash: patchHash, timeout_ms: context.timeout_ms, now: context.nowFn });
+    return textResponse(openCodeApplyResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: result.execution_connected === true, apply_allowed: result.apply_allowed === true });
+  }
   if (parsed.type === 'approvals') {
     const approvals = listApprovals({ rootDir, status: parsed.args[0] || null }).map(summarizeApproval);
     return textResponse(`Approvals:${jsonBlock(approvals)}`, { approvals, wired_to_runtime: false });
@@ -197,4 +208,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText };
