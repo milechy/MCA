@@ -8,6 +8,7 @@ const { executionPolicyStatus } = require('./policy-reader');
 const { makeOpenCodeDryRunPlan, summarizeOpenCodeDryRunPlan } = require('./opencode-dry-run');
 const { makeOpenCodeSandboxPlan, summarizeOpenCodeSandboxPlan } = require('./opencode-sandbox-plan');
 const { opencodeSandboxRunnerPreflight } = require('./opencode-sandbox-preflight');
+const { previewOpenCodeCandidatePatch } = require('./opencode-patch-preview');
 const {
   RUN_ALL_FAILURE_REASON_TAXONOMY,
   normalizeRunAllReason
@@ -85,6 +86,11 @@ function openCodeSandboxPreflightResponseText(result) {
   return `OpenCode sandbox runner preflight passed. Execution still not started.${jsonBlock(result)}`;
 }
 
+function openCodePatchPreviewResponseText(result) {
+  if (!result.ok) return `OpenCode candidate patch preview blocked: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode candidate patch preview ready. Patch apply remains disabled.${jsonBlock(result)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -144,6 +150,23 @@ function handleTelegramCommand(parsed, context = {}) {
       wired_to_runtime: false,
       execution_connected: false,
       opencode_execution_started: false
+    });
+  }
+
+  if (parsed.type === 'opencode_patch_preview') {
+    const [approvalId, sandboxRoot, candidatePatchPath] = parsed.args;
+    const result = previewOpenCodeCandidatePatch({
+      rootDir,
+      approval_id: approvalId,
+      sandbox_root: sandboxRoot,
+      candidate_patch_path: candidatePatchPath
+    });
+    return textResponse(openCodePatchPreviewResponseText(result), {
+      result,
+      summary: result,
+      wired_to_runtime: false,
+      execution_connected: false,
+      apply_allowed: false
     });
   }
 
@@ -218,4 +241,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodePatchPreviewResponseText };
