@@ -46,6 +46,7 @@ function installSandboxTestDouble(rootDir, preflight) {
   const fixtureDest = path.join(rootDir, preflight.sandbox_root, 'tests', 'fixtures', 'opencode-version-double.js');
   fs.mkdirSync(path.dirname(fixtureDest), { recursive: true });
   fs.copyFileSync(fixtureSource, fixtureDest);
+  gitCommit(rootDir, `add sandbox opencode test double ${preflight.approval_id}`);
   return fixtureDest;
 }
 
