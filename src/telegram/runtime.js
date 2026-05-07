@@ -71,17 +71,39 @@ async function getUpdates(config, offset) {
   });
 }
 
+function isTelegramParseEntitiesError(error) {
+  const message = String(error && error.message ? error.message : error || '');
+  return message.includes('Telegram API sendMessage failed')
+    && message.includes('Bad Request')
+    && message.includes("can't parse entities");
+}
+
 async function sendMessage(config, chatId, text) {
   if (config.dry_run) {
     console.log(`[telegram-runtime] dry-run sendMessage chat=${chatId}\n${text}`);
     return { dry_run: true, chat_id: chatId, text };
   }
 
-  return telegramApiRequest(config.bot_token, 'sendMessage', {
+  const request = config.telegram_api_request || telegramApiRequest;
+  const markdownPayload = {
     chat_id: chatId,
     text,
     parse_mode: 'Markdown'
-  });
+  };
+
+  try {
+    return await request(config.bot_token, 'sendMessage', markdownPayload);
+  } catch (error) {
+    if (!isTelegramParseEntitiesError(error)) throw error;
+    const fallback = await request(config.bot_token, 'sendMessage', {
+      chat_id: chatId,
+      text
+    });
+    return {
+      ...fallback,
+      fallback_from_parse_mode: 'Markdown'
+    };
+  }
 }
 
 async function handleUpdate(update, options = {}) {
@@ -144,6 +166,7 @@ module.exports = {
   saveOffset,
   telegramApiRequest,
   getUpdates,
+  isTelegramParseEntitiesError,
   sendMessage,
   handleUpdate,
   runPolling
