@@ -49,9 +49,30 @@ test('check-env reports missing transport env and default-off run-all gate', () 
   });
 });
 
+test('check-env rejects placeholder and malformed transport env values', () => {
+  const placeholder = status({
+    TELEGRAM_BOT_TOKEN: '<private bot token>',
+    TELEGRAM_ALLOWED_USER_IDS: '<your telegram user id>',
+    TELEGRAM_ALLOWED_CHAT_IDS: '<target chat id>'
+  });
+
+  expect(placeholder.ok).toBe(false);
+  expect(placeholder.transport.every((entry) => entry.present === true)).toBe(true);
+  expect(placeholder.transport.every((entry) => entry.placeholder === true)).toBe(true);
+
+  const malformed = status({
+    TELEGRAM_BOT_TOKEN: '1234567890abcdef',
+    TELEGRAM_ALLOWED_USER_IDS: 'not-a-number',
+    TELEGRAM_ALLOWED_CHAT_IDS: '10'
+  });
+
+  expect(malformed.ok).toBe(false);
+  expect(malformed.transport.map((entry) => entry.valid_format)).toEqual([false, false, true]);
+});
+
 test('check-env reports transport env present and run-all enabled only for explicit true', () => {
   const baseEnv = {
-    TELEGRAM_BOT_TOKEN: '1234567890abcdef',
+    TELEGRAM_BOT_TOKEN: '1234567890:ABCDEF_session_only_token',
     TELEGRAM_ALLOWED_USER_IDS: '3,4',
     TELEGRAM_ALLOWED_CHAT_IDS: '10,11'
   };
@@ -65,7 +86,9 @@ test('check-env reports transport env present and run-all enabled only for expli
   expect(status({ ...baseEnv, [RUN_ALL_ENV]: 'true' }).transport[0]).toMatchObject({
     name: 'TELEGRAM_BOT_TOKEN',
     present: true,
-    value: '1234…cdef'
+    placeholder: false,
+    valid_format: true,
+    value: '1234…oken'
   });
 });
 
