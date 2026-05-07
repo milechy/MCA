@@ -247,6 +247,31 @@ docs/telegram-phase7-run-all-smoke-report.md
 
 This pass does not authorize new Telegram execution commands, production deploys, database migrations, OpenCode runtime execution, CI Telegram Bot API calls, or persistent secrets.
 
+## Phase 9 observability and incident controls
+
+Before sharing any smoke or incident report, run:
+
+```bash
+npm run telegram:validate-smoke-report -- <report-file>
+```
+
+Approved observability surfaces are bounded summaries only:
+
+```text
+npm run telegram:inspect-logs
+npm run telegram:validate-smoke-report -- <report-file>
+npm run telegram:check-env
+npm run telegram:real-transport-guard
+```
+
+See:
+
+```text
+docs/telegram-phase9-observability-incident-controls.md
+```
+
+Phase 9 incident controls still do not authorize unattended daemon operation, production deploys, database migrations, OpenCode execution, CI Telegram Bot API usage, persistent bot secrets, or shell allowlist expansion.
+
 ## Immediate abort criteria
 
 Abort the smoke immediately if any of the following occur:
@@ -258,6 +283,9 @@ Abort the smoke immediately if any of the following occur:
 - response text includes raw stdout, execution preflight internals, command preflight internals, or full shell policy internals
 - `files_modified` is non-empty
 - command executed is anything other than `scripts/gates/run-all.sh`
+- unknown command reaches shell execution
+- `commands_executed` contains more than one command
+- working tree remains dirty after cleanup
 
 ## Abort procedure
 
@@ -280,6 +308,7 @@ Preserve the current log files for review:
 ```bash
 cp .ralph/logs/audit.jsonl .ralph/logs/audit.abort.$(date +%Y%m%d%H%M%S).jsonl
 cp .ralph/logs/execution.jsonl .ralph/logs/execution.abort.$(date +%Y%m%d%H%M%S).jsonl
+cp .ralph/approval-log.jsonl .ralph/approval-log.incident.$(date +%Y%m%d%H%M%S).jsonl
 ```
 
 Then reset local transient smoke state only if no further forensic review is required:
@@ -338,6 +367,7 @@ Do not:
 - bypass approval/hash/diff preflight
 - run smoke from an untrusted chat
 - paste bot token export commands into chat or shared logs
+- post preserved incident logs to chat unless separately redacted and validated
 
 ## Escalation notes
 
