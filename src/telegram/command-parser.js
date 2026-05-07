@@ -17,6 +17,7 @@ function parseTelegramCommand(text) {
   if (command === '/run-all') return { type: 'run_all', raw, args };
   if (command === '/opencode-plan') return { type: 'opencode_plan', raw, args };
   if (command === '/opencode-sandbox-plan') return { type: 'opencode_sandbox_plan', raw, args };
+  if (command === '/opencode-sandbox-preflight') return { type: 'opencode_sandbox_preflight', raw, args };
 
   if (command === '/mode') {
     const [modeAction, ...modeArgs] = args;
