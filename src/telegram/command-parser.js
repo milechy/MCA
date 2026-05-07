@@ -18,6 +18,7 @@ function parseTelegramCommand(text) {
   if (command === '/opencode-plan') return { type: 'opencode_plan', raw, args };
   if (command === '/opencode-sandbox-plan') return { type: 'opencode_sandbox_plan', raw, args };
   if (command === '/opencode-sandbox-preflight') return { type: 'opencode_sandbox_preflight', raw, args };
+  if (command === '/opencode-run') return { type: 'opencode_run', raw, args };
   if (command === '/opencode-patch-preview') return { type: 'opencode_patch_preview', raw, args };
   if (command === '/opencode-patch-approval') return { type: 'opencode_patch_approval', raw, args };
 
