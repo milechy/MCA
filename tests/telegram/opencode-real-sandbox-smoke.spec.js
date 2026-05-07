@@ -41,6 +41,14 @@ function passingPreflight(approvalId = 'APR-OPENCODE-REAL-SMOKE-1') {
   };
 }
 
+function installSandboxTestDouble(rootDir, preflight) {
+  const fixtureSource = path.resolve(process.cwd(), 'tests/fixtures/opencode-version-double.js');
+  const fixtureDest = path.join(rootDir, preflight.sandbox_root, 'tests', 'fixtures', 'opencode-version-double.js');
+  fs.mkdirSync(path.dirname(fixtureDest), { recursive: true });
+  fs.copyFileSync(fixtureSource, fixtureDest);
+  return fixtureDest;
+}
+
 test('real OpenCode smoke output previews are bounded and redacted', () => {
   const raw = `token 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi ${'x'.repeat(400)}`;
   const preview = oneLine(raw);
@@ -91,11 +99,7 @@ test('real OpenCode sandbox smoke refuses failed preflight and missing env gate'
 test('real OpenCode sandbox smoke runs test double only in sandbox cwd and keeps repo clean', () => {
   const rootDir = makeGitRepo();
   const preflight = passingPreflight();
-  const fixtureSource = path.resolve(process.cwd(), 'tests/fixtures/opencode-version-double.js');
-  const fixtureDest = path.join(rootDir, 'tests', 'fixtures', 'opencode-version-double.js');
-  fs.mkdirSync(path.dirname(fixtureDest), { recursive: true });
-  fs.copyFileSync(fixtureSource, fixtureDest);
-  gitCommit(rootDir, 'add opencode test double');
+  installSandboxTestDouble(rootDir, preflight);
 
   const times = [new Date('2026-05-07T00:00:00.000Z'), new Date('2026-05-07T00:00:00.125Z')];
   const result = runRealOpenCodeSandboxSmoke(preflight, {
