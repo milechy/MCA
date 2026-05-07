@@ -8,6 +8,7 @@ const {
   commandFromUpdate,
   commandType,
   isAllowedCommand,
+  matchesCommandSubstring,
   selectLatestAllowedUpdate,
   safeUpdateSummary
 } = require('../../scripts/telegram/poll-update-smoke');
@@ -26,6 +27,12 @@ test('poll update smoke command helpers allow only explicit manual smoke command
   expect(isAllowedCommand('/run-all APR .ralph/tmp/p.json')).toBe(true);
   expect(isAllowedCommand('/approve APR-1')).toBe(false);
   expect(isAllowedCommand('/mode fullauto')).toBe(false);
+});
+
+test('poll update smoke supports optional command substring matching', () => {
+  expect(matchesCommandSubstring('/run-all APR-NEW .ralph/tmp/p.json', null)).toBe(true);
+  expect(matchesCommandSubstring('/run-all APR-NEW .ralph/tmp/p.json', 'APR-NEW')).toBe(true);
+  expect(matchesCommandSubstring('/run-all APR-OLD .ralph/tmp/p.json', 'APR-NEW')).toBe(false);
 });
 
 test('poll update smoke selects latest allowed update without leaking ids in summary', () => {
@@ -59,6 +66,25 @@ test('poll update smoke selects latest allowed update without leaking ids in sum
   expect(JSON.stringify(safeUpdateSummary(selected))).not.toContain('"chat"');
 });
 
+test('poll update smoke can select a fresh command by approval id substring instead of an older latest command', () => {
+  const updates = [
+    { update_id: 9, message: { text: '/run-all APR-FRESH .ralph/tmp/fresh.json', from: { id: 3 }, chat: { id: 10 } } },
+    { update_id: 10, message: { text: '/run-all APR-OLD .ralph/tmp/old.json', from: { id: 3 }, chat: { id: 10 } } }
+  ];
+
+  const selected = selectLatestAllowedUpdate(updates, {
+    allowedUserIds: [3],
+    allowedChatIds: [10],
+    matchCommandSubstring: 'APR-FRESH'
+  });
+
+  expect(selected.update_id).toBe(9);
+  expect(safeUpdateSummary(selected)).toMatchObject({
+    command_type: '/run-all',
+    command_preview: '/run-all APR-FRESH .ralph/tmp/fresh.json'
+  });
+});
+
 test('poll update smoke returns null when no allowed update exists', () => {
   const updates = [
     { update_id: 1, message: { text: '/ping', from: { id: 999 }, chat: { id: 10 } } },
@@ -66,6 +92,18 @@ test('poll update smoke returns null when no allowed update exists', () => {
   ];
 
   expect(selectLatestAllowedUpdate(updates, { allowedUserIds: [3], allowedChatIds: [10] })).toBe(null);
+});
+
+test('poll update smoke returns null when no command matches the requested substring', () => {
+  const updates = [
+    { update_id: 1, message: { text: '/run-all APR-OLD .ralph/tmp/old.json', from: { id: 3 }, chat: { id: 10 } } }
+  ];
+
+  expect(selectLatestAllowedUpdate(updates, {
+    allowedUserIds: [3],
+    allowedChatIds: [10],
+    matchCommandSubstring: 'APR-FRESH'
+  })).toBe(null);
 });
 
 test('poll update smoke response previews are bounded one-line strings', () => {
