@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const https = require('node:https');
+const { execFile } = require('node:child_process');
 
 const { handleUpdate } = require('../../src/telegram/runtime');
 const { status } = require('./check-env');
@@ -79,20 +80,48 @@ function httpsJson(url) {
   });
 }
 
+function curlJson(url) {
+  return new Promise((resolve, reject) => {
+    execFile('curl', ['-4', '-sS', '--connect-timeout', '20', '--max-time', '45', url], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.stderr = oneLinePreview(stderr || '', 180);
+        reject(error);
+        return;
+      }
+      try {
+        resolve({ status: 200, payload: JSON.parse(stdout) });
+      } catch (_error) {
+        reject(new Error('telegram_get_updates_curl_invalid_json'));
+      }
+    });
+  });
+}
+
 async function fetchJson(url) {
+  const attempts = [];
+
   if (typeof fetch === 'function') {
     try {
       const response = await fetch(url);
       const payload = await response.json();
-      return { status: response.status, payload, transport: 'fetch' };
+      return { status: response.status, payload, transport: 'fetch', fallback_from: attempts };
     } catch (error) {
-      const fallback = await httpsJson(url);
-      return { ...fallback, transport: 'https', fallback_from: safeError(error) };
+      attempts.push({ transport: 'fetch', error: safeError(error) });
     }
   }
 
-  const fallback = await httpsJson(url);
-  return { ...fallback, transport: 'https' };
+  try {
+    const fallback = await httpsJson(url);
+    return { ...fallback, transport: 'https', fallback_from: attempts };
+  } catch (error) {
+    attempts.push({ transport: 'https', error: safeError(error) });
+  }
+
+  const fallback = await curlJson(url);
+  return { ...fallback, transport: 'curl', fallback_from: attempts };
 }
 
 async function fetchUpdates({ env = process.env, offset = null, limit = 10, timeout = 0 } = {}) {
@@ -106,12 +135,12 @@ async function fetchUpdates({ env = process.env, offset = null, limit = 10, time
     const error = new Error(`telegram_get_updates_failed:${httpStatus}`);
     error.telegram = {
       transport,
-      fallback_from: fallbackFrom || null,
+      fallback_from: fallbackFrom || [],
       description: oneLinePreview(payload.description || '', 180)
     };
     throw error;
   }
-  return { updates: payload.result || [], transport, fallback_from: fallbackFrom || null };
+  return { updates: payload.result || [], transport, fallback_from: fallbackFrom || [] };
 }
 
 function selectLatestAllowedUpdate(updates, {
@@ -206,7 +235,7 @@ async function runPolledUpdateSmoke({
       token_redacted: redactToken(env.TELEGRAM_BOT_TOKEN || ''),
       run_all_enabled: env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true',
       update_transport: fetched.transport,
-      fetch_fallback_from: fetched.fallback_from || null,
+      fetch_fallback_from: fetched.fallback_from || [],
       updates_seen: fetched.updates.length,
       match_command_substring: matchCommandSubstring || null,
       results: []
@@ -235,7 +264,7 @@ async function runPolledUpdateSmoke({
     token_redacted: redactToken(env.TELEGRAM_BOT_TOKEN || ''),
     run_all_enabled: env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true',
     update_transport: fetched.transport,
-    fetch_fallback_from: fetched.fallback_from || null,
+    fetch_fallback_from: fetched.fallback_from || [],
     match_command_substring: matchCommandSubstring || null,
     update: safeUpdateSummary(update),
     result: {
