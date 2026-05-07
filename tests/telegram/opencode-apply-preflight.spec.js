@@ -120,10 +120,10 @@ test('approvedOpenCodeApplyPreflight blocks invalid states', () => {
   expect(approvedOpenCodeApplyPreflight({ rootDir, approval_id: approval.approval_id, patch_hash: approval.patch_hash }).reason).toBe('candidate_patch_missing');
 });
 
-test('approvedOpenCodeApplyPreflight blocks dirty repo before file change step', () => {
+test('approvedOpenCodeApplyPreflight blocks tracked diff before file change step', () => {
   const rootDir = makeGitRepo();
   const { approval } = makeApprovedPatchApproval(rootDir);
-  fs.writeFileSync(path.join(rootDir, 'dirty.txt'), 'dirty');
+  fs.writeFileSync(path.join(rootDir, 'README.md'), '# changed\n');
   expect(approvedOpenCodeApplyPreflight({ rootDir, approval_id: approval.approval_id, patch_hash: approval.patch_hash }).reason).toBe('pre_apply_diff_hash_mismatch');
 });
 
