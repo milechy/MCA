@@ -13,16 +13,35 @@ const SUSPICIOUS_PATTERNS = Object.freeze([
   { id: 'github_secret_bot_token_reference', pattern: /secrets\.TELEGRAM_BOT_TOKEN/ }
 ]);
 
-const DEFAULT_INCLUDE_EXTENSIONS = new Set([
-  '.js', '.json', '.md', '.yml', '.yaml', '.sh', '.env', '.txt'
+const DEFAULT_INCLUDE_FILENAMES = new Set([
+  '.env',
+  '.env.local',
+  '.env.production',
+  '.env.staging',
+  '.env.development',
+  '.env.test'
+]);
+
+const DEFAULT_INCLUDE_DIR_PREFIXES = Object.freeze([
+  `.github${path.sep}workflows${path.sep}`
 ]);
 
 const DEFAULT_SKIP_DIRS = new Set([
   '.git', 'node_modules', 'test-results', 'playwright-report', '.next', 'dist', 'build'
 ]);
 
+function shouldScanFile(rootDir, filePath, options = {}) {
+  const includeFilenames = options.includeFilenames || DEFAULT_INCLUDE_FILENAMES;
+  const includeDirPrefixes = options.includeDirPrefixes || DEFAULT_INCLUDE_DIR_PREFIXES;
+  const relative = path.relative(rootDir, filePath);
+  const basename = path.basename(filePath);
+
+  if (basename.startsWith('.env')) return true;
+  if (includeFilenames.has(basename)) return true;
+  return includeDirPrefixes.some((prefix) => relative.startsWith(prefix));
+}
+
 function listFiles(rootDir, options = {}) {
-  const includeExtensions = options.includeExtensions || DEFAULT_INCLUDE_EXTENSIONS;
   const skipDirs = options.skipDirs || DEFAULT_SKIP_DIRS;
   const files = [];
 
@@ -32,9 +51,8 @@ function listFiles(rootDir, options = {}) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name);
-        if (includeExtensions.has(ext) || entry.name.startsWith('.env')) files.push(fullPath);
+      } else if (entry.isFile() && shouldScanFile(rootDir, fullPath, options)) {
+        files.push(fullPath);
       }
     }
   }
@@ -98,6 +116,9 @@ if (require.main === module) main();
 
 module.exports = {
   SUSPICIOUS_PATTERNS,
+  DEFAULT_INCLUDE_FILENAMES,
+  DEFAULT_INCLUDE_DIR_PREFIXES,
+  shouldScanFile,
   listFiles,
   scanText,
   scanFiles,
