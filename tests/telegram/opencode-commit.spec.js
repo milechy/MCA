@@ -50,7 +50,6 @@ function makeApprovedCommitApproval(rootDir, approvalId = 'APR-COMMIT-1') {
   const patchPath = candidatePatchPath(rootDir, sandboxRoot);
   fs.mkdirSync(path.dirname(patchPath), { recursive: true });
   fs.writeFileSync(patchPath, PATCH_TEXT);
-  gitCommit(rootDir, 'candidate patch');
   const preview = previewOpenCodeCandidatePatch({ rootDir, approval_id: approvalId, sandbox_root: sandboxRoot });
   const created = createOpenCodePatchPreviewApproval(preview, {
     rootDir,
