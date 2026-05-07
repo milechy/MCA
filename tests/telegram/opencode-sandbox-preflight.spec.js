@@ -16,14 +16,18 @@ const {
   opencodeSandboxRunnerPreflight
 } = require('../../src/telegram/opencode-sandbox-preflight');
 
+function gitCommit(rootDir, message) {
+  execFileSync('git', ['add', '.'], { cwd: rootDir, stdio: 'ignore' });
+  execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', message], { cwd: rootDir, stdio: 'ignore' });
+}
+
 function makeGitRepo() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-sandbox-preflight-'));
   execFileSync('git', ['init', '-b', 'feature/opencode-sandbox'], { cwd: rootDir, stdio: 'ignore' });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'tmp', 'opencode-sandbox'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, 'README.md'), '# test\n');
-  execFileSync('git', ['add', 'README.md'], { cwd: rootDir, stdio: 'ignore' });
-  execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', 'init'], { cwd: rootDir, stdio: 'ignore' });
+  gitCommit(rootDir, 'init');
   return rootDir;
 }
 
@@ -36,6 +40,7 @@ function writeApproval(rootDir, approvalId, overrides = {}) {
     ...overrides
   };
   fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-pending', `${approvalId}.json`), JSON.stringify(approval, null, 2));
+  gitCommit(rootDir, `approval ${approvalId}`);
   return approval;
 }
 
