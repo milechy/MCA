@@ -9,6 +9,7 @@ const { makeOpenCodeDryRunPlan, summarizeOpenCodeDryRunPlan } = require('./openc
 const { makeOpenCodeSandboxPlan, summarizeOpenCodeSandboxPlan } = require('./opencode-sandbox-plan');
 const { opencodeSandboxRunnerPreflight } = require('./opencode-sandbox-preflight');
 const { previewOpenCodeCandidatePatch } = require('./opencode-patch-preview');
+const { createOpenCodePatchPreviewApproval } = require('./opencode-patch-approval');
 const {
   RUN_ALL_FAILURE_REASON_TAXONOMY,
   normalizeRunAllReason
@@ -91,6 +92,11 @@ function openCodePatchPreviewResponseText(result) {
   return `OpenCode candidate patch preview ready. Patch apply remains disabled.${jsonBlock(result)}`;
 }
 
+function openCodePatchApprovalResponseText(result) {
+  if (!result.ok) return `OpenCode patch preview approval blocked: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode patch preview approval requested. Patch apply remains disabled.${jsonBlock(result)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -170,6 +176,29 @@ function handleTelegramCommand(parsed, context = {}) {
     });
   }
 
+  if (parsed.type === 'opencode_patch_approval') {
+    const [approvalId, sandboxRoot, candidatePatchPath, patchApprovalId] = parsed.args;
+    const preview = previewOpenCodeCandidatePatch({
+      rootDir,
+      approval_id: approvalId,
+      sandbox_root: sandboxRoot,
+      candidate_patch_path: candidatePatchPath
+    });
+    const result = createOpenCodePatchPreviewApproval(preview, {
+      rootDir,
+      approval_id: patchApprovalId || undefined,
+      allowed_user_ids: userId ? [userId] : [],
+      now: context.now || new Date()
+    });
+    return textResponse(openCodePatchApprovalResponseText(result), {
+      result,
+      summary: result,
+      wired_to_runtime: false,
+      execution_connected: false,
+      apply_allowed: false
+    });
+  }
+
   if (parsed.type === 'approvals') {
     const approvals = listApprovals({ rootDir, status: parsed.args[0] || null }).map(summarizeApproval);
     return textResponse(`Approvals:${jsonBlock(approvals)}`, { approvals, wired_to_runtime: false });
@@ -241,4 +270,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodePatchPreviewResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText };
