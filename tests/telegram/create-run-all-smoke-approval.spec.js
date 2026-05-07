@@ -9,6 +9,7 @@ const {
   makeSmokePlan,
   createRunAllSmokeApproval
 } = require('../../scripts/telegram/create-run-all-smoke-approval');
+const { APPROVAL_STATUSES } = require('../../src/ralph/types');
 
 function makeTempRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-run-all-smoke-approval-'));
@@ -65,7 +66,7 @@ test('createRunAllSmokeApproval creates fresh approved approval and plan without
     ok: true,
     approval_id: 'APR-TELEGRAM-RUN-ALL-SMOKE-TEST',
     plan_path: '.ralph/tmp/APR-TELEGRAM-RUN-ALL-SMOKE-TEST.json',
-    status: 'APPROVED',
+    status: APPROVAL_STATUSES.APPROVED,
     run_all_enabled_required: true,
     command_to_send: '/run-all APR-TELEGRAM-RUN-ALL-SMOKE-TEST .ralph/tmp/APR-TELEGRAM-RUN-ALL-SMOKE-TEST.json'
   });
@@ -74,7 +75,7 @@ test('createRunAllSmokeApproval creates fresh approved approval and plan without
   const approval = JSON.parse(fs.readFileSync(path.join(rootDir, '.ralph', 'approval-pending', `${result.approval_id}.json`), 'utf8'));
 
   expect(plan.command).toBe('scripts/gates/run-all.sh');
-  expect(approval.status).toBe('APPROVED');
+  expect(approval.status).toBe(APPROVAL_STATUSES.APPROVED);
   expect(approval.allowed_user_ids).toEqual([3]);
   expect(approval.execution_connected).toBe(false);
   expect(approval.execution_requires_hash_verification).toBe(true);
