@@ -33,6 +33,19 @@ GitHub Actions or CI Telegram Bot API secrets
 persistent RALPH_TELEGRAM_RUN_ALL_ENABLED=true
 ```
 
+## Explicit non-goals
+
+```text
+No production deploy from Telegram
+No database migration from Telegram
+No OpenCode execution from Telegram
+No CI Telegram Bot API execution
+No persistent bot token in repository or CI
+No persistent RALPH_TELEGRAM_RUN_ALL_ENABLED=true
+No shell allowlist expansion
+No unattended bot daemon rollout
+```
+
 ## Required operator command
 
 Use the hidden-prompt runner only:
