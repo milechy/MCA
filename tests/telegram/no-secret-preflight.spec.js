@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { scanText, scanFiles, preflightNoSecrets } = require('../../scripts/telegram/preflight-no-secrets');
+const { shouldScanFile, scanText, scanFiles, preflightNoSecrets } = require('../../scripts/telegram/preflight-no-secrets');
 
 const TOKEN_LIKE = ['1234567890', 'ABCDEF', 'secret', 'token'].join('_').replace('_ABCDEF_', ':ABCDEF_');
 
@@ -66,9 +66,23 @@ test('scanText detects persistent YAML run-all gate and GitHub token secret refe
   ]);
 });
 
-test('scanFiles scans repository-style text files and skips node_modules', () => {
+test('shouldScanFile limits repository scan to persistent config surfaces', () => {
   const rootDir = makeTempRoot();
-  writeFile(rootDir, 'docs/template.md', 'TELEGRAM_BOT_TOKEN="<private bot token>"\n');
+  const envPath = writeFile(rootDir, '.env.local', '');
+  const workflowPath = writeFile(rootDir, '.github/workflows/unsafe.yml', '');
+  const docsPath = writeFile(rootDir, 'docs/template.md', '');
+  const testPath = writeFile(rootDir, 'tests/telegram/fixture.spec.js', '');
+
+  expect(shouldScanFile(rootDir, envPath)).toBe(true);
+  expect(shouldScanFile(rootDir, workflowPath)).toBe(true);
+  expect(shouldScanFile(rootDir, docsPath)).toBe(false);
+  expect(shouldScanFile(rootDir, testPath)).toBe(false);
+});
+
+test('scanFiles scans persistent config surfaces and skips docs tests and node_modules', () => {
+  const rootDir = makeTempRoot();
+  writeFile(rootDir, 'docs/template.md', 'TELEGRAM_ALLOWED_USER_IDS=123456789\n');
+  writeFile(rootDir, 'tests/telegram/fixture.spec.js', 'RALPH_TELEGRAM_RUN_ALL_ENABLED=true\n');
   writeFile(rootDir, '.env.local', 'TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890\n');
   writeFile(rootDir, 'node_modules/pkg/index.js', `TELEGRAM_BOT_TOKEN=${TOKEN_LIKE}\n`);
 
@@ -83,9 +97,9 @@ test('scanFiles scans repository-style text files and skips node_modules', () =>
   ]);
 });
 
-test('preflightNoSecrets passes safe templates and fails unsafe repo content', () => {
+test('preflightNoSecrets passes safe templates and fails unsafe persistent config content', () => {
   const safeRoot = makeTempRoot();
-  writeFile(safeRoot, 'docs/template.md', 'TELEGRAM_BOT_TOKEN="<private bot token>"\nRALPH_TELEGRAM_RUN_ALL_ENABLED=""\n');
+  writeFile(safeRoot, 'docs/template.md', 'TELEGRAM_ALLOWED_USER_IDS=123456789\nRALPH_TELEGRAM_RUN_ALL_ENABLED=true\n');
   expect(preflightNoSecrets({ rootDir: safeRoot, includeGitDiff: false })).toEqual({ ok: true, findings: [] });
 
   const unsafeRoot = makeTempRoot();
