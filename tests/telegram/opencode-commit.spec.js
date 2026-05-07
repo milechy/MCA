@@ -37,6 +37,7 @@ function makeGitRepo() {
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
   fs.mkdirSync(path.join(rootDir, 'scripts', 'gates'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.gitignore'), '.ralph/\n');
   fs.writeFileSync(path.join(rootDir, 'README.md'), '# test\n');
   fs.writeFileSync(path.join(rootDir, 'scripts', 'gates', 'run-all.sh'), '#!/usr/bin/env bash\necho gates-ok\n');
   fs.chmodSync(path.join(rootDir, 'scripts', 'gates', 'run-all.sh'), 0o755);
