@@ -16,14 +16,25 @@ function oneLine(value, maxLength = 240) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
+function parsePorcelainPath(line) {
+  const raw = String(line || '');
+  if (!raw.trim()) return null;
+  const status = raw.slice(0, 2);
+  const body = raw.slice(3).trim();
+  if (!body) return null;
+  if (status.includes('R') || status.includes('C')) {
+    const parts = body.split(' -> ');
+    return parts[parts.length - 1] || null;
+  }
+  return body;
+}
+
 function gitChangedFiles(rootDir) {
   const result = spawnSync('git', ['status', '--porcelain'], { cwd: rootDir, encoding: 'utf8', maxBuffer: 1024 * 64 });
   if (result.status !== 0) return [];
   return result.stdout
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.slice(3).trim())
+    .map(parsePorcelainPath)
     .filter(Boolean)
     .sort();
 }
@@ -83,6 +94,8 @@ function applyOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id, pat
   });
   const finishedAt = now().toISOString();
   const changedFiles = gitChangedFiles(rootDir);
+  const filesTouched = preflight.files_touched || [];
+  const repositoryFilesModified = changedFiles.filter((file) => filesTouched.includes(file));
   const exitCode = typeof result.status === 'number' ? result.status : null;
   const timedOut = result.error && result.error.code === 'ETIMEDOUT';
   const ok = exitCode === 0 && !timedOut;
@@ -106,8 +119,9 @@ function applyOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id, pat
     apply_allowed: true,
     execution_connected: true,
     commands_executed: ['git apply --whitespace=nowarn <candidate_patch_path>'],
-    files_modified: changedFiles,
-    repository_files_modified: changedFiles,
+    files_modified: repositoryFilesModified,
+    repository_files_modified: repositoryFilesModified,
+    git_status_files: changedFiles,
     commit_created: false,
     push_performed: false,
     deploy_performed: false,
@@ -116,4 +130,4 @@ function applyOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id, pat
   };
 }
 
-module.exports = { applyOpenCodeCandidatePatch, gitChangedFiles };
+module.exports = { applyOpenCodeCandidatePatch, gitChangedFiles, parsePorcelainPath };
