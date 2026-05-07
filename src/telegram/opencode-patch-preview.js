@@ -28,6 +28,12 @@ function candidatePatchPath(rootDir, sandboxRoot) {
   return path.join(rootDir, sandboxRoot, 'candidate.patch');
 }
 
+function resolveCandidatePatchPath(rootDir, patchPath) {
+  if (!patchPath) return null;
+  if (path.isAbsolute(patchPath)) return patchPath;
+  return path.join(rootDir, patchPath);
+}
+
 function extractTouchedFiles(diffText) {
   const files = new Set();
   const lines = String(diffText || '').split(/\r?\n/);
@@ -107,7 +113,7 @@ function makeBaseResult(overrides = {}) {
 
 function previewOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id, sandbox_root, candidate_patch_path } = {}) {
   const expectedPath = sandbox_root ? candidatePatchPath(rootDir, sandbox_root) : null;
-  const patchPath = candidate_patch_path || expectedPath;
+  const patchPath = resolveCandidatePatchPath(rootDir, candidate_patch_path || expectedPath);
   const base = {
     approval_id: approval_id || null,
     sandbox_root: sandbox_root || null,
@@ -157,6 +163,7 @@ module.exports = {
   oneLine,
   boundedPreview,
   candidatePatchPath,
+  resolveCandidatePatchPath,
   extractTouchedFiles,
   classifyRisk,
   previewOpenCodeCandidatePatch
