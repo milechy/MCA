@@ -8,6 +8,7 @@ const { executionPolicyStatus } = require('./policy-reader');
 const { makeOpenCodeDryRunPlan, summarizeOpenCodeDryRunPlan } = require('./opencode-dry-run');
 const { makeOpenCodeSandboxPlan, summarizeOpenCodeSandboxPlan } = require('./opencode-sandbox-plan');
 const { opencodeSandboxRunnerPreflight } = require('./opencode-sandbox-preflight');
+const { runOpenCodeCandidatePatch } = require('./opencode-run');
 const { previewOpenCodeCandidatePatch } = require('./opencode-patch-preview');
 const { createOpenCodePatchPreviewApproval } = require('./opencode-patch-approval');
 const {
@@ -59,14 +60,8 @@ function summarizeRunAllResult(result) {
 
 function runAllResponseText(result) {
   const summary = summarizeRunAllResult(result);
-  if (!result.ok) {
-    return `Run-all failed: ${summary.reason || 'unknown'}${jsonBlock(summary)}`;
-  }
-
-  if (summary.commands_executed.length > 0) {
-    return `Run-all execution completed.${jsonBlock(summary)}`;
-  }
-
+  if (!result.ok) return `Run-all failed: ${summary.reason || 'unknown'}${jsonBlock(summary)}`;
+  if (summary.commands_executed.length > 0) return `Run-all execution completed.${jsonBlock(summary)}`;
   return `Run-all preflight passed. ${summary.reason}.${jsonBlock(summary)}`;
 }
 
@@ -87,6 +82,11 @@ function openCodeSandboxPreflightResponseText(result) {
   return `OpenCode sandbox runner preflight passed. Execution still not started.${jsonBlock(result)}`;
 }
 
+function openCodeRunResponseText(result) {
+  if (!result.ok) return `OpenCode run failed: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode run completed. candidate.patch is ready; apply remains disabled.${jsonBlock(result)}`;
+}
+
 function openCodePatchPreviewResponseText(result) {
   if (!result.ok) return `OpenCode candidate patch preview blocked: ${result.reason}${jsonBlock(result)}`;
   return `OpenCode candidate patch preview ready. Patch apply remains disabled.${jsonBlock(result)}`;
@@ -103,171 +103,87 @@ function handleTelegramCommand(parsed, context = {}) {
   const roles = context.roles || loadRoles(rootDir);
 
   if (parsed.type === 'ping') return textResponse('pong');
-
   if (parsed.type === 'status') {
     const status = { state: loadState(rootDir), mode: loadMode(rootDir) };
     return textResponse(`Status:${jsonBlock(status)}`, { status });
   }
-
   if (parsed.type === 'policy') {
     const policy = executionPolicyStatus(context.env || process.env);
     return textResponse(`Execution policy:${jsonBlock(policy)}`, { policy, wired_to_runtime: false });
   }
-
   if (parsed.type === 'opencode_plan') {
-    const intent = parsed.args.join(' ');
-    const plan = makeOpenCodeDryRunPlan(intent);
-    const summary = summarizeOpenCodeDryRunPlan(plan);
-    return textResponse(openCodePlanResponseText(plan), {
-      result: plan,
-      summary,
-      wired_to_runtime: false,
-      execution_connected: false
-    });
+    const plan = makeOpenCodeDryRunPlan(parsed.args.join(' '));
+    return textResponse(openCodePlanResponseText(plan), { result: plan, summary: summarizeOpenCodeDryRunPlan(plan), wired_to_runtime: false, execution_connected: false });
   }
-
   if (parsed.type === 'opencode_sandbox_plan') {
     const [approvalId, ...intentParts] = parsed.args;
     const plan = makeOpenCodeSandboxPlan({ approval_id: approvalId, intent: intentParts.join(' ') });
-    const summary = summarizeOpenCodeSandboxPlan(plan);
-    return textResponse(openCodeSandboxPlanResponseText(plan), {
-      result: plan,
-      summary,
-      wired_to_runtime: false,
-      execution_connected: false,
-      opencode_execution_enabled: false
-    });
+    return textResponse(openCodeSandboxPlanResponseText(plan), { result: plan, summary: summarizeOpenCodeSandboxPlan(plan), wired_to_runtime: false, execution_connected: false, opencode_execution_enabled: false });
   }
-
   if (parsed.type === 'opencode_sandbox_preflight') {
     const [approvalId, sandboxRoot, ...requestedPaths] = parsed.args;
-    const result = opencodeSandboxRunnerPreflight({
-      rootDir,
-      approval_id: approvalId,
-      sandbox_root: sandboxRoot,
-      requested_paths: requestedPaths,
-      pre_secret_scan_ok: context.pre_secret_scan_ok === true,
-      env: context.env || process.env,
-      now: context.now || new Date()
-    });
-    return textResponse(openCodeSandboxPreflightResponseText(result), {
-      result,
-      summary: result,
-      wired_to_runtime: false,
-      execution_connected: false,
-      opencode_execution_started: false
-    });
+    const result = opencodeSandboxRunnerPreflight({ rootDir, approval_id: approvalId, sandbox_root: sandboxRoot, requested_paths: requestedPaths, pre_secret_scan_ok: context.pre_secret_scan_ok === true, env: context.env || process.env, now: context.now || new Date() });
+    return textResponse(openCodeSandboxPreflightResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false, opencode_execution_started: false });
   }
-
+  if (parsed.type === 'opencode_run') {
+    const [approvalId, sandboxRoot, ...taskParts] = parsed.args;
+    const preflight = opencodeSandboxRunnerPreflight({ rootDir, approval_id: approvalId, sandbox_root: sandboxRoot, requested_paths: context.requested_paths || [], pre_secret_scan_ok: context.pre_secret_scan_ok === true, env: context.env || process.env, now: context.now || new Date() });
+    const result = runOpenCodeCandidatePatch(preflight, { rootDir, task: taskParts.join(' '), command: context.opencode_command, args: context.opencode_args, env: context.env || process.env, timeout_ms: context.timeout_ms, now: context.nowFn });
+    return textResponse(openCodeRunResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: result.execution_connected === true, apply_allowed: false });
+  }
   if (parsed.type === 'opencode_patch_preview') {
     const [approvalId, sandboxRoot, candidatePatchPath] = parsed.args;
-    const result = previewOpenCodeCandidatePatch({
-      rootDir,
-      approval_id: approvalId,
-      sandbox_root: sandboxRoot,
-      candidate_patch_path: candidatePatchPath
-    });
-    return textResponse(openCodePatchPreviewResponseText(result), {
-      result,
-      summary: result,
-      wired_to_runtime: false,
-      execution_connected: false,
-      apply_allowed: false
-    });
+    const result = previewOpenCodeCandidatePatch({ rootDir, approval_id: approvalId, sandbox_root: sandboxRoot, candidate_patch_path: candidatePatchPath });
+    return textResponse(openCodePatchPreviewResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false, apply_allowed: false });
   }
-
   if (parsed.type === 'opencode_patch_approval') {
     const [approvalId, sandboxRoot, candidatePatchPath, patchApprovalId] = parsed.args;
-    const preview = previewOpenCodeCandidatePatch({
-      rootDir,
-      approval_id: approvalId,
-      sandbox_root: sandboxRoot,
-      candidate_patch_path: candidatePatchPath
-    });
-    const result = createOpenCodePatchPreviewApproval(preview, {
-      rootDir,
-      approval_id: patchApprovalId || undefined,
-      allowed_user_ids: userId ? [userId] : [],
-      now: context.now || new Date()
-    });
-    return textResponse(openCodePatchApprovalResponseText(result), {
-      result,
-      summary: result,
-      wired_to_runtime: false,
-      execution_connected: false,
-      apply_allowed: false
-    });
+    const preview = previewOpenCodeCandidatePatch({ rootDir, approval_id: approvalId, sandbox_root: sandboxRoot, candidate_patch_path: candidatePatchPath });
+    const result = createOpenCodePatchPreviewApproval(preview, { rootDir, approval_id: patchApprovalId || undefined, allowed_user_ids: userId ? [userId] : [], now: context.now || new Date() });
+    return textResponse(openCodePatchApprovalResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false, apply_allowed: false });
   }
-
   if (parsed.type === 'approvals') {
     const approvals = listApprovals({ rootDir, status: parsed.args[0] || null }).map(summarizeApproval);
     return textResponse(`Approvals:${jsonBlock(approvals)}`, { approvals, wired_to_runtime: false });
   }
-
   if (parsed.type === 'approval_detail') {
     const [approvalId] = parsed.args;
     if (!approvalId) return textResponse('Usage: /approval <approval_id>', { wired_to_runtime: false });
     const approval = getApproval(approvalId, { rootDir });
     if (!approval) return textResponse(`Approval not found: ${approvalId}`, { wired_to_runtime: false });
-    const summary = summarizeApproval(approval);
-    return textResponse(`Approval:${jsonBlock(summary)}`, { approval: summary, wired_to_runtime: false });
+    return textResponse(`Approval:${jsonBlock(summarizeApproval(approval))}`, { approval: summarizeApproval(approval), wired_to_runtime: false });
   }
-
-  if (parsed.type === 'mode_approval') {
-    const result = setApprovalMode(userId, { rootDir, roles, reason: 'telegram_mode_approval' });
-    return textResponse(result.ok ? `Mode changed to approval.${jsonBlock(result.mode)}` : `Mode change denied: ${result.reason}`, { result });
-  }
-
+  if (parsed.type === 'mode_approval') return textResponse(setApprovalMode(userId, { rootDir, roles, reason: 'telegram_mode_approval' }).ok ? `Mode changed to approval.${jsonBlock(loadMode(rootDir))}` : 'Mode change denied', { result: setApprovalMode(userId, { rootDir, roles, reason: 'telegram_mode_approval' }) });
   if (parsed.type === 'mode_fullauto_request') {
-    const hours = parsed.args[0] ? Number(parsed.args[0]) : undefined;
-    const result = requestFullautoMode(userId, { rootDir, roles, hours });
-    if (!result.ok) return textResponse(`Fullauto request denied: ${result.reason}`, { result });
-    return textResponse(`Fullauto confirmation required. Run:\n/confirm ${result.token}`, { result });
+    const result = requestFullautoMode(userId, { rootDir, roles, hours: parsed.args[0] ? Number(parsed.args[0]) : undefined });
+    return result.ok ? textResponse(`Fullauto confirmation required. Run:\n/confirm ${result.token}`, { result }) : textResponse(`Fullauto request denied: ${result.reason}`, { result });
   }
-
   if (parsed.type === 'confirm') {
-    const [token] = parsed.args;
-    const result = confirmFullautoMode(token, userId, { rootDir, roles });
+    const result = confirmFullautoMode(parsed.args[0], userId, { rootDir, roles });
     return textResponse(result.ok ? `Fullauto enabled.${jsonBlock(result.mode)}` : `Confirm failed: ${result.reason}`, { result });
   }
-
   if (parsed.type === 'approve') {
-    const [approvalId] = parsed.args;
-    if (!approvalId) return textResponse('Usage: /approve <approval_id>', { wired_to_runtime: false });
-    const result = approveFromTelegram(approvalId, userId, { rootDir });
+    const result = approveFromTelegram(parsed.args[0], userId, { rootDir });
     return textResponse(result.ok ? `Approval marked approved. Execution remains disconnected.${jsonBlock(result)}` : `Approve failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
-
   if (parsed.type === 'deny') {
-    const [approvalId] = parsed.args;
-    if (!approvalId) return textResponse('Usage: /deny <approval_id>', { wired_to_runtime: false });
-    const result = denyFromTelegram(approvalId, userId, { rootDir });
+    const result = denyFromTelegram(parsed.args[0], userId, { rootDir });
     return textResponse(result.ok ? `Approval denied. Execution remains disconnected.${jsonBlock(result)}` : `Deny failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
-
   if (parsed.type === 'modify') {
     const [approvalId, ...instructionParts] = parsed.args;
-    if (!approvalId || instructionParts.length === 0) return textResponse('Usage: /modify <approval_id> <instruction>', { wired_to_runtime: false });
     const result = modifyFromTelegram(approvalId, userId, instructionParts.join(' '), { rootDir });
     return textResponse(result.ok ? `Approval superseded. Replan required. Execution remains disconnected.${jsonBlock(result)}` : `Modify failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
-
   if (parsed.type === 'execute_noop') {
-    const [approvalId, planPath] = parsed.args;
-    if (!approvalId || !planPath) return textResponse('Usage: /execute-noop <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
-    const result = executeNoopFromTelegram(approvalId, planPath, { rootDir });
+    const result = executeNoopFromTelegram(parsed.args[0], parsed.args[1], { rootDir });
     return textResponse(result.ok ? `No-op execution completed. Execution remains disconnected.${jsonBlock(result)}` : `No-op execution failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
   }
-
   if (parsed.type === 'run_all') {
-    const [approvalId, planPath] = parsed.args;
-    if (!approvalId || !planPath) return textResponse('Usage: /run-all <approval_id> .ralph/tmp/<plan>.json', { wired_to_runtime: false });
-    const result = runAllFromTelegram(approvalId, planPath, { rootDir, env: context.env });
-    const summary = summarizeRunAllResult(result);
-    return textResponse(runAllResponseText(result), { result, summary, wired_to_runtime: result.wired_to_runtime === true });
+    const result = runAllFromTelegram(parsed.args[0], parsed.args[1], { rootDir, env: context.env });
+    return textResponse(runAllResponseText(result), { result, summary: summarizeRunAllResult(result), wired_to_runtime: result.wired_to_runtime === true });
   }
-
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText };
