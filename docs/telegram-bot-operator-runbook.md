@@ -1,6 +1,6 @@
 # Telegram Bot Operator Runbook
 
-This runbook describes how to manually smoke test the Telegram bot integration while preserving the Phase 3/4 safety boundary.
+This runbook describes how to manually smoke test the Telegram bot integration while preserving the Phase 3+ safety boundary.
 
 ## Operating principle
 
@@ -11,6 +11,14 @@ export RALPH_TELEGRAM_RUN_ALL_ENABLED=true
 ```
 
 Never set this variable globally in a shell profile, CI environment, shared terminal session, or repository file.
+
+For real explicit-gate `/run-all` smoke, prefer the hidden-prompt runner:
+
+```bash
+npm run telegram:real-run-all-smoke
+```
+
+The hidden-prompt runner avoids shell history-visible bot token exports, creates a fresh smoke approval and plan, prints the one-line Telegram command to send, polls only for the matching approval id, and cleans up shell environment on exit.
 
 ## Preconditions
 
@@ -40,7 +48,7 @@ nothing to commit, working tree clean
 
 ## Environment setup
 
-Set Telegram transport variables only in the active shell session:
+For read-only transport smoke, set Telegram transport variables only in the active shell session:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="<private bot token>"
@@ -55,6 +63,8 @@ npm run telegram:check-env
 ```
 
 The bot token should be redacted in output.
+
+For explicit-gate `/run-all` smoke, use `npm run telegram:real-run-all-smoke` instead of pasting token-bearing export commands into shell history or chat.
 
 ## Stage 1: read-only transport smoke
 
@@ -159,23 +169,29 @@ Abort if any shell completion event appears.
 
 Only enter this stage after Stages 1-3 pass.
 
-Enable run-all for this shell session only:
+Preferred command:
 
 ```bash
-export RALPH_TELEGRAM_RUN_ALL_ENABLED=true
+npm run telegram:real-run-all-smoke
 ```
 
-Re-check environment:
-
-```bash
-npm run telegram:check-env
-```
-
-Send:
+The runner will:
 
 ```text
-/run-all <approval_id> .ralph/tmp/<approved-plan>.json
+prompt for Telegram bot token without echo
+prompt for allowed user/chat ids
+run no-secret preflight
+create a fresh approved smoke plan under .ralph/tmp/
+print command_to_send
+wait for operator confirmation after Telegram send
+set RALPH_TELEGRAM_RUN_ALL_ENABLED=true for the smoke only
+poll Telegram updates matched to the fresh approval id
+run scripts/gates/run-all.sh through the Telegram runtime path
+unset Telegram and run-all env vars on exit
+restore .ralph/approval-log.jsonl on exit
 ```
+
+Send the displayed `command_to_send` exactly as one line in the authorized Telegram chat. Do not send from the terminal.
 
 Expected success response:
 
@@ -206,6 +222,30 @@ Inspect logs:
 ```bash
 npm run telegram:inspect-logs
 ```
+
+## Phase 7 recorded pass
+
+The explicit-gate real `/run-all` smoke passed with:
+
+```text
+executor=shell
+command=scripts/gates/run-all.sh
+exit_code=0
+run_all_enabled=true
+wired_to_runtime=true
+execution_connected=true
+commands_executed=["scripts/gates/run-all.sh"]
+files_modified=[]
+working tree clean after cleanup=yes
+```
+
+See:
+
+```text
+docs/telegram-phase7-run-all-smoke-report.md
+```
+
+This pass does not authorize new Telegram execution commands, production deploys, database migrations, OpenCode runtime execution, CI Telegram Bot API calls, or persistent secrets.
 
 ## Immediate abort criteria
 
@@ -269,6 +309,12 @@ unset TELEGRAM_ALLOWED_USER_IDS
 unset TELEGRAM_ALLOWED_CHAT_IDS
 ```
 
+Restore transient approval-log smoke changes if present:
+
+```bash
+git restore .ralph/approval-log.jsonl 2>/dev/null || true
+```
+
 Confirm clean code state:
 
 ```bash
@@ -291,6 +337,7 @@ Do not:
 - expand Telegram command allowlist without new tests
 - bypass approval/hash/diff preflight
 - run smoke from an untrusted chat
+- paste bot token export commands into chat or shared logs
 
 ## Escalation notes
 
