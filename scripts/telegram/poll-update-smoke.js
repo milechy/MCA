@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+const https = require('node:https');
+
 const { handleUpdate } = require('../../src/telegram/runtime');
 const { status } = require('./check-env');
 const { preflightNoSecrets } = require('./preflight-no-secrets');
@@ -40,17 +42,71 @@ function isAllowedCommand(commandText, allowedCommands = DEFAULT_ALLOWED_COMMAND
   return allowedCommands.includes(commandType(commandText));
 }
 
+function safeError(error) {
+  return {
+    name: error?.name || 'Error',
+    message: oneLinePreview(error?.message || String(error), 180),
+    code: error?.code || error?.cause?.code || null
+  };
+}
+
+function httpsJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, { timeout: 15000 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        try {
+          resolve({ status: response.statusCode, payload: JSON.parse(body) });
+        } catch (error) {
+          reject(new Error(`telegram_get_updates_invalid_json:${response.statusCode}`));
+        }
+      });
+    });
+
+    request.on('timeout', () => {
+      request.destroy(new Error('telegram_get_updates_timeout'));
+    });
+    request.on('error', reject);
+  });
+}
+
+async function fetchJson(url) {
+  if (typeof fetch === 'function') {
+    try {
+      const response = await fetch(url);
+      const payload = await response.json();
+      return { status: response.status, payload, transport: 'fetch' };
+    } catch (error) {
+      const fallback = await httpsJson(url);
+      return { ...fallback, transport: 'https', fallback_from: safeError(error) };
+    }
+  }
+
+  const fallback = await httpsJson(url);
+  return { ...fallback, transport: 'https' };
+}
+
 async function fetchUpdates({ env = process.env, offset = null, limit = 10, timeout = 0 } = {}) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const params = new URLSearchParams({ limit: String(limit), timeout: String(timeout) });
   if (offset !== null && offset !== undefined) params.set('offset', String(offset));
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/getUpdates?${params.toString()}`);
-  const payload = await response.json();
-  if (!response.ok || payload.ok !== true) {
-    throw new Error(`telegram_get_updates_failed:${response.status}`);
+  const url = `https://api.telegram.org/bot${token}/getUpdates?${params.toString()}`;
+  const { status: httpStatus, payload, transport, fallback_from: fallbackFrom } = await fetchJson(url);
+  if (httpStatus < 200 || httpStatus >= 300 || payload.ok !== true) {
+    const error = new Error(`telegram_get_updates_failed:${httpStatus}`);
+    error.telegram = {
+      transport,
+      fallback_from: fallbackFrom || null,
+      description: oneLinePreview(payload.description || '', 180)
+    };
+    throw error;
   }
-  return payload.result || [];
+  return { updates: payload.result || [], transport, fallback_from: fallbackFrom || null };
 }
 
 function selectLatestAllowedUpdate(updates, { allowedUserIds, allowedChatIds, allowedCommands = DEFAULT_ALLOWED_COMMANDS } = {}) {
@@ -108,8 +164,22 @@ async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env
 
   const allowedUserIds = parseList(env.TELEGRAM_ALLOWED_USER_IDS);
   const allowedChatIds = parseList(env.TELEGRAM_ALLOWED_CHAT_IDS);
-  const updates = await fetchUpdates({ env, offset, limit, timeout });
-  const update = selectLatestAllowedUpdate(updates, { allowedUserIds, allowedChatIds });
+  let fetched;
+  try {
+    fetched = await fetchUpdates({ env, offset, limit, timeout });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'telegram_get_updates_failed',
+      token_redacted: redactToken(env.TELEGRAM_BOT_TOKEN || ''),
+      run_all_enabled: env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true',
+      error: safeError(error),
+      telegram: error.telegram || null,
+      results: []
+    };
+  }
+
+  const update = selectLatestAllowedUpdate(fetched.updates, { allowedUserIds, allowedChatIds });
 
   if (!update) {
     return {
@@ -117,7 +187,9 @@ async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env
       reason: 'no_allowed_update_found',
       token_redacted: redactToken(env.TELEGRAM_BOT_TOKEN || ''),
       run_all_enabled: env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true',
-      updates_seen: updates.length,
+      update_transport: fetched.transport,
+      fetch_fallback_from: fetched.fallback_from || null,
+      updates_seen: fetched.updates.length,
       results: []
     };
   }
@@ -143,6 +215,8 @@ async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env
     reason: response.reason || null,
     token_redacted: redactToken(env.TELEGRAM_BOT_TOKEN || ''),
     run_all_enabled: env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true',
+    update_transport: fetched.transport,
+    fetch_fallback_from: fetched.fallback_from || null,
     update: safeUpdateSummary(update),
     result: {
       ok: response.ok,
@@ -172,7 +246,7 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(error && error.stack ? error.stack : String(error));
+    console.log(JSON.stringify({ ok: false, reason: 'poll_update_smoke_unhandled_error', error: safeError(error) }, null, 2));
     process.exitCode = 1;
   });
 }
@@ -183,9 +257,12 @@ module.exports = {
   parseList,
   redactToken,
   oneLinePreview,
+  safeError,
   commandFromUpdate,
   commandType,
   isAllowedCommand,
+  fetchJson,
+  fetchUpdates,
   selectLatestAllowedUpdate,
   safeUpdateSummary,
   runPolledUpdateSmoke
