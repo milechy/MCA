@@ -7,6 +7,7 @@ const { executeNoopFromTelegram, runAllFromTelegram } = require('./execution-ada
 const { executionPolicyStatus } = require('./policy-reader');
 const { makeOpenCodeDryRunPlan, summarizeOpenCodeDryRunPlan } = require('./opencode-dry-run');
 const { makeOpenCodeSandboxPlan, summarizeOpenCodeSandboxPlan } = require('./opencode-sandbox-plan');
+const { opencodeSandboxRunnerPreflight } = require('./opencode-sandbox-preflight');
 const {
   RUN_ALL_FAILURE_REASON_TAXONOMY,
   normalizeRunAllReason
@@ -79,6 +80,11 @@ function openCodeSandboxPlanResponseText(plan) {
   return `OpenCode sandbox plan ready. OpenCode execution remains disabled.${jsonBlock(summary)}`;
 }
 
+function openCodeSandboxPreflightResponseText(result) {
+  if (!result.ok) return `OpenCode sandbox runner preflight blocked: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode sandbox runner preflight passed. Execution still not started.${jsonBlock(result)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -118,6 +124,26 @@ function handleTelegramCommand(parsed, context = {}) {
       wired_to_runtime: false,
       execution_connected: false,
       opencode_execution_enabled: false
+    });
+  }
+
+  if (parsed.type === 'opencode_sandbox_preflight') {
+    const [approvalId, sandboxRoot, ...requestedPaths] = parsed.args;
+    const result = opencodeSandboxRunnerPreflight({
+      rootDir,
+      approval_id: approvalId,
+      sandbox_root: sandboxRoot,
+      requested_paths: requestedPaths,
+      pre_secret_scan_ok: context.pre_secret_scan_ok === true,
+      env: context.env || process.env,
+      now: context.now || new Date()
+    });
+    return textResponse(openCodeSandboxPreflightResponseText(result), {
+      result,
+      summary: result,
+      wired_to_runtime: false,
+      execution_connected: false,
+      opencode_execution_started: false
     });
   }
 
@@ -192,4 +218,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText };
