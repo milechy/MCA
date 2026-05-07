@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { sendMessage, handleUpdate } = require('../../src/telegram/runtime');
+const { sendMessage, handleUpdate, isTelegramParseEntitiesError } = require('../../src/telegram/runtime');
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
 const { EMPTY_DIFF_HASH, TELEGRAM_RUN_ALL_ENV } = require('../../src/telegram/execution-adapter');
@@ -137,6 +137,55 @@ function expectNoShellExecutionLog(rootDir) {
 test('sendMessage does not call Telegram API in dry-run mode', async () => {
   const result = await sendMessage({ dry_run: true }, 10, 'pong');
   expect(result).toEqual({ dry_run: true, chat_id: 10, text: 'pong' });
+});
+
+test('sendMessage retries without Markdown on Telegram parse entity errors', async () => {
+  const calls = [];
+  const parseError = new Error('Telegram API sendMessage failed: {"ok":false,"error_code":400,"description":"Bad Request: can\'t parse entities: Can\'t find end of the entity starting at byte offset 930"}');
+  const result = await sendMessage({
+    dry_run: false,
+    bot_token: 'token',
+    telegram_api_request: async (_token, method, payload) => {
+      calls.push({ method, payload });
+      if (calls.length === 1) throw parseError;
+      return { message_id: 1 };
+    }
+  }, 10, 'Run-all failed: approval_expired\n```json\n{"ok":false}\n```');
+
+  expect(isTelegramParseEntitiesError(parseError)).toBe(true);
+  expect(result).toEqual({ message_id: 1, fallback_from_parse_mode: 'Markdown' });
+  expect(calls).toEqual([
+    {
+      method: 'sendMessage',
+      payload: {
+        chat_id: 10,
+        text: 'Run-all failed: approval_expired\n```json\n{"ok":false}\n```',
+        parse_mode: 'Markdown'
+      }
+    },
+    {
+      method: 'sendMessage',
+      payload: {
+        chat_id: 10,
+        text: 'Run-all failed: approval_expired\n```json\n{"ok":false}\n```'
+      }
+    }
+  ]);
+});
+
+test('sendMessage does not retry non-parse Telegram errors', async () => {
+  const error = new Error('Telegram API sendMessage failed: {"ok":false,"error_code":403,"description":"Forbidden"}');
+  let calls = 0;
+  await expect(sendMessage({
+    dry_run: false,
+    bot_token: 'token',
+    telegram_api_request: async () => {
+      calls += 1;
+      throw error;
+    }
+  }, 10, 'pong')).rejects.toThrow('Forbidden');
+  expect(isTelegramParseEntitiesError(error)).toBe(false);
+  expect(calls).toBe(1);
 });
 
 test('handleUpdate processes authorized command and returns response text', async () => {
