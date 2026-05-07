@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { requestApproval, approveRecordOnly } = require('../../src/ralph/approval-manager');
+const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { parseTelegramCommand } = require('../../src/telegram/command-parser');
 const { handleTelegramCommand } = require('../../src/telegram/handlers');
 const { OPENCODE_SANDBOX_ENV } = require('../../src/telegram/opencode-sandbox-preflight');
@@ -20,7 +20,6 @@ function makeGitRepo() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-run-'));
   execFileSync('git', ['init', '-b', 'feature/opencode-run'], { cwd: rootDir, stdio: 'ignore' });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-pending'), { recursive: true });
-  fs.mkdirSync(path.join(rootDir, '.ralph', 'approval-log'), { recursive: true });
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, 'README.md'), '# test\n');
   gitCommit(rootDir, 'init');
@@ -34,7 +33,7 @@ function makeApprovedSandboxPreflight(rootDir, approvalId = 'APR-OPENCODE-RUN-1'
     sandbox_root: `.ralph/tmp/opencode-sandbox/${approvalId}`,
     requested_paths: ['tests/opencode-generated.spec.js']
   };
-  requestApproval(plan, { score: 0, category: 'low', label: 'RISK_0_LOW', requires_approval: true }, {
+  createApproval(plan, { score: 0, category: 'low', label: 'RISK_0_LOW', requires_approval: true }, {
     rootDir,
     approval_id: approvalId,
     approval_type: 'plan',
@@ -42,7 +41,7 @@ function makeApprovedSandboxPreflight(rootDir, approvalId = 'APR-OPENCODE-RUN-1'
     allowed_user_ids: [3],
     expires_at: '2026-05-07T01:00:00.000Z'
   });
-  approveRecordOnly(approvalId, 3, { rootDir });
+  approveApprovalRecordOnly(approvalId, 3, { rootDir });
   gitCommit(rootDir, `approval ${approvalId}`);
 
   return opencodeSandboxRunnerPreflight({
