@@ -254,7 +254,7 @@ test('/run-all performs preflight only and does not execute shell when env gate 
   const plan = sampleRunAllPlan();
   const planPath = writeTmpPlan(rootDir, 'run-all-plan.json', plan);
   const approval = createApprovedPlan(rootDir, plan);
-  const result = handleTelegramCommand(parseTelegramCommand(`/run-all ${approval.approval_id} ${planPath}`), { rootDir, user_id: 3, roles: roles() });
+  const result = handleTelegramCommand(parseTelegramCommand(`/run-all ${approval.approval_id} ${planPath}`), { rootDir, user_id: 3, roles: roles(), env: {} });
   expect(result.ok).toBe(true);
   expect(result.wired_to_runtime).toBe(false);
   expect(result.result.ok).toBe(true);
