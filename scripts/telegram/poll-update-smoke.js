@@ -42,6 +42,11 @@ function isAllowedCommand(commandText, allowedCommands = DEFAULT_ALLOWED_COMMAND
   return allowedCommands.includes(commandType(commandText));
 }
 
+function matchesCommandSubstring(commandText, matchCommandSubstring = null) {
+  if (!matchCommandSubstring) return true;
+  return String(commandText || '').includes(matchCommandSubstring);
+}
+
 function safeError(error) {
   return {
     name: error?.name || 'Error',
@@ -109,7 +114,12 @@ async function fetchUpdates({ env = process.env, offset = null, limit = 10, time
   return { updates: payload.result || [], transport, fallback_from: fallbackFrom || null };
 }
 
-function selectLatestAllowedUpdate(updates, { allowedUserIds, allowedChatIds, allowedCommands = DEFAULT_ALLOWED_COMMANDS } = {}) {
+function selectLatestAllowedUpdate(updates, {
+  allowedUserIds,
+  allowedChatIds,
+  allowedCommands = DEFAULT_ALLOWED_COMMANDS,
+  matchCommandSubstring = null
+} = {}) {
   const sorted = [...updates].sort((a, b) => (b.update_id || 0) - (a.update_id || 0));
   for (const update of sorted) {
     const message = update.message || update.edited_message;
@@ -121,6 +131,7 @@ function selectLatestAllowedUpdate(updates, { allowedUserIds, allowedChatIds, al
     if (!allowedUserIds.includes(userId)) continue;
     if (!allowedChatIds.includes(chatId)) continue;
     if (!isAllowedCommand(text, allowedCommands)) continue;
+    if (!matchesCommandSubstring(text, matchCommandSubstring)) continue;
 
     return update;
   }
@@ -137,7 +148,14 @@ function safeUpdateSummary(update) {
   };
 }
 
-async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env, offset = null, limit = 10, timeout = 0 } = {}) {
+async function runPolledUpdateSmoke({
+  rootDir = process.cwd(),
+  env = process.env,
+  offset = null,
+  limit = 10,
+  timeout = 0,
+  matchCommandSubstring = null
+} = {}) {
   const envStatus = status(env);
   const secretPreflight = preflightNoSecrets({ rootDir, includeGitDiff: true });
 
@@ -179,7 +197,7 @@ async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env
     };
   }
 
-  const update = selectLatestAllowedUpdate(fetched.updates, { allowedUserIds, allowedChatIds });
+  const update = selectLatestAllowedUpdate(fetched.updates, { allowedUserIds, allowedChatIds, matchCommandSubstring });
 
   if (!update) {
     return {
@@ -190,6 +208,7 @@ async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env
       update_transport: fetched.transport,
       fetch_fallback_from: fetched.fallback_from || null,
       updates_seen: fetched.updates.length,
+      match_command_substring: matchCommandSubstring || null,
       results: []
     };
   }
@@ -217,6 +236,7 @@ async function runPolledUpdateSmoke({ rootDir = process.cwd(), env = process.env
     run_all_enabled: env.RALPH_TELEGRAM_RUN_ALL_ENABLED === 'true',
     update_transport: fetched.transport,
     fetch_fallback_from: fetched.fallback_from || null,
+    match_command_substring: matchCommandSubstring || null,
     update: safeUpdateSummary(update),
     result: {
       ok: response.ok,
@@ -231,13 +251,15 @@ async function main(argv = process.argv.slice(2)) {
   const offsetArg = argv.find((arg) => arg.startsWith('--offset='));
   const limitArg = argv.find((arg) => arg.startsWith('--limit='));
   const timeoutArg = argv.find((arg) => arg.startsWith('--timeout='));
+  const matchArg = argv.find((arg) => arg.startsWith('--match-command-substring='));
 
   const result = await runPolledUpdateSmoke({
     rootDir: process.cwd(),
     env: process.env,
     offset: offsetArg ? Number(offsetArg.split('=')[1]) : null,
     limit: limitArg ? Number(limitArg.split('=')[1]) : 10,
-    timeout: timeoutArg ? Number(timeoutArg.split('=')[1]) : 0
+    timeout: timeoutArg ? Number(timeoutArg.split('=')[1]) : 0,
+    matchCommandSubstring: matchArg ? matchArg.slice('--match-command-substring='.length) : null
   });
 
   console.log(JSON.stringify(result, null, 2));
@@ -261,6 +283,7 @@ module.exports = {
   commandFromUpdate,
   commandType,
   isAllowedCommand,
+  matchesCommandSubstring,
   fetchJson,
   fetchUpdates,
   selectLatestAllowedUpdate,
