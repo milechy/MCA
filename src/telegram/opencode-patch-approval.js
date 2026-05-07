@@ -6,7 +6,7 @@ const { createApproval } = require('../ralph/approval-manager');
 const { assertSandboxLocalPath } = require('./opencode-sandbox-runner');
 
 function defaultPatchApprovalId(date = new Date()) {
-  const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '').slice(0, 14);
+  const stamp = date.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   return `APR-OPENCODE-PATCH-${stamp}`;
 }
 
