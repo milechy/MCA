@@ -6,6 +6,7 @@ const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('.
 const { executeNoopFromTelegram, runAllFromTelegram } = require('./execution-adapter');
 const { executionPolicyStatus } = require('./policy-reader');
 const { makeOpenCodeDryRunPlan, summarizeOpenCodeDryRunPlan } = require('./opencode-dry-run');
+const { makeOpenCodeSandboxPlan, summarizeOpenCodeSandboxPlan } = require('./opencode-sandbox-plan');
 const {
   RUN_ALL_FAILURE_REASON_TAXONOMY,
   normalizeRunAllReason
@@ -72,6 +73,12 @@ function openCodePlanResponseText(plan) {
   return `OpenCode dry-run plan ready. Execution remains disconnected.${jsonBlock(summary)}`;
 }
 
+function openCodeSandboxPlanResponseText(plan) {
+  const summary = summarizeOpenCodeSandboxPlan(plan);
+  if (!summary.ok) return `OpenCode sandbox plan blocked: ${summary.reason}${jsonBlock(summary)}`;
+  return `OpenCode sandbox plan ready. OpenCode execution remains disabled.${jsonBlock(summary)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -98,6 +105,19 @@ function handleTelegramCommand(parsed, context = {}) {
       summary,
       wired_to_runtime: false,
       execution_connected: false
+    });
+  }
+
+  if (parsed.type === 'opencode_sandbox_plan') {
+    const [approvalId, ...intentParts] = parsed.args;
+    const plan = makeOpenCodeSandboxPlan({ approval_id: approvalId, intent: intentParts.join(' ') });
+    const summary = summarizeOpenCodeSandboxPlan(plan);
+    return textResponse(openCodeSandboxPlanResponseText(plan), {
+      result: plan,
+      summary,
+      wired_to_runtime: false,
+      execution_connected: false,
+      opencode_execution_enabled: false
     });
   }
 
@@ -172,4 +192,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText };
