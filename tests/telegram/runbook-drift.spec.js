@@ -10,6 +10,8 @@ const PHASE5_TEMPLATE = path.join(process.cwd(), 'docs', 'telegram-phase5-manual
 const PHASE5_GO_NO_GO = path.join(process.cwd(), 'docs', 'telegram-phase5-readonly-go-no-go.md');
 const PHASE5_CHECKLIST = path.join(process.cwd(), 'docs', 'telegram-phase5-completion-checklist.md');
 const PHASE6_REPORT = path.join(process.cwd(), 'docs', 'telegram-phase6-readonly-smoke-report-template.md');
+const PHASE7_REPORT = path.join(process.cwd(), 'docs', 'telegram-phase7-run-all-smoke-report.md');
+const PHASE8_ROLLOUT = path.join(process.cwd(), 'docs', 'telegram-phase8-controlled-operator-rollout.md');
 
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -23,6 +25,16 @@ test('operator runbook preserves default-off and explicit gate safety instructio
   expect(runbook).toContain('Never set this variable globally in a shell profile, CI environment, shared terminal session, or repository file.');
   expect(runbook).toContain('Only enter this stage after Stages 1-3 pass.');
   expect(runbook).toContain('Disable real run-all execution');
+});
+
+test('operator runbook preserves hidden-prompt explicit run-all smoke flow', () => {
+  const runbook = read(OPERATOR_RUNBOOK);
+
+  expect(runbook).toContain('npm run telegram:real-run-all-smoke');
+  expect(runbook).toContain('hidden-prompt runner avoids shell history-visible bot token exports');
+  expect(runbook).toContain('Send the displayed `command_to_send` exactly as one line in the authorized Telegram chat. Do not send from the terminal.');
+  expect(runbook).toContain('docs/telegram-phase7-run-all-smoke-report.md');
+  expect(runbook).toContain('This pass does not authorize new Telegram execution commands, production deploys, database migrations, OpenCode runtime execution, CI Telegram Bot API calls, or persistent secrets.');
 });
 
 test('operator runbook preserves abort criteria and log preservation steps', () => {
@@ -48,6 +60,7 @@ test('operator runbook preserves secret handling and no-go safety boundaries', (
   expect(runbook).toContain('set `RALPH_TELEGRAM_RUN_ALL_ENABLED=true` in GitHub Actions');
   expect(runbook).toContain('allow production deploys or migrations from Telegram');
   expect(runbook).toContain('bypass approval/hash/diff preflight');
+  expect(runbook).toContain('paste bot token export commands into chat or shared logs');
 });
 
 test('Phase 4 smoke plan preserves non-goals and CI deferred items', () => {
@@ -211,6 +224,36 @@ test('Phase 6 read-only smoke report template preserves cleanup and deferred bou
   expect(report).toContain('CI job that calls Telegram Bot API');
 });
 
+test('Phase 7 explicit-gate run-all smoke report preserves pass evidence and non-goals', () => {
+  const report = read(PHASE7_REPORT);
+
+  expect(report).toContain('npm run telegram:real-run-all-smoke');
+  expect(report).toContain('executor": "shell"');
+  expect(report).toContain('"command": "scripts/gates/run-all.sh"');
+  expect(report).toContain('"exit_code": 0');
+  expect(report).toContain('"files_modified": []');
+  expect(report).toContain('nothing to commit, working tree clean');
+  expect(report).toContain('No production deploy from Telegram');
+  expect(report).toContain('No database migration from Telegram');
+  expect(report).toContain('No OpenCode execution from Telegram');
+  expect(report).toContain('No CI Telegram Bot API execution');
+});
+
+test('Phase 8 controlled rollout preserves operator boundary and explicit non-goals', () => {
+  const rollout = read(PHASE8_ROLLOUT);
+
+  expect(rollout).toContain('scripts/gates/run-all.sh');
+  expect(rollout).toContain('npm run telegram:real-run-all-smoke');
+  expect(rollout).toContain('run_all_enabled true only during attended session');
+  expect(rollout).toContain('commands_executed contains no other command');
+  expect(rollout).toContain('files_modified remains [] for the Telegram smoke result');
+  expect(rollout).toContain('No production deploy from Telegram');
+  expect(rollout).toContain('No database migration from Telegram');
+  expect(rollout).toContain('No OpenCode execution from Telegram');
+  expect(rollout).toContain('No persistent RALPH_TELEGRAM_RUN_ALL_ENABLED=true');
+  expect(rollout).toContain('No unattended bot daemon rollout');
+});
+
 test('Telegram docs do not instruct CI or repository-persistent real run-all enablement', () => {
   const docs = [
     read(OPERATOR_RUNBOOK),
@@ -220,7 +263,9 @@ test('Telegram docs do not instruct CI or repository-persistent real run-all ena
     read(PHASE5_TEMPLATE),
     read(PHASE5_GO_NO_GO),
     read(PHASE5_CHECKLIST),
-    read(PHASE6_REPORT)
+    read(PHASE6_REPORT),
+    read(PHASE7_REPORT),
+    read(PHASE8_ROLLOUT)
   ].join('\n');
 
   expect(docs).not.toContain('secrets.RALPH_TELEGRAM_RUN_ALL_ENABLED');
