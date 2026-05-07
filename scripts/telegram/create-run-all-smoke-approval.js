@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const { createApproval, approveApprovalRecordOnly } = require('../../src/ralph/approval-manager');
 const { evaluateRisk } = require('../../src/ralph/risk-evaluator');
+const { APPROVAL_STATUSES } = require('../../src/ralph/types');
 const { EMPTY_DIFF_HASH } = require('../../src/telegram/execution-adapter');
 const { status } = require('./check-env');
 const { preflightNoSecrets } = require('./preflight-no-secrets');
@@ -74,7 +75,7 @@ function createRunAllSmokeApproval({ rootDir = process.cwd(), env = process.env,
   const approved = approveApprovalRecordOnly(approval.approval_id, allowedUserId, { rootDir, channel: 'telegram-smoke' });
 
   return {
-    ok: approved.status === 'APPROVED',
+    ok: approved.status === APPROVAL_STATUSES.APPROVED,
     approval_id: id,
     plan_path: planPath,
     expires_at: approved.expires_at,
