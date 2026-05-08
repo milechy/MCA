@@ -17,6 +17,7 @@ const { runOpenCodeAppliedPatchGates } = require('./opencode-gates');
 const { createOpenCodeCommitApproval } = require('./opencode-commit-approval');
 const { commitOpenCodeAppliedPatch } = require('./opencode-commit');
 const { createOpenCodePushApproval } = require('./opencode-push-approval');
+const { pushOpenCodeCommit } = require('./opencode-push');
 const {
   RUN_ALL_FAILURE_REASON_TAXONOMY,
   normalizeRunAllReason
@@ -133,6 +134,11 @@ function openCodePushApprovalResponseText(result) {
   return `OpenCode push approval requested. Push remains disabled until approval.${jsonBlock(result)}`;
 }
 
+function openCodePushResponseText(result) {
+  if (!result.ok) return `OpenCode push failed: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode push completed. Deploy remains disabled.${jsonBlock(result)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -208,6 +214,11 @@ function handleTelegramCommand(parsed, context = {}) {
     const result = createOpenCodePushApproval({ rootDir, commit_sha: commitSha, branch, remote, allowed_user_ids: userId ? [userId] : [], now: context.now || new Date() });
     return textResponse(openCodePushApprovalResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false, push_allowed: false });
   }
+  if (parsed.type === 'opencode_push') {
+    const [approvalId] = parsed.args;
+    const result = pushOpenCodeCommit({ rootDir, approval_id: approvalId, timeout_ms: context.timeout_ms, now: context.nowFn });
+    return textResponse(openCodePushResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: result.execution_connected === true, push_allowed: result.push_allowed === true });
+  }
   if (parsed.type === 'approvals') {
     const approvals = listApprovals({ rootDir, status: parsed.args[0] || null }).map(summarizeApproval);
     return textResponse(`Approvals:${jsonBlock(approvals)}`, { approvals, wired_to_runtime: false });
@@ -252,4 +263,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText, openCodeGatesResponseText, openCodeCommitApprovalResponseText, openCodeCommitResponseText, openCodePushApprovalResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText, openCodeGatesResponseText, openCodeCommitApprovalResponseText, openCodeCommitResponseText, openCodePushApprovalResponseText, openCodePushResponseText };
