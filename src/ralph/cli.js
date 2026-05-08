@@ -10,6 +10,7 @@ const { runExecutionHarness } = require('./execution-harness');
 const { dryRunShellCommand } = require('./shell-dry-run');
 const { runShellDryRunWithPreflight } = require('./shell-preflight-wrapper');
 const { runAllApprovedSmoke } = require('./run-all-smoke-helper');
+const { describeGateSequence, runGateSequence } = require('./gate-runner');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -31,6 +32,7 @@ Commands:
   node src/ralph/cli.js approve-record-only <approval_id> <user_id>
   node src/ralph/cli.js approval-dry-run <approve|deny|modify> <approval_id> <user_id>
   node src/ralph/cli.js execute-noop <approval_id> <plan.json> [--current-diff-hash sha256:...]
+  node src/ralph/cli.js gate-runner [--describe]
   node src/ralph/cli.js shell-dry-run <command>
   node src/ralph/cli.js shell-dry-run-approved <approval_id> <plan.json> <command> [--current-diff-hash sha256:...]
   node src/ralph/cli.js smoke-run-all-approved <approval_id> <plan.json> [--current-diff-hash sha256:...]
@@ -82,7 +84,39 @@ function handleModeCommand(args) {
   process.exitCode = 1;
 }
 
-function main(argv = process.argv.slice(2)) {
+function handleGateRunnerCommand(args, options = {}) {
+  if (args.includes('--describe')) {
+    const result = {
+      ok: true,
+      stage: 'ralph_gate_runner_manifest',
+      gates: describeGateSequence(),
+      execution_connected: false,
+      commands_executed: [],
+      files_modified: [],
+      repository_files_modified: [],
+      commit_created: false,
+      push_performed: false,
+      pr_created: false,
+      merge_performed: false,
+      deploy_performed: false,
+      migration_performed: false
+    };
+    console.log(JSON.stringify(result, null, 2));
+    return result;
+  }
+
+  const result = runGateSequence({
+    rootDir: options.rootDir || process.cwd(),
+    env: options.env || process.env,
+    spawn: options.spawn,
+    timeout_ms: options.timeout_ms
+  });
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.ok) process.exitCode = 1;
+  return result;
+}
+
+function main(argv = process.argv.slice(2), options = {}) {
   const [command, ...args] = argv;
 
   if (!command || command === '--help' || command === '-h') {
@@ -97,6 +131,11 @@ function main(argv = process.argv.slice(2)) {
 
   if (command === 'mode') {
     handleModeCommand(args);
+    return;
+  }
+
+  if (command === 'gate-runner') {
+    handleGateRunnerCommand(args, options);
     return;
   }
 
@@ -219,4 +258,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, optionValue };
+module.exports = { main, optionValue, handleGateRunnerCommand };
