@@ -66,6 +66,7 @@ test('preflight passes for approved record-only approval with matching hashes', 
 
   expect(result.ok).toBe(true);
   expect(result.execution_connected).toBe(false);
+  expect(result.production_policy.ok).toBe(true);
   expect(result.next_action).toBe('EXECUTION_ALLOWED_BY_PREFLIGHT_ONLY');
 });
 
@@ -117,7 +118,7 @@ test('preflight fails on diff hash mismatch', () => {
   expect(result.reason).toBe('pre_exec_diff_hash_mismatch');
 });
 
-test('preflight blocks production target in phase 2', () => {
+test('preflight blocks production target through production change policy', () => {
   const rootDir = makeTempRoot();
   const plan = samplePlan({ target_env: 'production' });
   const approval = createApprovedRecordOnly(rootDir, plan);
@@ -128,7 +129,9 @@ test('preflight blocks production target in phase 2', () => {
   });
 
   expect(result.ok).toBe(false);
-  expect(result.reason).toBe('production_execution_blocked_in_phase_2');
+  expect(result.reason).toBe('production_execution_requires_separate_apply_path');
+  expect(result.production_policy.plan_approval_required).toBe(true);
+  expect(result.production_policy.diff_approval_required).toBe(true);
 });
 
 test('preflight blocks risk 5 plan', () => {
@@ -148,4 +151,20 @@ test('preflight blocks risk 5 plan', () => {
 
   expect(result.ok).toBe(false);
   expect(result.reason).toBe('risk_5_execution_blocked');
+});
+
+test('preflight blocks post execution diff approval requirement before execution path continues', () => {
+  const rootDir = makeTempRoot();
+  const plan = samplePlan({ target_env: 'staging', planned_files: ['src/foo.js'], migration_plan: { files: [], sql: '' } });
+  const approval = createApprovedRecordOnly(rootDir, plan);
+
+  const result = verifyExecutionPreflight(approval.approval_id, plan, {
+    rootDir,
+    current_diff_hash: EMPTY_DIFF_HASH,
+    post_exec_diff_hash_changed: true
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('diff_approval_required_before_execution');
+  expect(result.production_policy.diff_approval_required).toBe(true);
 });
