@@ -58,7 +58,7 @@ test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider
   const spawn = (command, args, options) => {
     calls.push({ command, args, cwd: options.cwd });
     fs.writeFileSync(path.join(options.cwd, 'candidate.patch'), 'diff --git a/tests/x.js b/tests/x.js\n--- /dev/null\n+++ b/tests/x.js\n@@ -0,0 +1 @@\n+test\n', 'utf8');
-    return { status: 0, stdout: 'done token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456', stderr: '' };
+    return { status: 0, stdout: 'candidate patch written', stderr: '' };
   };
 
   const result = runExternalAgentCandidatePatch({
@@ -98,7 +98,7 @@ test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider
     repository_files_modified: [],
     next_action: 'preview_candidate_patch_before_apply'
   });
-  expect(result.stdout_preview).toContain('<redacted>');
+  expect(result.stdout_preview).toBe('candidate patch written');
   expect(calls).toHaveLength(1);
   expect(calls[0].command).toBe('nemoclaw');
   expect(calls[0].cwd).toBe(path.join(rootDir, '.ralph/tmp/gateway/APR-1'));
