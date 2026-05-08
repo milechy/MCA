@@ -36,7 +36,9 @@ function commandIsAllowed(command, args = []) {
   if (args.some((arg) => /[;&|`$<>]/.test(String(arg)) || String(arg).includes('..'))) return false;
 
   if (command === 'opencode') {
-    return args.length >= 1 && args[0] === 'run' && args.includes('--diff-only') && args.includes('--output') && args.includes('candidate.patch');
+    if (!(args.length >= 1 && args[0] === 'run' && args.includes('--diff-only'))) return false;
+    if (args.includes('--output')) return args.includes('candidate.patch');
+    return true;
   }
 
   if (command === process.execPath || command === 'node') {
