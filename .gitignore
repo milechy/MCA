@@ -34,6 +34,7 @@ node_modules/
 # Ralph runtime state
 .ralph/approval-pending/*
 .ralph/tmp/*
+.ralph/opencode-jobs/*
 .ralph/approval-log.jsonl
 .ralph/roles.json
 .ralph/telegram-offset.json
