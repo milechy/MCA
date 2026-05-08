@@ -17,6 +17,7 @@
     "telegram:dry-transport-smoke": "node scripts/telegram/dry-transport-smoke.js",
     "telegram:create-run-all-smoke-approval": "node scripts/telegram/create-run-all-smoke-approval.js",
     "telegram:real-run-all-smoke": "bash scripts/telegram/real-run-all-smoke.sh",
+    "telegram:real-opencode-smoke": "node scripts/telegram/real-opencode-operational-smoke.js",
     "telegram:real-transport-guard": "node scripts/telegram/real-transport-guard.js",
     "telegram:real-readonly-smoke": "node scripts/telegram/real-readonly-smoke.js",
     "telegram:poll-update-smoke": "node scripts/telegram/poll-update-smoke.js",
