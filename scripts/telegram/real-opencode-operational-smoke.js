@@ -21,6 +21,12 @@ function gitStatusShort(rootDir) {
   }
 }
 
+function gitRestoreTrackedRuntimeFiles(rootDir) {
+  try {
+    execFileSync('git', ['restore', '.ralph/approval-log.jsonl'], { cwd: rootDir, stdio: 'ignore' });
+  } catch {}
+}
+
 function runPreSecretScan(rootDir) {
   try {
     execFileSync(process.execPath, ['scripts/telegram/preflight-no-secrets.js'], { cwd: rootDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -31,6 +37,7 @@ function runPreSecretScan(rootDir) {
 }
 
 function blocked(reason, extra = {}) {
+  if (extra.rootDir) gitRestoreTrackedRuntimeFiles(extra.rootDir);
   return {
     ok: false,
     stage: 'real_opencode_operational_smoke',
@@ -44,7 +51,7 @@ function blocked(reason, extra = {}) {
     job: null,
     pre_secret_scan_ok: extra.pre_secret_scan_ok === true,
     working_tree_clean_before: extra.working_tree_clean_before === true,
-    working_tree_clean_after: extra.working_tree_clean_after === true,
+    working_tree_clean_after: gitStatusShort(extra.rootDir || process.cwd()) === '',
     execution_connected: false,
     opencode_execution_started: false,
     real_opencode_process_started: false,
@@ -74,14 +81,15 @@ function runRealOpenCodeOperationalSmoke({
   const approvalId = timestampId('APR-OPENCODE-REAL-SMOKE', date);
   const jobId = defaultJobId(date);
   const plan = makeOpenCodeSandboxPlan({ approval_id: approvalId, intent });
-  if (!plan.ok) return blocked(plan.reason || 'sandbox_plan_failed', { approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root });
+  if (!plan.ok) return blocked(plan.reason || 'sandbox_plan_failed', { rootDir, approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root });
 
+  gitRestoreTrackedRuntimeFiles(rootDir);
   const statusBefore = gitStatusShort(rootDir);
-  if (statusBefore === null) return blocked('git_status_failed', { approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root });
-  if (statusBefore !== '') return blocked('working_tree_dirty_before_smoke', { approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root, working_tree_clean_before: false });
+  if (statusBefore === null) return blocked('git_status_failed', { rootDir, approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root });
+  if (statusBefore !== '') return blocked('working_tree_dirty_before_smoke', { rootDir, approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root, working_tree_clean_before: false });
 
   const secretScanOk = pre_secret_scan_ok === undefined ? runPreSecretScan(rootDir) : pre_secret_scan_ok === true;
-  if (!secretScanOk) return blocked('pre_secret_scan_failed', { approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root, pre_secret_scan_ok: false, working_tree_clean_before: true });
+  if (!secretScanOk) return blocked('pre_secret_scan_failed', { rootDir, approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root, pre_secret_scan_ok: false, working_tree_clean_before: true });
 
   createApproval(plan, plan.risk, {
     rootDir,
@@ -91,6 +99,7 @@ function runRealOpenCodeOperationalSmoke({
     expires_at: new Date(date.getTime() + 30 * 60 * 1000).toISOString()
   });
   approveApprovalRecordOnly(approvalId, 'opencode-real-smoke', { rootDir, channel: 'local-smoke' });
+  gitRestoreTrackedRuntimeFiles(rootDir);
 
   const smokeEnv = {
     ...env,
@@ -108,7 +117,7 @@ function runRealOpenCodeOperationalSmoke({
     env: smokeEnv,
     now: date
   });
-  if (!preflight.ok) return blocked(preflight.reason || 'sandbox_preflight_failed', { approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root, pre_secret_scan_ok: true, working_tree_clean_before: true });
+  if (!preflight.ok) return blocked(preflight.reason || 'sandbox_preflight_failed', { rootDir, approval_id: approvalId, job_id: jobId, sandbox_root: plan.sandbox_root, pre_secret_scan_ok: true, working_tree_clean_before: true });
 
   const run = runOpenCodeCandidatePatch(preflight, {
     rootDir,
@@ -119,8 +128,8 @@ function runRealOpenCodeOperationalSmoke({
     timeout_ms,
     now
   });
-  const statusAfter = gitStatusShort(rootDir);
-  const cleanAfter = statusAfter === '';
+  gitRestoreTrackedRuntimeFiles(rootDir);
+  const statusAfterRun = gitStatusShort(rootDir);
   const jobWrite = writeJob(rootDir, {
     job_id: jobId,
     status: run.ok ? 'completed' : 'failed',
@@ -147,7 +156,10 @@ function runRealOpenCodeOperationalSmoke({
     migration_performed: false,
     next_action: run.next_action
   });
+  gitRestoreTrackedRuntimeFiles(rootDir);
 
+  const statusAfter = gitStatusShort(rootDir);
+  const cleanAfter = statusAfter === '';
   const ok = run.ok === true && cleanAfter;
   return {
     ok,
@@ -165,6 +177,7 @@ function runRealOpenCodeOperationalSmoke({
     pre_secret_scan_ok: true,
     working_tree_clean_before: true,
     working_tree_clean_after: cleanAfter,
+    status_after_run_before_job_write: statusAfterRun,
     execution_connected: run.execution_connected === true,
     opencode_execution_started: run.opencode_execution_started === true,
     real_opencode_process_started: run.real_opencode_process_started === true,
@@ -192,4 +205,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { runRealOpenCodeOperationalSmoke, timestampId, gitStatusShort };
+module.exports = { runRealOpenCodeOperationalSmoke, timestampId, gitStatusShort, gitRestoreTrackedRuntimeFiles };
