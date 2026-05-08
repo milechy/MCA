@@ -4,6 +4,7 @@ const { spawnSync } = require('node:child_process');
 const { OPENCODE_SANDBOX_ENV } = require('./opencode-sandbox-preflight');
 const { assertSandboxLocalPath } = require('./opencode-sandbox-runner');
 const { previewOpenCodeCandidatePatch } = require('./opencode-patch-preview');
+const { buildOpenCodeRunInvocation } = require('./opencode-real-adapter');
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_TASK_CHARS = 1000;
@@ -35,7 +36,7 @@ function commandIsAllowed(command, args = []) {
   if (args.some((arg) => /[;&|`$<>]/.test(String(arg)) || String(arg).includes('..'))) return false;
 
   if (command === 'opencode') {
-    return args.length >= 1 && args[0] === 'run' && args.includes('--diff-only');
+    return args.length >= 1 && args[0] === 'run' && args.includes('--diff-only') && args.includes('--output') && args.includes('candidate.patch');
   }
 
   if (command === process.execPath || command === 'node') {
@@ -87,14 +88,17 @@ function makeBlockedResult(preflight, reason, extra = {}) {
   };
 }
 
-function runOpenCodeCandidatePatch(preflight, { rootDir = process.cwd(), task, command = 'opencode', args, env = process.env, timeout_ms = DEFAULT_TIMEOUT_MS, now = () => new Date() } = {}) {
+function runOpenCodeCandidatePatch(preflight, { rootDir = process.cwd(), task, command, args, env = process.env, timeout_ms = DEFAULT_TIMEOUT_MS, now = () => new Date() } = {}) {
   const taskPreview = normalizeTask(task);
   if (!taskPreview) return makeBlockedResult(preflight, 'task_required', { task_preview: taskPreview, timeout_ms });
   if (!preflight || preflight.ok !== true || preflight.start_allowed !== true) return makeBlockedResult(preflight, preflight?.reason || 'preflight_required', { task_preview: taskPreview, timeout_ms });
   if (env[OPENCODE_SANDBOX_ENV] !== 'true') return makeBlockedResult(preflight, 'opencode_sandbox_env_not_enabled', { task_preview: taskPreview, timeout_ms });
 
-  const runArgs = args || ['run', '--diff-only', '--task', taskPreview];
-  if (!commandIsAllowed(command, runArgs)) return makeBlockedResult(preflight, 'opencode_command_not_allowed', { task_preview: taskPreview, timeout_ms });
+  const invocation = command && args ? { ok: true, command, args } : buildOpenCodeRunInvocation({ task: taskPreview, env });
+  if (!invocation.ok) return makeBlockedResult(preflight, invocation.reason, { task_preview: taskPreview, timeout_ms });
+  const runCommand = invocation.command;
+  const runArgs = invocation.args;
+  if (!commandIsAllowed(runCommand, runArgs)) return makeBlockedResult(preflight, 'opencode_command_not_allowed', { task_preview: taskPreview, timeout_ms });
 
   const sandboxCwd = path.resolve(rootDir, preflight.sandbox_root);
   if (!assertSandboxLocalPath(rootDir, preflight.sandbox_root, sandboxCwd)) return makeBlockedResult(preflight, 'sandbox_cwd_not_allowed', { task_preview: taskPreview, timeout_ms });
@@ -104,7 +108,7 @@ function runOpenCodeCandidatePatch(preflight, { rootDir = process.cwd(), task, c
   try { fs.rmSync(patchPath, { force: true }); } catch {}
 
   const startedAt = now().toISOString();
-  const result = spawnSync(command, runArgs, {
+  const result = spawnSync(runCommand, runArgs, {
     cwd: sandboxCwd,
     env: { PATH: env.PATH, HOME: env.HOME, [OPENCODE_SANDBOX_ENV]: env[OPENCODE_SANDBOX_ENV] },
     encoding: 'utf8',
@@ -125,21 +129,21 @@ function runOpenCodeCandidatePatch(preflight, { rootDir = process.cwd(), task, c
     sandbox_root: preflight.sandbox_root,
     task_preview: taskPreview,
     cwd: preflight.sandbox_root,
-    command_preview: commandPreview(command, runArgs),
+    command_preview: commandPreview(runCommand, runArgs),
     exit_code: exitCode,
     started_at: startedAt,
     finished_at: finishedAt,
     duration_ms: durationMs(startedAt, finishedAt),
     timeout_ms,
     stdout_preview: oneLine(result.stdout || ''),
-    stderr_preview: oneLine(result.stderr || ''),
+    stderr_preview: oneLine(result.stderr || result.error?.message || ''),
     candidate_patch_path: path.relative(rootDir, patchPath).replace(/\\/g, '/'),
     patch_preview: preview,
     execution_connected: true,
     opencode_execution_started: true,
     real_opencode_process_started: true,
     apply_allowed: false,
-    commands_executed: [commandPreview(command, runArgs)],
+    commands_executed: [commandPreview(runCommand, runArgs)],
     files_modified: preview.ok ? [path.relative(rootDir, patchPath).replace(/\\/g, '/')] : [],
     repository_files_modified: [],
     commit_created: false,
