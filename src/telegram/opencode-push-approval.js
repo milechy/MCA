@@ -86,7 +86,7 @@ function createOpenCodePushApproval({ rootDir = process.cwd(), commit_sha, branc
   const approval = createApproval(plan, { score: 0, category: 'low', label: 'RISK_0_LOW', requires_approval: true }, {
     rootDir,
     approval_id: defaultPushApprovalId(now),
-    approval_type: APPROVAL_TYPES.COMMAND,
+    approval_type: APPROVAL_TYPES.PLAN,
     requested_action: 'opencode_commit_push',
     allowed_user_ids,
     expires_at
