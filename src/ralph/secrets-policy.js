@@ -1,6 +1,6 @@
 const SECRET_REFERENCE_PATTERN = /^(env|vault|supabase|github|telegram):[A-Z0-9_:-]{3,120}$/;
 const SECRET_VALUE_PATTERNS = Object.freeze([
-  /\b\d{8,}:[A-Za-z0-9_-]{20,}\b/,
+  /\d{8,}:[A-Za-z0-9_-]{20,}/,
   /ghp_[A-Za-z0-9_]{20,}/,
   /sk-[A-Za-z0-9_-]{20,}/,
   /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
@@ -46,13 +46,13 @@ function normalizeSecretRequest(request = {}) {
 
 function decideSecretInjection(request = {}) {
   const normalized = normalizeSecretRequest(request);
-  const invalidReference = normalized.references.find((ref) => !isSecretReference(ref));
-  if (invalidReference) {
-    return blocked('secret_reference_invalid', normalized, { invalid_reference_preview: redactSecretLike(invalidReference) });
-  }
   const literalSecret = normalized.references.find((ref) => looksLikeSecretValue(ref));
   if (literalSecret) {
     return blocked('literal_secret_value_not_allowed', normalized, { invalid_reference_preview: '<redacted>' });
+  }
+  const invalidReference = normalized.references.find((ref) => !isSecretReference(ref));
+  if (invalidReference) {
+    return blocked('secret_reference_invalid', normalized, { invalid_reference_preview: redactSecretLike(invalidReference) });
   }
   if (normalized.target_env === 'production') {
     return blocked('production_secret_injection_requires_human_approval', normalized);
