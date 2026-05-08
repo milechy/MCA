@@ -35,6 +35,7 @@ BLOCKED   intentionally not implemented without separate approval
 | Hashing | diff approval separation | DONE | `src/ralph/state-machine.js`, `src/ralph/production-change-policy.js`, OpenCode patch approval flow |
 | Gate Runner | ordered gate manifest | DONE | `src/ralph/gate-runner.js` |
 | Gate Runner | Ralph CLI command | DONE | `node src/ralph/cli.js gate-runner`, `tests/ralph/cli-gate-runner.spec.js` |
+| Gate Runner | Telegram read-only manifest command | DONE | `/ralph-gate-manifest`, `tests/telegram/handlers.spec.js` |
 | Gate Runner | pre/post secret scans required | DONE | `src/ralph/gate-runner.js`, `scripts/gates/run-all.sh` |
 | Gate Runner | lint/typecheck/unit/build/type generation/dependency audit slots | DONE | optional gates in `src/ralph/gate-runner.js` |
 | Gate Runner | Supabase local reset / migration dry-run gate | DONE | `scripts/gates/supabase-local.sh`, `src/ralph/gate-runner.js` |
@@ -51,6 +52,7 @@ BLOCKED   intentionally not implemented without separate approval
 | Failure | Stop story/agent/secret injection, preserve logs/diff, notify, human resume | DONE | `src/ralph/failure-escalation.js` |
 | LangGraph | Planning layer skeleton | DONE | `src/ralph/langgraph-planning-layer.js` |
 | LangGraph | Ralph CLI command | DONE | `node src/ralph/cli.js plan <story.json>`, `tests/ralph/cli-plan.spec.js` |
+| LangGraph | Telegram read-only planning graph command | DONE | `/ralph-plan`, `tests/telegram/handlers.spec.js` |
 | LangGraph | non-executing graph with plan/risk/decision/route | DONE | `src/ralph/langgraph-planning-layer.js` |
 | OpenCode | real CLI sandbox smoke | DONE | `scripts/telegram/real-opencode-operational-smoke.js` |
 | OpenCode | candidate patch only | DONE | `src/telegram/opencode-run.js` |
@@ -61,6 +63,7 @@ BLOCKED   intentionally not implemented without separate approval
 | External Gateway | NemoClaw/OpenClaw candidate.patch-only adapter | DONE | `src/ralph/external-agent-adapter.js`, `tests/ralph/external-agent-adapter.spec.js` |
 | External Gateway | External agent job status/abort records | DONE | `src/ralph/external-agent-jobs.js`, `tests/ralph/external-agent-jobs.spec.js` |
 | External Gateway | External agent bounded artifact retrieval | DONE | `src/ralph/external-agent-artifacts.js`, `tests/ralph/external-agent-artifacts.spec.js` |
+| External Gateway | Optional real runtime smoke | DONE | `scripts/ralph/real-external-agent-smoke.js`, `tests/ralph/real-external-agent-smoke.spec.js`, `npm run ralph:real-external-agent-smoke` |
 | Deploy | production deploy from Telegram | BLOCKED | explicit non-goal |
 | Migration | production migration from Telegram | BLOCKED | explicit non-goal unless separate human approval path is created |
 | Merge | merge from Telegram | BLOCKED | explicit non-goal |
@@ -78,49 +81,26 @@ DONE  NemoClaw/OpenClaw explicit runtime approval recorded in #10
 DONE  NemoClaw/OpenClaw candidate.patch-only adapter
 DONE  External agent job status/abort records
 DONE  External agent bounded candidate.patch/stdout/stderr artifact retrieval
+DONE  Telegram read-only planning graph command
+DONE  Telegram read-only gate manifest command
+DONE  Optional real external agent smoke for installed runtime
 ```
 
 ## Remaining Implementation Gaps
 
-### 1. Optional Telegram command surface for planning graph and gate runner
-
-Current state:
-
 ```text
-Ralph CLI exposes plan and gate-runner commands.
-Telegram command surface already supports the OpenCode execution chain and /run-all gate path.
+None for the confirmed v1.3 / detailed design v0.2 MVP scope.
 ```
 
-Remaining work if desired:
+## Still Blocked / Explicit Non-goals
 
 ```text
-Add Telegram read-only planning graph command.
-Add Telegram read-only gate-runner manifest command.
-Do not add new execution commands without separate approval.
-```
-
-### 2. Optional external agent real smoke
-
-Current state:
-
-```text
-The bounded adapter contract is implemented and tested with a test double.
-No real NemoClaw/OpenClaw binary smoke is included yet.
-```
-
-Remaining work if desired:
-
-```text
-Add a real smoke script that runs only when an operator-provided runtime is installed.
-The smoke must remain candidate.patch-only, sandbox-only, bounded/redacted, and non-mutating.
-```
-
-## Immediate Next Tasks
-
-```text
-1. If desired, add Telegram read-only command surface for plan/gate manifest.
-2. If desired, add external agent real smoke for installed NemoClaw/OpenClaw runtime.
-3. Keep production deploy, production migration, merge, and unrestricted shell blocked.
+production deploy from Telegram
+production migration from Telegram
+merge from Telegram
+unrestricted shell
+raw logs
+agent-initiated apply/commit/push/PR without the existing approval chain
 ```
 
 ## Current Green Evidence
@@ -128,10 +108,11 @@ The smoke must remain candidate.patch-only, sandbox-only, bounded/redacted, and 
 Latest operator-provided verification:
 
 ```text
-telegram-tests: 249 passed
+telegram-tests: 252 passed
 supabase-local passed
 playwright-e2e passed
 post-secret-scan passed
 all Phase 2 local gates passed
+ralph:real-external-agent-smoke ok=true skipped=true when runtime is not installed
 working tree clean
 ```
