@@ -1,3 +1,4 @@
+const path = require('node:path');
 const { appendAuditEvent } = require('./audit-log');
 const { PHASES } = require('./types');
 
@@ -64,7 +65,7 @@ function recordFailureEscalation(escalation, { rootDir = process.cwd() } = {}) {
     approval_id: escalation.approval_id,
     agent_id: escalation.agent_id,
     actions: escalation.actions
-  }, { rootDir });
+  }, { filePath: path.join(rootDir, '.ralph', 'logs', 'audit.jsonl') });
 }
 
 module.exports = { ESCALATION_REASONS, buildFailureEscalation, recordFailureEscalation };
