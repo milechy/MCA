@@ -28,6 +28,7 @@ function parseTelegramCommand(text) {
   if (command === '/opencode-commit') return { type: 'opencode_commit', raw, args };
   if (command === '/opencode-push-approval') return { type: 'opencode_push_approval', raw, args };
   if (command === '/opencode-push') return { type: 'opencode_push', raw, args };
+  if (command === '/opencode-pr-approval') return { type: 'opencode_pr_approval', raw, args };
 
   if (command === '/mode') {
     const [modeAction, ...modeArgs] = args;
