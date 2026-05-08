@@ -11,6 +11,7 @@ const { dryRunShellCommand } = require('./shell-dry-run');
 const { runShellDryRunWithPreflight } = require('./shell-preflight-wrapper');
 const { runAllApprovedSmoke } = require('./run-all-smoke-helper');
 const { describeGateSequence, runGateSequence } = require('./gate-runner');
+const { createPlanningGraph } = require('./langgraph-planning-layer');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -26,6 +27,7 @@ function usage() {
   console.log(`Ralph CLI
 
 Commands:
+  node src/ralph/cli.js plan <story.json>
   node src/ralph/cli.js risk <plan.json>
   node src/ralph/cli.js create-approval <plan.json>
   node src/ralph/cli.js approve <approval_id> <user_id> <plan.json>
@@ -116,6 +118,20 @@ function handleGateRunnerCommand(args, options = {}) {
   return result;
 }
 
+function handlePlanCommand(args) {
+  const [storyPath] = args;
+  if (!storyPath) {
+    const result = { ok: false, stage: 'langgraph_planning_layer_cli', reason: 'story_path_required', execution_connected: false, commands_executed: [] };
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = 1;
+    return result;
+  }
+  const story = readJson(storyPath);
+  const result = createPlanningGraph(story);
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
 function main(argv = process.argv.slice(2), options = {}) {
   const [command, ...args] = argv;
 
@@ -136,6 +152,11 @@ function main(argv = process.argv.slice(2), options = {}) {
 
   if (command === 'gate-runner') {
     handleGateRunnerCommand(args, options);
+    return;
+  }
+
+  if (command === 'plan') {
+    handlePlanCommand(args);
     return;
   }
 
@@ -258,4 +279,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, optionValue, handleGateRunnerCommand };
+module.exports = { main, optionValue, handleGateRunnerCommand, handlePlanCommand };
