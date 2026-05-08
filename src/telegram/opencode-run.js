@@ -29,16 +29,27 @@ function commandPreview(command, args = []) {
   return [command, ...args].map((part) => oneLine(part, 120)).join(' ');
 }
 
+function argContainsDangerousShell(value) {
+  return /[;&|`$<>]/.test(String(value)) || String(value).includes('..');
+}
+
 function commandIsAllowed(command, args = []) {
   if (!command || typeof command !== 'string') return false;
   if (/[;&|`$<>]/.test(command) || command.includes('..')) return false;
   if (!Array.isArray(args)) return false;
-  if (args.some((arg) => /[;&|`$<>]/.test(String(arg)) || String(arg).includes('..'))) return false;
+  if (args.some((arg) => argContainsDangerousShell(arg))) return false;
 
   if (command === 'opencode') {
-    if (!(args.length >= 1 && args[0] === 'run' && args.includes('--diff-only'))) return false;
-    if (args.includes('--output')) return args.includes('candidate.patch');
-    return true;
+    if (!(args.length >= 1 && args[0] === 'run')) return false;
+    if (args.includes('--dangerously-skip-permissions')) return false;
+    if (args.includes('--attach')) return false;
+    if (args.includes('--command')) return false;
+    if (args.includes('--continue') || args.includes('-c') || args.includes('--session') || args.includes('-s')) return false;
+    if (args.includes('--diff-only')) {
+      if (args.includes('--output')) return args.includes('candidate.patch');
+      return true;
+    }
+    return args.length === 2 && typeof args[1] === 'string' && args[1].includes('candidate.patch') && args[1].includes('unified git diff');
   }
 
   if (command === process.execPath || command === 'node') {
