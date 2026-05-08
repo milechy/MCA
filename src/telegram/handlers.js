@@ -21,10 +21,8 @@ const { pushOpenCodeCommit } = require('./opencode-push');
 const { createOpenCodePrApproval } = require('./opencode-pr-approval');
 const { createOpenCodePullRequest } = require('./opencode-pr');
 const { opencodeJobStatus, abortOpenCodeJob } = require('./opencode-jobs');
-const {
-  RUN_ALL_FAILURE_REASON_TAXONOMY,
-  normalizeRunAllReason
-} = require('./run-all-taxonomy');
+const { readBoundedArtifact } = require('./opencode-artifacts');
+const { RUN_ALL_FAILURE_REASON_TAXONOMY, normalizeRunAllReason } = require('./run-all-taxonomy');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -162,6 +160,11 @@ function openCodeAbortResponseText(result) {
   return `OpenCode abort recorded. Repository mutation remains disabled.${jsonBlock(result)}`;
 }
 
+function openCodeArtifactResponseText(result) {
+  if (!result.ok) return `OpenCode artifact retrieval failed: ${result.reason}${jsonBlock(result)}`;
+  return `OpenCode artifact retrieved. Output is bounded and redacted.${jsonBlock(result)}`;
+}
+
 function handleTelegramCommand(parsed, context = {}) {
   const rootDir = context.rootDir || process.cwd();
   const userId = context.user_id;
@@ -262,6 +265,11 @@ function handleTelegramCommand(parsed, context = {}) {
     const result = abortOpenCodeJob({ rootDir, job_id: jobId, now: context.now || new Date() });
     return textResponse(openCodeAbortResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false });
   }
+  if (parsed.type === 'opencode_artifact') {
+    const [jobId, artifactType, artifactPath] = parsed.args;
+    const result = readBoundedArtifact({ rootDir, job_id: jobId, artifact_type: artifactType || 'candidate_patch', artifact_path: artifactPath });
+    return textResponse(openCodeArtifactResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false });
+  }
   if (parsed.type === 'approvals') {
     const approvals = listApprovals({ rootDir, status: parsed.args[0] || null }).map(summarizeApproval);
     return textResponse(`Approvals:${jsonBlock(approvals)}`, { approvals, wired_to_runtime: false });
@@ -273,7 +281,10 @@ function handleTelegramCommand(parsed, context = {}) {
     if (!approval) return textResponse(`Approval not found: ${approvalId}`, { wired_to_runtime: false });
     return textResponse(`Approval:${jsonBlock(summarizeApproval(approval))}`, { approval: summarizeApproval(approval), wired_to_runtime: false });
   }
-  if (parsed.type === 'mode_approval') return textResponse(setApprovalMode(userId, { rootDir, roles, reason: 'telegram_mode_approval' }).ok ? `Mode changed to approval.${jsonBlock(loadMode(rootDir))}` : 'Mode change denied', { result: setApprovalMode(userId, { rootDir, roles, reason: 'telegram_mode_approval' }) });
+  if (parsed.type === 'mode_approval') {
+    const result = setApprovalMode(userId, { rootDir, roles, reason: 'telegram_mode_approval' });
+    return textResponse(result.ok ? `Mode changed to approval.${jsonBlock(loadMode(rootDir))}` : 'Mode change denied', { result });
+  }
   if (parsed.type === 'mode_fullauto_request') {
     const result = requestFullautoMode(userId, { rootDir, roles, hours: parsed.args[0] ? Number(parsed.args[0]) : undefined });
     return result.ok ? textResponse(`Fullauto confirmation required. Run:\n/confirm ${result.token}`, { result }) : textResponse(`Fullauto request denied: ${result.reason}`, { result });
@@ -306,4 +317,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText, openCodeGatesResponseText, openCodeCommitApprovalResponseText, openCodeCommitResponseText, openCodePushApprovalResponseText, openCodePushResponseText, openCodePrApprovalResponseText, openCodePrResponseText, openCodeStatusResponseText, openCodeAbortResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText, openCodeGatesResponseText, openCodeCommitApprovalResponseText, openCodeCommitResponseText, openCodePushApprovalResponseText, openCodePushResponseText, openCodePrApprovalResponseText, openCodePrResponseText, openCodeStatusResponseText, openCodeAbortResponseText, openCodeArtifactResponseText };
