@@ -2,6 +2,7 @@ const { getApproval, summarizeApproval } = require('./approval-reader');
 const { calculatePlanHash, calculateDiffHash } = require('./hash');
 const { loadMode } = require('./mode-manager');
 const { evaluateRisk, targetEnv } = require('./risk-evaluator');
+const { decideProductionChangePolicy } = require('./production-change-policy');
 
 function fail(reason, details = {}) {
   return { ok: false, reason, ...details };
@@ -66,8 +67,21 @@ function verifyExecutionPreflight(approvalId, plan, options = {}) {
   }
 
   const env = targetEnv(plan);
-  if (env === 'production') {
-    return fail('production_execution_blocked_in_phase_2', { target_env: env, approval: approvalSummary });
+  const productionPolicy = decideProductionChangePolicy(plan, {
+    mode: currentMode.mode,
+    post_exec_diff_hash_changed: options.post_exec_diff_hash_changed === true
+  });
+
+  if (!productionPolicy.ok) {
+    return fail(productionPolicy.reason, { risk, target_env: env, production_policy: productionPolicy, approval: approvalSummary });
+  }
+
+  if (productionPolicy.target_env === 'production') {
+    return fail('production_execution_requires_separate_apply_path', { risk, target_env: env, production_policy: productionPolicy, approval: approvalSummary });
+  }
+
+  if (productionPolicy.diff_approval_required === true) {
+    return fail('diff_approval_required_before_execution', { risk, target_env: env, production_policy: productionPolicy, approval: approvalSummary });
   }
 
   return pass({
@@ -75,6 +89,7 @@ function verifyExecutionPreflight(approvalId, plan, options = {}) {
     mode: currentMode,
     risk,
     target_env: env,
+    production_policy: productionPolicy,
     execution_connected: false,
     next_action: 'EXECUTION_ALLOWED_BY_PREFLIGHT_ONLY'
   });
