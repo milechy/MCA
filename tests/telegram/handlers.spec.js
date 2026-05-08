@@ -219,6 +219,55 @@ test('/status returns state and mode', () => {
   expect(result.text).toContain('Status:');
 });
 
+test('/ralph-plan returns read-only planning graph', () => {
+  const rootDir = makeTempRoot();
+  const result = handleTelegramCommand(parseTelegramCommand('/ralph-plan STORY-1 staging approval add focused test'), { rootDir, user_id: 3, roles: roles(), requested_paths: ['tests/foo.spec.js'] });
+  expect(result.ok).toBe(true);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.execution_connected).toBe(false);
+  expect(result.result).toMatchObject({
+    ok: true,
+    stage: 'langgraph_planning_layer',
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    repository_files_modified: [],
+    apply_allowed: false,
+    commit_allowed: false,
+    push_allowed: false,
+    pr_allowed: false,
+    merge_allowed: false,
+    deploy_allowed: false,
+    migration_allowed: false
+  });
+  expect(result.result.plan_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(result.text).toContain('Ralph planning graph ready. Execution remains disconnected.');
+});
+
+test('/ralph-gate-manifest returns read-only gate manifest without execution', () => {
+  const rootDir = makeTempRoot();
+  const result = handleTelegramCommand(parseTelegramCommand('/ralph-gate-manifest'), { rootDir, user_id: 3, roles: roles() });
+  expect(result.ok).toBe(true);
+  expect(result.wired_to_runtime).toBe(false);
+  expect(result.execution_connected).toBe(false);
+  expect(result.result).toMatchObject({
+    ok: true,
+    stage: 'ralph_gate_runner_manifest_telegram',
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    repository_files_modified: [],
+    commit_created: false,
+    push_performed: false,
+    pr_created: false,
+    merge_performed: false,
+    deploy_performed: false,
+    migration_performed: false
+  });
+  expect(result.result.gates[0]).toMatchObject({ id: 'pre-secret-scan', required: true });
+  expect(result.text).toContain('Ralph gate manifest ready. No gates executed.');
+});
+
 test('/policy returns read-only execution policy status with runtime gate off', () => {
   const result = handleTelegramCommand(parseTelegramCommand('/policy'), { rootDir: makeTempRoot(), user_id: 3, roles: roles(), env: {} });
 
