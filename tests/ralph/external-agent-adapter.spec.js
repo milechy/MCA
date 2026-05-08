@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { normalizeRuntimeCommand, buildAdapterArgs, argsAreAllowed, runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
+const { readExternalAgentJob } = require('../../src/ralph/external-agent-jobs');
 
 function tmpRoot() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-external-agent-'));
@@ -52,7 +53,7 @@ test('runExternalAgentCandidatePatch blocks without explicit runtime approval', 
   });
 });
 
-test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider in sandbox', () => {
+test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider in sandbox and records job', () => {
   const rootDir = tmpRoot();
   const calls = [];
   const spawn = (command, args, options) => {
@@ -63,6 +64,8 @@ test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider
 
   const result = runExternalAgentCandidatePatch({
     rootDir,
+    approval_id: 'APR-1',
+    job_id: 'JOB-EXTAGENT-TEST',
     gateway_type: 'nemoclaw',
     gateway_name: 'nemoclaw',
     sandbox_root: '.ralph/tmp/gateway/APR-1',
@@ -79,6 +82,7 @@ test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider
   expect(result).toMatchObject({
     ok: true,
     reason: null,
+    job_id: 'JOB-EXTAGENT-TEST',
     gateway_type: 'nemoclaw',
     gateway_name: 'nemoclaw',
     sandbox_root: '.ralph/tmp/gateway/APR-1',
@@ -99,9 +103,28 @@ test('runExternalAgentCandidatePatch runs approved candidate.patch-only provider
     next_action: 'preview_candidate_patch_before_apply'
   });
   expect(result.stdout_preview).toBe('candidate patch written');
+  expect(result.job).toMatchObject({ job_id: 'JOB-EXTAGENT-TEST', status: 'completed', approval_id: 'APR-1' });
+  expect(readExternalAgentJob(rootDir, 'JOB-EXTAGENT-TEST')).toMatchObject({ status: 'completed', candidate_patch_path: '.ralph/tmp/gateway/APR-1/candidate.patch' });
   expect(calls).toHaveLength(1);
   expect(calls[0].command).toBe('nemoclaw');
   expect(calls[0].cwd).toBe(path.join(rootDir, '.ralph/tmp/gateway/APR-1'));
+});
+
+test('runExternalAgentCandidatePatch records failed job when candidate.patch is missing', () => {
+  const rootDir = tmpRoot();
+  const result = runExternalAgentCandidatePatch({
+    rootDir,
+    job_id: 'JOB-EXTAGENT-FAIL',
+    gateway_type: 'nemoclaw',
+    gateway_name: 'nemoclaw',
+    sandbox_root: '.ralph/tmp/gateway/APR-2',
+    requested_paths: ['tests/x.js'],
+    task: 'add test',
+    explicit_runtime_approval: true,
+    spawn: () => ({ status: 0, stdout: 'no patch', stderr: '' })
+  });
+  expect(result).toMatchObject({ ok: false, reason: 'candidate_patch_missing', job_id: 'JOB-EXTAGENT-FAIL' });
+  expect(readExternalAgentJob(rootDir, 'JOB-EXTAGENT-FAIL')).toMatchObject({ status: 'failed', next_action: 'fix_external_agent_adapter_failure' });
 });
 
 test('runExternalAgentCandidatePatch blocks forbidden runtime command and args', () => {
