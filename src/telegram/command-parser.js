@@ -32,6 +32,7 @@ function parseTelegramCommand(text) {
   if (command === '/opencode-pr') return { type: 'opencode_pr', raw, args };
   if (command === '/opencode-status') return { type: 'opencode_status', raw, args };
   if (command === '/opencode-abort') return { type: 'opencode_abort', raw, args };
+  if (command === '/opencode-artifact') return { type: 'opencode_artifact', raw, args };
 
   if (command === '/mode') {
     const [modeAction, ...modeArgs] = args;
