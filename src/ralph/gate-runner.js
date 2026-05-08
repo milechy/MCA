@@ -30,6 +30,8 @@ const FORBIDDEN_GATE_TOKENS = Object.freeze([
   'merge'
 ]);
 
+const FORBIDDEN_SHELL_EVAL_ARGS = Object.freeze(['-c', '-lc', '-ec', '-euc', '--command']);
+
 function oneLine(value, maxLength = 240) {
   const normalized = String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
   return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
@@ -39,9 +41,17 @@ function commandPreview(gate) {
   return [gate.command, ...(gate.args || [])].join(' ');
 }
 
+function usesShellEvaluation(gate) {
+  const command = String(gate?.command || '');
+  const args = Array.isArray(gate?.args) ? gate.args.map(String) : [];
+  if (!['bash', 'sh', 'zsh'].includes(command)) return false;
+  return args.some((arg) => FORBIDDEN_SHELL_EVAL_ARGS.includes(arg));
+}
+
 function validateGate(gate) {
   if (!gate || !gate.id || !gate.command || !Array.isArray(gate.args)) return { ok: false, reason: 'gate_shape_invalid' };
   const preview = commandPreview(gate);
+  if (usesShellEvaluation(gate)) return { ok: false, reason: 'gate_shell_token_not_allowed' };
   if (/[;&|`$<>]/.test(preview)) return { ok: false, reason: 'gate_shell_token_not_allowed' };
   if (FORBIDDEN_GATE_TOKENS.some((token) => preview.includes(token))) return { ok: false, reason: 'gate_forbidden_command' };
   return { ok: true, reason: null };
@@ -137,4 +147,4 @@ function runGateSequence({ rootDir = process.cwd(), env = process.env, gates = G
   return summary;
 }
 
-module.exports = { DEFAULT_GATE_TIMEOUT_MS, GATE_SEQUENCE, FORBIDDEN_GATE_TOKENS, validateGate, describeGateSequence, runGate, runGateSequence };
+module.exports = { DEFAULT_GATE_TIMEOUT_MS, GATE_SEQUENCE, FORBIDDEN_GATE_TOKENS, FORBIDDEN_SHELL_EVAL_ARGS, validateGate, describeGateSequence, runGate, runGateSequence };
