@@ -65,15 +65,15 @@ test('readExternalAgentBoundedArtifact blocks non candidate patch paths and miss
 test('readExternalAgentBoundedArtifact returns bounded stdout and stderr previews', () => {
   const rootDir = tmpRoot();
   seedJob(rootDir, { stdout_preview: 'line1\nline2\nline3', stderr_preview: 'err1\nerr2' });
-  expect(readExternalAgentBoundedArtifact({ rootDir, job_id: 'JOB-EXTAGENT-ARTIFACT', artifact_type: 'stdout', max_lines: 2 })).toMatchObject({ ok: true, artifact_type: 'stdout', content: 'line2\nline3' });
-  expect(readExternalAgentBoundedArtifact({ rootDir, job_id: 'JOB-EXTAGENT-ARTIFACT', artifact_type: 'stderr', max_lines: 1 })).toMatchObject({ ok: true, artifact_type: 'stderr', content: 'err2' });
+  expect(readExternalAgentBoundedArtifact({ rootDir, job_id: 'JOB-EXTAGENT-ARTIFACT', artifact_type: 'stdout', max_lines: 2 })).toMatchObject({ ok: true, artifact_type: 'stdout', content: 'line1 line2 line3' });
+  expect(readExternalAgentBoundedArtifact({ rootDir, job_id: 'JOB-EXTAGENT-ARTIFACT', artifact_type: 'stderr', max_lines: 1 })).toMatchObject({ ok: true, artifact_type: 'stderr', content: 'err1 err2' });
 });
 
 test('readExternalAgentBoundedArtifact redacts and truncates content', () => {
   const rootDir = tmpRoot();
   seedJob(rootDir);
   const token = ['ghp', '_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'].join('');
-  fs.writeFileSync(path.join(rootDir, '.ralph/tmp/gateway/APR-1/candidate.patch'), `secret ${token}\n${'x'.repeat(200)}`, 'utf8');
+  fs.writeFileSync(path.join(rootDir, '.ralph/tmp/gateway/APR-1/candidate.patch'), `secret ${token}\n${Array.from({ length: 60 }, (_, index) => `word${index}`).join(' ')}`, 'utf8');
   const result = readExternalAgentBoundedArtifact({ rootDir, job_id: 'JOB-EXTAGENT-ARTIFACT', max_chars: 30 });
   expect(result.ok).toBe(true);
   expect(result.content).toContain('<redacted>');
