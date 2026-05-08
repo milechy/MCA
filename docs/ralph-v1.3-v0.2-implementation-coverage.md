@@ -34,19 +34,23 @@ BLOCKED   intentionally not implemented without separate approval
 | Hashing | canonical JSON plan hash | DONE | `src/ralph/langgraph-planning-layer.js`, existing approval manager hash coverage |
 | Hashing | diff approval separation | DONE | `src/ralph/state-machine.js`, `src/ralph/production-change-policy.js`, OpenCode patch approval flow |
 | Gate Runner | ordered gate manifest | DONE | `src/ralph/gate-runner.js` |
+| Gate Runner | Ralph CLI command | DONE | `node src/ralph/cli.js gate-runner`, `tests/ralph/cli-gate-runner.spec.js` |
 | Gate Runner | pre/post secret scans required | DONE | `src/ralph/gate-runner.js`, `scripts/gates/run-all.sh` |
 | Gate Runner | lint/typecheck/unit/build/type generation/dependency audit slots | DONE | optional gates in `src/ralph/gate-runner.js` |
 | Gate Runner | Supabase local reset / migration dry-run gate | DONE | `scripts/gates/supabase-local.sh`, `src/ralph/gate-runner.js` |
 | Gate Runner | Playwright smoke/regression slots | DONE | `src/ralph/gate-runner.js`, `scripts/gates/playwright-e2e.sh` |
 | Secrets | Secret values never displayed/persisted/logged | DONE | `src/ralph/secrets-policy.js`, `tests/ralph/secrets-policy.spec.js` |
-| Secrets | Reference-only runtime injection | DONE | `src/ralph/secrets-policy.js` |
-| Secrets | Production secret injection blocked | DONE | `src/ralph/secrets-policy.js` |
+| Secrets | Reference-only runtime injection | DONE | `src/ralph/runtime-env-preflight.js`, `tests/ralph/runtime-env-preflight.spec.js` |
+| Secrets | Production secret injection blocked | DONE | `src/ralph/secrets-policy.js`, `src/ralph/runtime-env-preflight.js` |
+| Secrets | Telegram config runtime env preflight | DONE | `src/telegram/config.js` |
 | Production DB | production destructive DB change security stop | DONE | `src/ralph/production-change-policy.js` |
 | Production DB | production migration human approval | DONE | `src/ralph/production-change-policy.js` |
+| Production DB | execution preflight production policy wiring | DONE | `src/ralph/execution-preflight.js`, `tests/ralph/execution-preflight.spec.js` |
 | RLS/Auth | RLS/auth changes require approval | DONE | `src/ralph/production-change-policy.js` |
 | Failure | Risk 5 stop criteria | DONE | `src/ralph/failure-escalation.js` |
 | Failure | Stop story/agent/secret injection, preserve logs/diff, notify, human resume | DONE | `src/ralph/failure-escalation.js` |
 | LangGraph | Planning layer skeleton | DONE | `src/ralph/langgraph-planning-layer.js` |
+| LangGraph | Ralph CLI command | DONE | `node src/ralph/cli.js plan <story.json>`, `tests/ralph/cli-plan.spec.js` |
 | LangGraph | non-executing graph with plan/risk/decision/route | DONE | `src/ralph/langgraph-planning-layer.js` |
 | OpenCode | real CLI sandbox smoke | DONE | `scripts/telegram/real-opencode-operational-smoke.js` |
 | OpenCode | candidate patch only | DONE | `src/telegram/opencode-run.js` |
@@ -60,76 +64,19 @@ BLOCKED   intentionally not implemented without separate approval
 | Merge | merge from Telegram | BLOCKED | explicit non-goal |
 | Shell | unrestricted shell | BLOCKED | explicit non-goal |
 
+## Previously Identified Gaps Now Closed
+
+```text
+DONE  gate-runner.js into Ralph CLI
+DONE  langgraph-planning-layer.js into Ralph CLI
+DONE  production-change-policy.js into execution-preflight
+DONE  secrets-policy.js into runtime env injection preflight
+DONE  Telegram config loading through runtime env injection preflight
+```
+
 ## Remaining Implementation Gaps
 
-### 1. Connect `gate-runner.js` into the runtime command path
-
-Current state:
-
-```text
-scripts/gates/run-all.sh is the active gate command.
-src/ralph/gate-runner.js formalizes the gate sequence and policy.
-```
-
-Remaining work:
-
-```text
-Add CLI command: node src/ralph/cli.js gate-runner
-Optionally switch Telegram /run-all summary to consume gate-runner summaries.
-Keep scripts/gates/run-all.sh as compatibility wrapper.
-```
-
-### 2. Connect `langgraph-planning-layer.js` into CLI/Telegram plan creation
-
-Current state:
-
-```text
-Planning graph skeleton exists and is tested.
-Existing OpenCode/TG flows still build plans through narrower helpers.
-```
-
-Remaining work:
-
-```text
-Add CLI command: node src/ralph/cli.js plan <story.json>
-Add Telegram command or internal route for planning graph output.
-Ensure approval creation consumes planning graph plan_hash.
-```
-
-### 3. Connect `production-change-policy.js` into execution preflight
-
-Current state:
-
-```text
-Policy exists and is tested.
-OpenCode apply/commit/push/PR chain has separate controls.
-```
-
-Remaining work:
-
-```text
-Execution preflight should call production-change-policy for production/RLS/auth/migration plans.
-Risk evaluator and production policy decisions should be reconciled in one preflight output.
-```
-
-### 4. Connect `secrets-policy.js` into Telegram/OpenCode runtime setup
-
-Current state:
-
-```text
-Secret policy exists and is tested.
-Telegram real smoke uses local prompt handling and redaction.
-```
-
-Remaining work:
-
-```text
-All runtime env injection paths should call decideSecretInjection.
-Reject literal secrets before runtime invocation.
-Only allow reference names in persistent approval/plan artifacts.
-```
-
-### 5. External gateway runtime adapters
+### 1. External gateway runtime adapters
 
 Current state:
 
@@ -148,14 +95,29 @@ Wire status/abort/artifact retrieval.
 Keep same sandbox/preflight/approval boundaries.
 ```
 
+### 2. Optional Telegram command surface for planning graph and gate runner
+
+Current state:
+
+```text
+Ralph CLI exposes plan and gate-runner commands.
+Telegram command surface already supports the OpenCode execution chain and /run-all gate path.
+```
+
+Remaining work if desired:
+
+```text
+Add Telegram read-only planning graph command.
+Add Telegram read-only gate-runner manifest command.
+Do not add new execution commands without separate approval.
+```
+
 ## Immediate Next Tasks
 
 ```text
-1. Wire gate-runner.js into Ralph CLI.
-2. Wire langgraph-planning-layer.js into Ralph CLI.
-3. Wire production-change-policy.js into execution-preflight.
-4. Wire secrets-policy.js into runtime env injection preflight.
-5. Create a separate approval issue before any NemoClaw/OpenClaw runtime dependency.
+1. Create a separate approval issue before any NemoClaw/OpenClaw runtime dependency.
+2. If approved, implement concrete NemoClaw adapter as candidate.patch-only provider.
+3. If desired, add Telegram read-only command surface for plan/gate manifest.
 ```
 
 ## Current Green Evidence
