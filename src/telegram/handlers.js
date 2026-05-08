@@ -23,6 +23,8 @@ const { createOpenCodePullRequest } = require('./opencode-pr');
 const { opencodeJobStatus, abortOpenCodeJob } = require('./opencode-jobs');
 const { readBoundedArtifact } = require('./opencode-artifacts');
 const { RUN_ALL_FAILURE_REASON_TAXONOMY, normalizeRunAllReason } = require('./run-all-taxonomy');
+const { createPlanningGraph } = require('../ralph/langgraph-planning-layer');
+const { describeGateSequence } = require('../ralph/gate-runner');
 
 function textResponse(text, extra = {}) {
   return { ok: true, text, ...extra };
@@ -71,6 +73,16 @@ function runAllResponseText(result) {
   if (!result.ok) return `Run-all failed: ${summary.reason || 'unknown'}${jsonBlock(summary)}`;
   if (summary.commands_executed.length > 0) return `Run-all execution completed.${jsonBlock(summary)}`;
   return `Run-all preflight passed. ${summary.reason}.${jsonBlock(summary)}`;
+}
+
+function ralphPlanResponseText(result) {
+  if (!result.ok) return `Ralph planning graph failed: ${result.reason}${jsonBlock(result)}`;
+  return `Ralph planning graph ready. Execution remains disconnected.${jsonBlock(result)}`;
+}
+
+function ralphGateManifestResponseText(result) {
+  if (!result.ok) return `Ralph gate manifest failed: ${result.reason}${jsonBlock(result)}`;
+  return `Ralph gate manifest ready. No gates executed.${jsonBlock(result)}`;
 }
 
 function openCodePlanResponseText(plan) {
@@ -178,6 +190,30 @@ function handleTelegramCommand(parsed, context = {}) {
   if (parsed.type === 'policy') {
     const policy = executionPolicyStatus(context.env || process.env);
     return textResponse(`Execution policy:${jsonBlock(policy)}`, { policy, wired_to_runtime: false });
+  }
+  if (parsed.type === 'ralph_plan') {
+    const [storyId, targetEnv = 'local', mode = 'approval', ...objectiveParts] = parsed.args;
+    if (!storyId) return textResponse(`Ralph planning graph failed: story_id_required${jsonBlock({ ok: false, stage: 'langgraph_planning_layer_telegram', reason: 'story_id_required', execution_connected: false, commands_executed: [] })}`, { wired_to_runtime: false, execution_connected: false });
+    const result = createPlanningGraph({ story_id: storyId, title: storyId, objective: objectiveParts.join(' ') || storyId, target_env: targetEnv, mode, requested_paths: context.requested_paths || [] });
+    return textResponse(ralphPlanResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false });
+  }
+  if (parsed.type === 'ralph_gate_manifest') {
+    const result = {
+      ok: true,
+      stage: 'ralph_gate_runner_manifest_telegram',
+      gates: describeGateSequence(),
+      execution_connected: false,
+      commands_executed: [],
+      files_modified: [],
+      repository_files_modified: [],
+      commit_created: false,
+      push_performed: false,
+      pr_created: false,
+      merge_performed: false,
+      deploy_performed: false,
+      migration_performed: false
+    };
+    return textResponse(ralphGateManifestResponseText(result), { result, summary: result, wired_to_runtime: false, execution_connected: false });
   }
   if (parsed.type === 'opencode_plan') {
     const plan = makeOpenCodeDryRunPlan(parsed.args.join(' '));
@@ -317,4 +353,4 @@ function handleTelegramCommand(parsed, context = {}) {
   return textResponse('Unknown or unsupported command in Phase 2 skeleton.', { parsed });
 }
 
-module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText, openCodeGatesResponseText, openCodeCommitApprovalResponseText, openCodeCommitResponseText, openCodePushApprovalResponseText, openCodePushResponseText, openCodePrApprovalResponseText, openCodePrResponseText, openCodeStatusResponseText, openCodeAbortResponseText, openCodeArtifactResponseText };
+module.exports = { handleTelegramCommand, summarizeRunAllResult, runAllResponseText, durationMs, normalizeRunAllReason, RUN_ALL_FAILURE_REASON_TAXONOMY, ralphPlanResponseText, ralphGateManifestResponseText, openCodePlanResponseText, openCodeSandboxPlanResponseText, openCodeSandboxPreflightResponseText, openCodeRunResponseText, openCodePatchPreviewResponseText, openCodePatchApprovalResponseText, openCodeApplyPreflightResponseText, openCodeApplyResponseText, openCodeGatesResponseText, openCodeCommitApprovalResponseText, openCodeCommitResponseText, openCodePushApprovalResponseText, openCodePushResponseText, openCodePrApprovalResponseText, openCodePrResponseText, openCodeStatusResponseText, openCodeAbortResponseText, openCodeArtifactResponseText };
