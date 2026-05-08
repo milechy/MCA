@@ -11,16 +11,24 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-artifacts-'));
 }
 
+function fakeTelegramToken() {
+  return ['12345678', ':', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890'].join('');
+}
+
+function fakeGithubToken() {
+  return ['ghp', '_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'].join('');
+}
+
 function setupJob(rootDir) {
   const sandboxRoot = '.ralph/tmp/opencode-sandbox/APR-1';
   fs.mkdirSync(path.join(rootDir, sandboxRoot), { recursive: true });
-  fs.writeFileSync(path.join(rootDir, sandboxRoot, 'candidate.patch'), ['line1', 'line2', 'secret 12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', 'line4'].join('\n'));
+  fs.writeFileSync(path.join(rootDir, sandboxRoot, 'candidate.patch'), ['line1', 'line2', `secret ${fakeTelegramToken()}`, 'line4'].join('\n'));
   writeJob(rootDir, {
     job_id: 'JOB-OPENCODE-1',
     status: 'completed',
     approval_id: 'APR-1',
     sandbox_root: sandboxRoot,
-    stdout_preview: 'stdout token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456',
+    stdout_preview: `stdout token ${fakeGithubToken()}`,
     stderr_preview: 'stderr ok'
   });
   return sandboxRoot;
@@ -31,7 +39,7 @@ test('parseTelegramCommand parses /opencode-artifact', () => {
 });
 
 test('redact and boundedText remove token-like content and limit output', () => {
-  expect(redact('x TELEGRAM_BOT_TOKEN=12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 y')).toContain('TELEGRAM_BOT_TOKEN=<redacted>');
+  expect(redact(`x TELEGRAM_BOT_TOKEN=${fakeTelegramToken()} y`)).toContain('TELEGRAM_BOT_TOKEN=<redacted>');
   expect(boundedText('x'.repeat(20), 5)).toBe('xxxx…');
   expect(tailLines(['a', 'b', 'c'].join('\n'), 2)).toBe('b\nc');
 });
