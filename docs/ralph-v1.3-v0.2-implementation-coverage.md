@@ -57,8 +57,10 @@ BLOCKED   intentionally not implemented without separate approval
 | OpenCode | patch preview / approval / apply / gates / commit / push / PR chain | DONE | `src/telegram/opencode-*.js` |
 | OpenCode | bounded status/abort/artifact retrieval | DONE | `src/telegram/opencode-jobs.js`, `src/telegram/opencode-artifacts.js` |
 | External Gateway | NemoClaw/OpenClaw boundary policy | DONE | `src/ralph/external-agent-gateway.js`, `docs/opencode-external-agent-gateway-boundary.md` |
-| External Gateway | NemoClaw runtime dependency | BLOCKED | requires separate explicit approval |
-| External Gateway | OpenClaw runtime dependency | BLOCKED | requires separate explicit approval |
+| External Gateway | NemoClaw/OpenClaw runtime approval record | DONE | GitHub issue `#10` operator approval comment |
+| External Gateway | NemoClaw/OpenClaw candidate.patch-only adapter | DONE | `src/ralph/external-agent-adapter.js`, `tests/ralph/external-agent-adapter.spec.js` |
+| External Gateway | External agent job status/abort records | DONE | `src/ralph/external-agent-jobs.js`, `tests/ralph/external-agent-jobs.spec.js` |
+| External Gateway | External agent bounded artifact retrieval | DONE | `src/ralph/external-agent-artifacts.js`, `tests/ralph/external-agent-artifacts.spec.js` |
 | Deploy | production deploy from Telegram | BLOCKED | explicit non-goal |
 | Migration | production migration from Telegram | BLOCKED | explicit non-goal unless separate human approval path is created |
 | Merge | merge from Telegram | BLOCKED | explicit non-goal |
@@ -72,30 +74,15 @@ DONE  langgraph-planning-layer.js into Ralph CLI
 DONE  production-change-policy.js into execution-preflight
 DONE  secrets-policy.js into runtime env injection preflight
 DONE  Telegram config loading through runtime env injection preflight
+DONE  NemoClaw/OpenClaw explicit runtime approval recorded in #10
+DONE  NemoClaw/OpenClaw candidate.patch-only adapter
+DONE  External agent job status/abort records
+DONE  External agent bounded candidate.patch/stdout/stderr artifact retrieval
 ```
 
 ## Remaining Implementation Gaps
 
-### 1. External gateway runtime adapters
-
-Current state:
-
-```text
-NemoClaw/OpenClaw/generic gateway policy exists.
-Runtime dependency is intentionally blocked without separate approval.
-```
-
-Remaining work if approved:
-
-```text
-Implement concrete NemoClaw adapter as candidate.patch-only provider.
-Add test double.
-Add real smoke.
-Wire status/abort/artifact retrieval.
-Keep same sandbox/preflight/approval boundaries.
-```
-
-### 2. Optional Telegram command surface for planning graph and gate runner
+### 1. Optional Telegram command surface for planning graph and gate runner
 
 Current state:
 
@@ -112,12 +99,28 @@ Add Telegram read-only gate-runner manifest command.
 Do not add new execution commands without separate approval.
 ```
 
+### 2. Optional external agent real smoke
+
+Current state:
+
+```text
+The bounded adapter contract is implemented and tested with a test double.
+No real NemoClaw/OpenClaw binary smoke is included yet.
+```
+
+Remaining work if desired:
+
+```text
+Add a real smoke script that runs only when an operator-provided runtime is installed.
+The smoke must remain candidate.patch-only, sandbox-only, bounded/redacted, and non-mutating.
+```
+
 ## Immediate Next Tasks
 
 ```text
-1. Create a separate approval issue before any NemoClaw/OpenClaw runtime dependency.
-2. If approved, implement concrete NemoClaw adapter as candidate.patch-only provider.
-3. If desired, add Telegram read-only command surface for plan/gate manifest.
+1. If desired, add Telegram read-only command surface for plan/gate manifest.
+2. If desired, add external agent real smoke for installed NemoClaw/OpenClaw runtime.
+3. Keep production deploy, production migration, merge, and unrestricted shell blocked.
 ```
 
 ## Current Green Evidence
