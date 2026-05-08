@@ -8,6 +8,9 @@ const { OPENCODE_CLI_ENV } = require('../../src/telegram/opencode-real-adapter')
 const { runOpenCodeCandidatePatch } = require('../../src/telegram/opencode-run');
 const { defaultJobId, writeJob } = require('../../src/telegram/opencode-jobs');
 
+const DEFAULT_SMOKE_PATH = 'tests/opencode-generated.spec.js';
+const DEFAULT_SMOKE_TASK = `Create a minimal candidate patch that adds only ${DEFAULT_SMOKE_PATH}. The unified diff must touch exactly ${DEFAULT_SMOKE_PATH}. The file content should be a tiny Playwright test named generated candidate patch. Do not touch smoke-test.txt or any other path.`;
+
 function timestampId(prefix, date = new Date()) {
   const stamp = date.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   return `${prefix}-${stamp}`;
@@ -68,14 +71,14 @@ function blocked(reason, extra = {}) {
 
 function runRealOpenCodeOperationalSmoke({
   rootDir = process.cwd(),
-  intent = 'real OpenCode operational smoke candidate patch',
-  task = 'Create a minimal candidate patch for smoke validation only.',
-  requested_paths = ['tests/opencode-generated.spec.js'],
+  intent = `real OpenCode operational smoke candidate patch for ${DEFAULT_SMOKE_PATH}`,
+  task = DEFAULT_SMOKE_TASK,
+  requested_paths = [DEFAULT_SMOKE_PATH],
   env = process.env,
   now = () => new Date(),
   pre_secret_scan_ok,
   use_test_double = false,
-  timeout_ms = 30000
+  timeout_ms = 60000
 } = {}) {
   const date = now();
   const approvalId = timestampId('APR-OPENCODE-REAL-SMOKE', date);
@@ -205,4 +208,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { runRealOpenCodeOperationalSmoke, timestampId, gitStatusShort, gitRestoreTrackedRuntimeFiles };
+module.exports = { runRealOpenCodeOperationalSmoke, timestampId, gitStatusShort, gitRestoreTrackedRuntimeFiles, DEFAULT_SMOKE_PATH, DEFAULT_SMOKE_TASK };
