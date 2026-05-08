@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { APPROVAL_TYPES, APPROVAL_STATUSES } = require('../ralph/types');
 const { createApproval } = require('../ralph/approval-manager');
@@ -6,6 +8,13 @@ const { currentHead, currentBranch, gitStatusShort } = require('./opencode-push-
 function defaultPrApprovalId(date = new Date()) {
   const stamp = date.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   return `APR-OPENCODE-PR-${stamp}`;
+}
+
+function writeApproval(rootDir, approval) {
+  const filePath = path.join(rootDir, '.ralph', 'approval-pending', `${approval.approval_id}.json`);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+  return approval;
 }
 
 function normalizeBranch(value) {
@@ -100,6 +109,7 @@ function createOpenCodePrApproval({ rootDir = process.cwd(), commit_sha, head_br
   approval.pr_created = false;
   approval.deploy_performed = false;
   approval.migration_performed = false;
+  writeApproval(rootDir, approval);
 
   return {
     ok: true,
