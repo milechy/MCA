@@ -10,6 +10,11 @@ test('parses basic Telegram commands', () => {
   expect(parseTelegramCommand('/confirm MODE-123')).toMatchObject({ type: 'confirm', args: ['MODE-123'] });
 });
 
+test('parses read-only Ralph planning and gate manifest commands', () => {
+  expect(parseTelegramCommand('/ralph-plan STORY-1 staging approval add tests')).toMatchObject({ type: 'ralph_plan', args: ['STORY-1', 'staging', 'approval', 'add', 'tests'] });
+  expect(parseTelegramCommand('/ralph-gate-manifest')).toMatchObject({ type: 'ralph_gate_manifest', args: [] });
+});
+
 test('parses read-only approval inspection commands', () => {
   expect(parseTelegramCommand('/approvals')).toMatchObject({ type: 'approvals', args: [] });
   expect(parseTelegramCommand('/approvals pending')).toMatchObject({ type: 'approvals', args: ['pending'] });
