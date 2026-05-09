@@ -1,6 +1,6 @@
 # Ralph v1.3 / Detailed Design v0.2 Implementation Coverage
 
-This document tracks implementation coverage against the confirmed v1.3 requirements and v0.2 detailed design direction.
+This document tracks implementation coverage against the confirmed v1.3 requirements, v0.2 detailed design direction, and the later Issue #11 autonomous OpenCode development loop.
 
 ## Status Legend
 
@@ -28,14 +28,16 @@ BLOCKED   intentionally not implemented without separate approval
 | Risk Evaluator | Risk 3c RLS policy | DONE | `src/ralph/risk-evaluator.js` |
 | Risk Evaluator | Risk 3d external API | DONE | `src/ralph/risk-evaluator.js` |
 | Approval | Approval object and approval logs | DONE | `src/ralph/approval-manager.js`, existing approval tests |
-| Approval | `/modify` supersedes and requires replan | DONE | `src/ralph/approval-manager.js`, Telegram approval adapter tests |
+| Approval | `/modify` supersedes and requires replan | DONE | `src/ralph/approval-manager.js`, `src/telegram/approval-adapter.js`, Telegram approval adapter tests |
+| Approval | approval wait/resume for autonomous stories | DONE | `src/telegram/approval-adapter.js`, `tests/telegram/approval-adapter.spec.js` |
 | Mode | `/mode approval` immediate | DONE | `src/ralph/mode-manager.js` |
 | Mode | `/mode fullauto` admin/confirm/expiry | DONE | `src/ralph/mode-manager.js`, Telegram handler coverage |
-| Hashing | canonical JSON plan hash | DONE | `src/ralph/langgraph-planning-layer.js`, existing approval manager hash coverage |
-| Hashing | diff approval separation | DONE | `src/ralph/state-machine.js`, `src/ralph/production-change-policy.js`, OpenCode patch approval flow |
+| Hashing | canonical JSON plan hash | DONE | `src/ralph/langgraph-planning-layer.js`, `src/ralph/ultraplan-runner.js`, existing approval manager hash coverage |
+| Hashing | diff approval separation | DONE | `src/ralph/state-machine.js`, `src/ralph/production-change-policy.js`, OpenCode patch approval flow, autonomous `DIFF_APPROVAL_PENDING` |
 | Gate Runner | ordered gate manifest | DONE | `src/ralph/gate-runner.js` |
 | Gate Runner | Ralph CLI command | DONE | `node src/ralph/cli.js gate-runner`, `tests/ralph/cli-gate-runner.spec.js` |
 | Gate Runner | Telegram read-only manifest command | DONE | `/ralph-gate-manifest`, `tests/telegram/handlers.spec.js` |
+| Gate Runner | autonomous gate/fix/retry loop | DONE | `src/ralph/autonomous-loop.js`, `tests/ralph/autonomous-loop-gates.spec.js` |
 | Gate Runner | pre/post secret scans required | DONE | `src/ralph/gate-runner.js`, `scripts/gates/run-all.sh` |
 | Gate Runner | lint/typecheck/unit/build/type generation/dependency audit slots | DONE | optional gates in `src/ralph/gate-runner.js` |
 | Gate Runner | Supabase local reset / migration dry-run gate | DONE | `scripts/gates/supabase-local.sh`, `src/ralph/gate-runner.js` |
@@ -54,8 +56,17 @@ BLOCKED   intentionally not implemented without separate approval
 | LangGraph | Ralph CLI command | DONE | `node src/ralph/cli.js plan <story.json>`, `tests/ralph/cli-plan.spec.js` |
 | LangGraph | Telegram read-only planning graph command | DONE | `/ralph-plan`, `tests/telegram/handlers.spec.js` |
 | LangGraph | non-executing graph with plan/risk/decision/route | DONE | `src/ralph/langgraph-planning-layer.js` |
+| UltraPlan | deterministic UltraPlan-style plan object | DONE | `src/ralph/ultraplan-runner.js`, `tests/ralph/ultraplan-runner.spec.js` |
+| UltraPlan | story queue persistence | DONE | `src/ralph/story-queue.js`, `tests/ralph/story-queue.spec.js` |
+| UltraPlan | autonomous single-step loop | DONE | `src/ralph/autonomous-loop.js`, `tests/ralph/autonomous-loop.spec.js` |
+| UltraPlan | Telegram `/ralph-start` | DONE | `src/telegram/autonomous-command.js`, `tests/telegram/autonomous-command.spec.js` |
+| UltraPlan | Telegram `/ralph-tick` | DONE | `src/telegram/autonomous-command.js`, `tests/telegram/autonomous-command.spec.js` |
+| UltraPlan | Telegram `/ralph-run-until-blocked` | DONE | `src/telegram/autonomous-command.js`, `tests/telegram/autonomous-command.spec.js` |
+| UltraPlan | Telegram `/ralph-loop-status` | DONE | `src/telegram/autonomous-command.js`, `tests/telegram/autonomous-command.spec.js` |
+| UltraPlan | pause/resume/stop/artifact command surface | DONE | `src/telegram/autonomous-command.js`, `tests/telegram/autonomous-command.spec.js` |
 | OpenCode | real CLI sandbox smoke | DONE | `scripts/telegram/real-opencode-operational-smoke.js` |
 | OpenCode | candidate patch only | DONE | `src/telegram/opencode-run.js` |
+| OpenCode | autonomous candidate.patch dispatch from story loop | DONE | `src/ralph/autonomous-loop.js`, `tests/ralph/autonomous-loop.spec.js` |
 | OpenCode | patch preview / approval / apply / gates / commit / push / PR chain | DONE | `src/telegram/opencode-*.js` |
 | OpenCode | bounded status/abort/artifact retrieval | DONE | `src/telegram/opencode-jobs.js`, `src/telegram/opencode-artifacts.js` |
 | External Gateway | NemoClaw/OpenClaw boundary policy | DONE | `src/ralph/external-agent-gateway.js`, `docs/opencode-external-agent-gateway-boundary.md` |
@@ -68,6 +79,30 @@ BLOCKED   intentionally not implemented without separate approval
 | Migration | production migration from Telegram | BLOCKED | explicit non-goal unless separate human approval path is created |
 | Merge | merge from Telegram | BLOCKED | explicit non-goal |
 | Shell | unrestricted shell | BLOCKED | explicit non-goal |
+
+## Issue #11 Autonomous Loop Coverage
+
+```text
+DONE  Phase A: story-queue + deterministic UltraPlan object
+DONE  Phase B: autonomous-loop single-step runner
+DONE  Phase C: Telegram /ralph-start and /ralph-loop-status
+DONE  Phase D: OpenCode dispatch integration
+DONE  Phase E: gate/fix/retry loop
+DONE  Phase F: approval wait/resume integration
+DONE  Telegram /ralph-tick
+DONE  Telegram /ralph-run-until-blocked
+```
+
+Current autonomous UX:
+
+```text
+/ralph-start <requirements>
+→ /ralph-run-until-blocked STORY-*
+→ approval boundary
+→ /approve APR-*
+→ /ralph-run-until-blocked STORY-*
+→ candidate.patch / diff / gates / fix loop / commit-push-PR approval boundary
+```
 
 ## Previously Identified Gaps Now Closed
 
@@ -84,12 +119,14 @@ DONE  External agent bounded candidate.patch/stdout/stderr artifact retrieval
 DONE  Telegram read-only planning graph command
 DONE  Telegram read-only gate manifest command
 DONE  Optional real external agent smoke for installed runtime
+DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
 ```
 
 ## Remaining Implementation Gaps
 
 ```text
 None for the confirmed v1.3 / detailed design v0.2 MVP scope.
+None for Issue #11 MVP acceptance criteria.
 ```
 
 ## Still Blocked / Explicit Non-goals
@@ -108,11 +145,10 @@ agent-initiated apply/commit/push/PR without the existing approval chain
 Latest operator-provided verification:
 
 ```text
-telegram-tests: 252 passed
+telegram-tests: 261 passed
 supabase-local passed
 playwright-e2e passed
 post-secret-scan passed
 all Phase 2 local gates passed
-ralph:real-external-agent-smoke ok=true skipped=true when runtime is not installed
 working tree clean
 ```
