@@ -8,6 +8,14 @@ const DEFAULT_SMOKE_PATH = 'tests/external-agent-generated.spec.js';
 const DEFAULT_SMOKE_TASK = `Create a minimal candidate patch that adds only ${DEFAULT_SMOKE_PATH}. The unified diff must touch exactly ${DEFAULT_SMOKE_PATH}. Do not apply, commit, push, create pull requests, deploy, migrate, or modify the repository working tree.`;
 const SUPPORTED_GATEWAYS = Object.freeze(['nemoclaw', 'openclaw']);
 
+function runtimeModeForGateway(gateway) {
+  return gateway === 'nemoclaw' ? 'nemoclaw-mediated' : 'direct-dev-only';
+}
+
+function mediatorForGateway(gateway) {
+  return gateway === 'nemoclaw' ? 'nemoclaw' : gateway;
+}
+
 function timestampId(prefix, date = new Date()) {
   const stamp = date.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   return `${prefix}-${stamp}`;
@@ -44,6 +52,8 @@ function skipped(reason, extra = {}) {
     reason,
     gateway_type: extra.gateway_type || null,
     gateway_name: extra.gateway_name || null,
+    opencode_runtime_mode: runtimeModeForGateway(extra.gateway_type),
+    mediator: mediatorForGateway(extra.gateway_type),
     job_id: extra.job_id || null,
     approval_id: extra.approval_id || null,
     sandbox_root: extra.sandbox_root || null,
@@ -70,6 +80,8 @@ function blocked(reason, extra = {}) {
     reason,
     gateway_type: extra.gateway_type || null,
     gateway_name: extra.gateway_name || null,
+    opencode_runtime_mode: runtimeModeForGateway(extra.gateway_type),
+    mediator: mediatorForGateway(extra.gateway_type),
     job_id: extra.job_id || null,
     approval_id: extra.approval_id || null,
     sandbox_root: extra.sandbox_root || null,
@@ -153,11 +165,13 @@ function runRealExternalAgentSmoke({
     reason: ok ? null : run.ok ? 'working_tree_dirty_after_smoke' : run.reason,
     gateway_type: gateway,
     gateway_name: gateway,
+    opencode_runtime_mode: runtimeModeForGateway(gateway),
+    mediator: mediatorForGateway(gateway),
     job_id: jobId,
     approval_id: approvalId,
     sandbox_root: sandboxRoot,
     candidate_patch_path: run.candidate_patch_path,
-    run,
+    run: { ...run, opencode_runtime_mode: runtimeModeForGateway(gateway), mediator: mediatorForGateway(gateway) },
     runtime_installed: true,
     working_tree_clean_before: true,
     working_tree_clean_after: cleanAfter,
@@ -186,6 +200,8 @@ module.exports = {
   DEFAULT_SMOKE_PATH,
   DEFAULT_SMOKE_TASK,
   SUPPORTED_GATEWAYS,
+  runtimeModeForGateway,
+  mediatorForGateway,
   timestampId,
   gitStatusShort,
   commandExists,
