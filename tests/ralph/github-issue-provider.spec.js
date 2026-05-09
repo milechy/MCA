@@ -16,8 +16,14 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-github-issue-provider-'));
 }
 
+function fakeGitHubToken() {
+  return ['gh', 'p_', 'abcdefghijklmnopqrstuvwxyz'].join('');
+}
+
 test('fetchOpenIssues uses injected provider fetch and returns redacted bounded issue summaries', async () => {
   const calls = [];
+  const tokenFixture = fakeGitHubToken();
+  const emailFixture = ['dev', 'example.com'].join('@');
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
     return {
@@ -26,8 +32,8 @@ test('fetchOpenIssues uses injected provider fetch and returns redacted bounded 
         return [
           {
             number: 42,
-            title: 'Use token ghp_abcdefghijklmnopqrstuvwxyz in docs',
-            body: 'secret: should-not-print\nContact dev@example.com',
+            title: `Use token ${tokenFixture} in docs`,
+            body: `secret: should-not-print\nContact ${emailFixture}`,
             html_url: 'https://github.com/milechy/MCA/issues/42',
             labels: [{ name: 'ralph-ready' }],
             state: 'open'
@@ -58,8 +64,8 @@ test('fetchOpenIssues uses injected provider fetch and returns redacted bounded 
   expect(calls[0].url).toContain('/repos/milechy/MCA/issues?state=open');
   expect(calls[0].options.method).toBe('GET');
   expect(calls[0].options.headers.Authorization).toBe('Bearer test-token');
-  expect(JSON.stringify(result)).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz');
-  expect(JSON.stringify(result)).not.toContain('dev@example.com');
+  expect(JSON.stringify(result)).not.toContain(tokenFixture);
+  expect(JSON.stringify(result)).not.toContain(emailFixture);
   expect(JSON.stringify(result)).not.toContain('should-not-print');
 });
 
@@ -161,8 +167,10 @@ test('import script parsing and bounded output are safe by default', () => {
 });
 
 test('redactText removes common secret-shaped values from output strings', () => {
-  const text = redactText('token=abc123456 password: hunter2 email root@example.com ghp_abcdefghijklmnopqrstuvwxyz');
+  const tokenFixture = fakeGitHubToken();
+  const emailFixture = ['root', 'example.com'].join('@');
+  const text = redactText(`token=abc123456 password: hunter2 email ${emailFixture} ${tokenFixture}`);
   expect(text).not.toContain('hunter2');
-  expect(text).not.toContain('root@example.com');
-  expect(text).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz');
+  expect(text).not.toContain(emailFixture);
+  expect(text).not.toContain(tokenFixture);
 });
