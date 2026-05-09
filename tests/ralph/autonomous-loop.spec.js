@@ -98,7 +98,9 @@ test('tickAutonomousLoop waits at approval boundary until approval map says appr
 
 test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_RUNNING phase', () => {
   const rootDir = tmpRoot();
-  seedStory(rootDir, { status: 'running', current_phase: LOOP_PHASES.OPENCODE_RUNNING, current_plan_hash: 'sha256:abc', last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement loop test' }] } });
+  seedStory(rootDir, { status: 'running', current_phase: LOOP_PHASES.OPENCODE_RUNNING, current_plan_hash: 'sha256:abc' });
+  const update = updateStory('STORY-LOOP', { last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement loop test' }] } }, { rootDir, now: new Date('2026-05-08T13:02:30.000Z'), event: 'seed_ultraplan_fixture' });
+  expect(update.ok).toBe(true);
   const calls = [];
   const dispatcher = (input) => {
     calls.push(input);
