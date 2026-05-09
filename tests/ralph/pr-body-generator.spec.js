@@ -20,7 +20,8 @@ test('buildPrBody generates bounded PR body from story, UltraPlan, files, gates,
       title: 'Implement PR body generator',
       requirement: 'Generate a safe PR body for Ralph autonomous changes.',
       acceptance_criteria: ['Includes safety checklist.', 'Includes gate summary.'],
-      current_plan_hash: 'sha256:planhash'
+      current_plan_hash: 'sha256:planhash',
+      github_issue: { issue_number: 20, url: 'https://github.com/milechy/MCA/issues/20' }
     },
     ultraplan: {
       tasks: [
@@ -38,7 +39,7 @@ test('buildPrBody generates bounded PR body from story, UltraPlan, files, gates,
       ]
     },
     approvals: [
-      { approval_id: 'APR-DIFF-1', approval_type: 'diff', status: 'approved', approved_by: 'telegram:123', plan_hash: 'sha256:planhash', post_exec_diff_hash: 'sha256:diffhash' },
+      { approval_id: 'APR-DIFF-1', approval_type: 'diff', status: 'approved', requested_action: 'diff', approved_by: 'telegram:123', plan_hash: 'sha256:planhash', post_exec_diff_hash: 'sha256:diffhash' },
       'APR-COMMIT-1'
     ]
   });
@@ -49,6 +50,10 @@ test('buildPrBody generates bounded PR body from story, UltraPlan, files, gates,
     title: 'Implement PR body generator',
     plan_hash: 'sha256:planhash',
     diff_hash: 'sha256:diffhash',
+    body_length: expect.any(Number),
+    bounded_output: true,
+    raw_logs_included: false,
+    secrets_included: false,
     execution_connected: false,
     commands_executed: [],
     repository_files_modified: [],
@@ -56,9 +61,12 @@ test('buildPrBody generates bounded PR body from story, UltraPlan, files, gates,
   });
   expect(result.body).toContain('## Summary');
   expect(result.body).toContain('STORY-GH-12');
+  expect(result.body).toContain('GitHub issue: #20');
+  expect(result.body).toContain('https://github.com/milechy/MCA/issues/20');
   expect(result.body).toContain('`src/ralph/pr-body-generator.js`');
   expect(result.body).toContain('PASS ralph-tests');
   expect(result.body).toContain('APR-DIFF-1');
+  expect(result.body).toContain('action: diff');
   expect(result.body).toContain('sha256:planhash');
   expect(result.body).toContain('sha256:diffhash');
   expect(result.body).toContain('No raw logs or secrets included');
@@ -72,7 +80,8 @@ test('buildPrBody redacts secrets, token-shaped strings, and emails from output'
       story_id: 'STORY-SECRET',
       title: `Do not leak ${tokenFixture}`,
       requirement: `password: hunter2 Contact ${emailFixture}`,
-      acceptance_criteria: [`token=${tokenFixture}`]
+      acceptance_criteria: [`token=${tokenFixture}`],
+      github_issue: { issue_number: 20, url: `https://github.com/${tokenFixture}` }
     },
     changed_files: [`src/${tokenFixture}.js`],
     gates: { ok: false, gates: [{ id: 'post-secret-scan', ok: false, reason: `secret: hunter2 ${emailFixture}` }] },
@@ -114,6 +123,7 @@ test('buildPrBody handles missing optional sections with safe placeholders', () 
   expect(result.body).toContain('Approval records not provided');
   expect(result.plan_hash).toBe('not_available');
   expect(result.diff_hash).toBe('not_available');
+  expect(result.bounded_output).toBe(true);
 });
 
 test('redactText removes common secret-shaped values', () => {
