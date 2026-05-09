@@ -7,6 +7,7 @@ const REQUIRED_TRANSPORT_ENV = [
 ];
 
 const RUN_ALL_ENV = 'RALPH_TELEGRAM_RUN_ALL_ENABLED';
+const CHECK_ENV_ALLOW_MISSING_ENV = 'TELEGRAM_CHECK_ENV_ALLOW_MISSING';
 
 const PLACEHOLDER_VALUES = new Set([
   '<private bot token>',
@@ -53,12 +54,20 @@ function entryStatus(name, env = process.env) {
   return entry;
 }
 
+function allowMissing(env = process.env) {
+  return env[CHECK_ENV_ALLOW_MISSING_ENV] === 'true';
+}
+
 function status(env = process.env) {
   const transport = REQUIRED_TRANSPORT_ENV.map((name) => entryStatus(name, env));
+  const transportOk = transport.every((entry) => entry.present && entry.placeholder === false && entry.valid_format === true);
+  const missingAllowed = allowMissing(env);
 
   const runAllValue = env[RUN_ALL_ENV] || '';
   return {
-    ok: transport.every((entry) => entry.present && entry.placeholder === false && entry.valid_format === true),
+    ok: transportOk || missingAllowed,
+    transport_ok: transportOk,
+    allow_missing: missingAllowed,
     transport,
     run_all: {
       env: RUN_ALL_ENV,
@@ -78,4 +87,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { REQUIRED_TRANSPORT_ENV, RUN_ALL_ENV, PLACEHOLDER_VALUES, redact, present, isPlaceholder, hasNumericCsv, status };
+module.exports = { REQUIRED_TRANSPORT_ENV, RUN_ALL_ENV, CHECK_ENV_ALLOW_MISSING_ENV, PLACEHOLDER_VALUES, redact, present, isPlaceholder, hasNumericCsv, allowMissing, status };
