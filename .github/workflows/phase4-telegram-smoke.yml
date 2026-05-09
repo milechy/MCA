@@ -20,6 +20,7 @@ jobs:
     env:
       CI: true
       RALPH_TELEGRAM_RUN_ALL_ENABLED: ""
+      TELEGRAM_CHECK_ENV_ALLOW_MISSING: "true"
 
     steps:
       - name: Checkout

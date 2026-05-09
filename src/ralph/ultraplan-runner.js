@@ -131,19 +131,7 @@ function buildUltraPlan(story) {
   return { ...planWithoutHash, plan_hash: calculatePlanHash(planWithoutHash) };
 }
 
-function runUltraPlan(story) {
-  if (!story || !story.story_id) {
-    return {
-      ok: false,
-      stage: 'ultraplan_runner',
-      reason: 'story_required',
-      execution_connected: false,
-      commands_executed: [],
-      files_modified: [],
-      repository_files_modified: []
-    };
-  }
-  const plan = buildUltraPlan(story);
+function evaluatePlanControls(story, plan) {
   const riskSubject = riskSubjectForPlan(plan);
   const planningGraph = createPlanningGraph({
     story_id: story.story_id,
@@ -159,6 +147,11 @@ function runUltraPlan(story) {
   const controlDecision = productionPolicy.decision?.action && productionPolicy.decision.action !== 'auto_execute'
     ? productionPolicy.decision
     : decideControlAction(risk, { mode: plan.mode, target_env: targetEnv(riskSubject) });
+  return { riskSubject, planningGraph, risk, productionPolicy, controlDecision };
+}
+
+function buildUltraPlanRunnerResult(story, plan, { providerResult = null } = {}) {
+  const controls = evaluatePlanControls(story, plan);
   return {
     ok: true,
     stage: 'ultraplan_runner',
@@ -170,11 +163,14 @@ function runUltraPlan(story) {
     tasks: plan.tasks,
     acceptance_criteria: plan.acceptance_criteria,
     requested_paths: plan.requested_paths,
-    risk_subject: riskSubject,
-    planning_graph: planningGraph,
-    risk,
-    production_policy: productionPolicy,
-    control_decision: controlDecision,
+    risk_subject: controls.riskSubject,
+    planning_graph: controls.planningGraph,
+    risk: controls.risk,
+    production_policy: controls.productionPolicy,
+    control_decision: controls.controlDecision,
+    provider: providerResult ? providerResult.provider : 'deterministic',
+    fallback_used: providerResult ? Boolean(providerResult.fallback_used) : false,
+    fallback_reason: providerResult ? providerResult.fallback_reason || null : null,
     execution_connected: false,
     commands_executed: [],
     files_modified: [],
@@ -186,8 +182,33 @@ function runUltraPlan(story) {
     merge_allowed: false,
     deploy_allowed: false,
     migration_allowed: false,
-    next_action: controlDecision.action === 'auto_execute' ? 'dispatch_opencode_candidate_patch' : 'create_required_approval'
+    next_action: controls.controlDecision.action === 'auto_execute' ? 'dispatch_opencode_candidate_patch' : 'create_required_approval'
   };
+}
+
+function storyRequiredFailure() {
+  return {
+    ok: false,
+    stage: 'ultraplan_runner',
+    reason: 'story_required',
+    execution_connected: false,
+    commands_executed: [],
+    files_modified: [],
+    repository_files_modified: []
+  };
+}
+
+function runUltraPlan(story) {
+  if (!story || !story.story_id) return storyRequiredFailure();
+  return buildUltraPlanRunnerResult(story, buildUltraPlan(story));
+}
+
+async function runUltraPlanWithProvider(story, options = {}) {
+  if (!story || !story.story_id) return storyRequiredFailure();
+  const { generateUltraPlanWithProvider } = require('./ultraplan-provider');
+  const providerResult = await generateUltraPlanWithProvider(story, options);
+  if (!providerResult.ok || !providerResult.plan) return storyRequiredFailure();
+  return buildUltraPlanRunnerResult(story, providerResult.plan, { providerResult });
 }
 
 module.exports = {
@@ -197,5 +218,8 @@ module.exports = {
   buildTasks,
   riskSubjectForPlan,
   buildUltraPlan,
-  runUltraPlan
+  evaluatePlanControls,
+  buildUltraPlanRunnerResult,
+  runUltraPlan,
+  runUltraPlanWithProvider
 };
