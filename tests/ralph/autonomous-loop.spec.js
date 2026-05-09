@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createStory, readStory, updateStory, STORY_STATUSES } = require('../../src/ralph/story-queue');
-const { LOOP_PHASES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
+const { LOOP_PHASES, OPENCODE_RUNTIME_MODES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-autonomous-loop-'));
@@ -34,7 +34,7 @@ test('phase helpers map control decisions to bounded next steps', () => {
   expect(statusForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe(STORY_STATUSES.RUNNING);
   expect(statusForPhase(LOOP_PHASES.PLAN_APPROVAL_PENDING)).toBe(STORY_STATUSES.WAITING_APPROVAL);
   expect(statusForPhase(LOOP_PHASES.DONE)).toBe(STORY_STATUSES.COMPLETED);
-  expect(nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe('dispatch_opencode_candidate_patch');
+  expect(nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe('dispatch_opencode_candidate_patch_via_nemoclaw');
 });
 
 test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-ready phase without execution', () => {
@@ -50,6 +50,8 @@ test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-r
     story_id: 'STORY-LOOP',
     from_phase: 'PLAN',
     to_phase: 'OPENCODE_RUNNING',
+    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    mediator: 'nemoclaw',
     execution_connected: false,
     commands_executed: [],
     files_modified: [],
@@ -61,7 +63,7 @@ test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-r
     merge_allowed: false,
     deploy_allowed: false,
     migration_allowed: false,
-    next_action: 'dispatch_opencode_candidate_patch'
+    next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw'
   });
   expect(result.ultraplan.plan_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({
@@ -92,7 +94,7 @@ test('tickAutonomousLoop waits at approval boundary until approval map says appr
   expect(waiting).toMatchObject({ ok: true, reason: 'waiting_for_approval', to_phase: LOOP_PHASES.PLAN_APPROVAL_PENDING, approval_id: 'APR-LOOP', next_action: 'approve_or_modify_story_before_resume' });
 
   const resumed = tickAutonomousLoop({ rootDir, story_id: 'STORY-LOOP', approvals: { 'APR-LOOP': 'approved' }, now: new Date('2026-05-08T13:02:00.000Z') });
-  expect(resumed).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.PLAN_APPROVAL_PENDING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, approval_id: 'APR-LOOP', next_action: 'dispatch_opencode_candidate_patch' });
+  expect(resumed).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.PLAN_APPROVAL_PENDING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, approval_id: 'APR-LOOP', next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw' });
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING' });
 });
 
@@ -111,8 +113,10 @@ test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_R
       approval_id: input.approval_id,
       sandbox_root: input.sandbox_root,
       candidate_patch_path: `${input.sandbox_root}/candidate.patch`,
+      opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+      mediator: 'nemoclaw',
       execution_connected: true,
-      commands_executed: ['opencode run bounded task'],
+      commands_executed: ['nemoclaw opencode run-candidate-patch'],
       files_modified: [`${input.sandbox_root}/candidate.patch`],
       repository_files_modified: [],
       patch_preview: { ok: true, requires_approval: true }
@@ -129,8 +133,10 @@ test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_R
     approval_id: 'APR-OPENCODE-AUTO-LOOP',
     job_id: 'JOB-OPENCODE-AUTO-LOOP',
     candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch',
+    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    mediator: 'nemoclaw',
     execution_connected: true,
-    commands_executed: ['opencode run bounded task'],
+    commands_executed: ['nemoclaw opencode run-candidate-patch'],
     files_modified: ['.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch'],
     repository_files_modified: [],
     apply_allowed: false,
@@ -149,7 +155,9 @@ test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_R
     current_phase: 'PATCH_PREVIEW',
     current_approval_id: 'APR-OPENCODE-AUTO-LOOP',
     current_job_id: 'JOB-OPENCODE-AUTO-LOOP',
-    current_candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch'
+    current_candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch',
+    current_opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    current_opencode_mediator: 'nemoclaw'
   });
 });
 
@@ -159,7 +167,7 @@ test('tickAutonomousLoop keeps OPENCODE_RUNNING when OpenCode dispatch fails', (
   const result = tickAutonomousLoop({
     rootDir,
     story_id: 'STORY-LOOP',
-    opencode_dispatcher: (input) => ({ ok: false, reason: 'preflight_failed', job_id: input.job_id, approval_id: input.approval_id, sandbox_root: input.sandbox_root, execution_connected: false, commands_executed: [], files_modified: [] })
+    opencode_dispatcher: (input) => ({ ok: false, reason: 'preflight_failed', job_id: input.job_id, approval_id: input.approval_id, sandbox_root: input.sandbox_root, opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: 'nemoclaw', execution_connected: false, commands_executed: [], files_modified: [] })
   });
   expect(result).toMatchObject({ ok: false, reason: 'preflight_failed', from_phase: LOOP_PHASES.OPENCODE_RUNNING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, next_action: 'fix_opencode_dispatch_failure' });
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING', blocked_reason: 'preflight_failed' });
