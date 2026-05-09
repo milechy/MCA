@@ -89,7 +89,7 @@ test('GATES failure records bounded failure and enters FIX_LOOP', () => {
     gate_runner: () => ({ ok: false, stage: 'opencode_gates', reason: 'opencode_gates_failed', command: 'scripts/gates/run-all.sh', exit_code: 1, stdout_preview: 'failing test output', stderr_preview: 'stderr output', execution_connected: true, commands_executed: ['scripts/gates/run-all.sh'], files_modified: [], repository_files_modified: [] }),
     now: new Date('2026-05-08T15:04:00.000Z')
   });
-  expect(result).toMatchObject({ ok: false, reason: 'opencode_gates_failed', from_phase: LOOP_PHASES.GATES, to_phase: LOOP_PHASES.FIX_LOOP, next_action: 'dispatch_opencode_fix_candidate_patch' });
+  expect(result).toMatchObject({ ok: false, reason: 'opencode_gates_failed', from_phase: LOOP_PHASES.GATES, to_phase: LOOP_PHASES.FIX_LOOP, next_action: 'dispatch_opencode_fix_candidate_patch_via_nemoclaw' });
   const story = readStory(rootDir, 'STORY-GATES');
   expect(story).toMatchObject({ status: 'running', current_phase: 'FIX_LOOP', attempts: 1, blocked_reason: 'opencode_gates_failed' });
   expect(story.last_gate_failure_summary).toMatchObject({ reason: 'opencode_gates_failed', stdout_preview: 'failing test output' });
@@ -105,7 +105,7 @@ test('FIX_LOOP returns to OPENCODE_RUNNING with failure context in task', () => 
   expect(update.ok).toBe(true);
   expect(taskForStory(readStory(rootDir, 'STORY-GATES'))).toContain('Fix bounded gate failure');
   const result = tickAutonomousLoop({ rootDir, story_id: 'STORY-GATES', now: new Date('2026-05-08T15:05:00.000Z') });
-  expect(result).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.FIX_LOOP, to_phase: LOOP_PHASES.OPENCODE_RUNNING, next_action: 'dispatch_opencode_candidate_patch' });
+  expect(result).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.FIX_LOOP, to_phase: LOOP_PHASES.OPENCODE_RUNNING, next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw' });
   expect(readStory(rootDir, 'STORY-GATES')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING', current_job_id: null, current_candidate_patch_path: null });
 });
 

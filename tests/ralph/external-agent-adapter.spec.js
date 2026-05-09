@@ -135,7 +135,8 @@ test('runExternalAgentCandidatePatch blocks forbidden runtime command and args',
     sandbox_root: '.ralph/tmp/gateway/APR-1',
     requested_paths: ['tests/x.js'],
     task: 'add test',
-    explicit_runtime_approval: true
+    explicit_runtime_approval: true,
+    allow_dev_only_gateway: true
   };
   expect(runExternalAgentCandidatePatch({ ...base, command: 'bash' }).reason).toBe('gateway_runtime_command_not_allowed');
   expect(runExternalAgentCandidatePatch({ ...base, args: ['run', '--deploy'] }).reason).toBe('gateway_runtime_args_not_allowed');

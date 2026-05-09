@@ -3,10 +3,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
+const { runNemoClawOpenCodeCandidatePatch } = require('../../src/ralph/nemoclaw-opencode-gateway');
+const { GATEWAY_TYPES, gatewayIsDevOnly, devOnlyGatewayAllowed } = require('../../src/ralph/external-agent-gateway');
 
 const DEFAULT_SMOKE_PATH = 'tests/external-agent-generated.spec.js';
 const DEFAULT_SMOKE_TASK = `Create a minimal candidate patch that adds only ${DEFAULT_SMOKE_PATH}. The unified diff must touch exactly ${DEFAULT_SMOKE_PATH}. Do not apply, commit, push, create pull requests, deploy, migrate, or modify the repository working tree.`;
 const SUPPORTED_GATEWAYS = Object.freeze(['nemoclaw', 'openclaw']);
+
+function runtimeModeForGateway(gateway) {
+  return gateway === GATEWAY_TYPES.NEMOCLAW ? 'nemoclaw-mediated' : 'dev-only-non-nemoclaw';
+}
+
+function mediatorForGateway(gateway) {
+  return gateway === GATEWAY_TYPES.NEMOCLAW ? 'nemoclaw' : gateway;
+}
 
 function timestampId(prefix, date = new Date()) {
   const stamp = date.toISOString().slice(0, 19).replace(/[-:T]/g, '');
@@ -44,6 +54,9 @@ function skipped(reason, extra = {}) {
     reason,
     gateway_type: extra.gateway_type || null,
     gateway_name: extra.gateway_name || null,
+    opencode_runtime_mode: runtimeModeForGateway(extra.gateway_type),
+    mediator: mediatorForGateway(extra.gateway_type),
+    dev_only_gateway: gatewayIsDevOnly(extra.gateway_type),
     job_id: extra.job_id || null,
     approval_id: extra.approval_id || null,
     sandbox_root: extra.sandbox_root || null,
@@ -70,6 +83,9 @@ function blocked(reason, extra = {}) {
     reason,
     gateway_type: extra.gateway_type || null,
     gateway_name: extra.gateway_name || null,
+    opencode_runtime_mode: runtimeModeForGateway(extra.gateway_type),
+    mediator: mediatorForGateway(extra.gateway_type),
+    dev_only_gateway: gatewayIsDevOnly(extra.gateway_type),
     job_id: extra.job_id || null,
     approval_id: extra.approval_id || null,
     sandbox_root: extra.sandbox_root || null,
@@ -86,13 +102,46 @@ function blocked(reason, extra = {}) {
     merge_performed: false,
     deploy_performed: false,
     migration_performed: false,
-    next_action: 'fix_real_external_agent_smoke_failure'
+    next_action: reason === 'dev_only_gateway_requires_explicit_opt_in' ? 'rerun_with_explicit_dev_only_gateway_opt_in_or_use_nemoclaw' : 'fix_real_external_agent_smoke_failure'
   };
 }
 
 function normalizeGateway(value) {
   const gateway = String(value || 'nemoclaw').trim().toLowerCase();
   return SUPPORTED_GATEWAYS.includes(gateway) ? gateway : null;
+}
+
+function runGatewayCandidatePatch({ gateway, rootDir, approvalId, jobId, sandboxRoot, requested_paths, task, command, env, timeout_ms, allow_dev_only_gateway, now }) {
+  if (gateway === GATEWAY_TYPES.NEMOCLAW) {
+    return runNemoClawOpenCodeCandidatePatch({
+      rootDir,
+      approval_id: approvalId,
+      job_id: jobId,
+      sandbox_root: sandboxRoot,
+      requested_paths,
+      task,
+      command: command || 'nemoclaw',
+      env,
+      timeout_ms,
+      now
+    });
+  }
+  return runExternalAgentCandidatePatch({
+    rootDir,
+    approval_id: approvalId,
+    job_id: jobId,
+    gateway_type: gateway,
+    gateway_name: gateway,
+    sandbox_root: sandboxRoot,
+    requested_paths,
+    task,
+    command,
+    env,
+    timeout_ms,
+    explicit_runtime_approval: true,
+    allow_dev_only_gateway,
+    now
+  });
 }
 
 function runRealExternalAgentSmoke({
@@ -104,7 +153,8 @@ function runRealExternalAgentSmoke({
   now = () => new Date(),
   timeout_ms = 60000,
   command,
-  explicit_runtime_approval = process.env.RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED === 'true'
+  explicit_runtime_approval = process.env.RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED === 'true',
+  allow_dev_only_gateway = process.env.RALPH_EXTERNAL_AGENT_DEV_ONLY_GATEWAY_ALLOWED === 'true'
 } = {}) {
   const gateway = normalizeGateway(gateway_type);
   const date = now();
@@ -113,6 +163,9 @@ function runRealExternalAgentSmoke({
   const sandboxRoot = `.ralph/tmp/external-agent-smoke/${approvalId}`;
 
   if (!gateway) return blocked('gateway_type_not_allowed', { rootDir, gateway_type, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot });
+  if (gatewayIsDevOnly(gateway) && !devOnlyGatewayAllowed({ allow_dev_only_gateway, env })) {
+    return blocked('dev_only_gateway_requires_explicit_opt_in', { rootDir, gateway_type: gateway, gateway_name: gateway, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot });
+  }
   const runtimeCommand = command || gateway;
   if (!commandExists(runtimeCommand, { env })) {
     return skipped('runtime_not_installed', { gateway_type: gateway, gateway_name: gateway, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot });
@@ -126,21 +179,7 @@ function runRealExternalAgentSmoke({
   if (statusBefore === null) return blocked('git_status_failed', { rootDir, gateway_type: gateway, gateway_name: gateway, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, runtime_installed: true });
   if (statusBefore !== '') return blocked('working_tree_dirty_before_smoke', { rootDir, gateway_type: gateway, gateway_name: gateway, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, runtime_installed: true, working_tree_clean_before: false });
 
-  const run = runExternalAgentCandidatePatch({
-    rootDir,
-    approval_id: approvalId,
-    job_id: jobId,
-    gateway_type: gateway,
-    gateway_name: gateway,
-    sandbox_root: sandboxRoot,
-    requested_paths,
-    task,
-    command: runtimeCommand,
-    env,
-    timeout_ms,
-    explicit_runtime_approval: true,
-    now
-  });
+  const run = runGatewayCandidatePatch({ gateway, rootDir, approvalId, jobId, sandboxRoot, requested_paths, task, command: runtimeCommand, env, timeout_ms, allow_dev_only_gateway, now });
   gitRestoreRuntimeFiles(rootDir);
 
   const statusAfter = gitStatusShort(rootDir);
@@ -153,11 +192,14 @@ function runRealExternalAgentSmoke({
     reason: ok ? null : run.ok ? 'working_tree_dirty_after_smoke' : run.reason,
     gateway_type: gateway,
     gateway_name: gateway,
+    opencode_runtime_mode: runtimeModeForGateway(gateway),
+    mediator: mediatorForGateway(gateway),
+    dev_only_gateway: gatewayIsDevOnly(gateway),
     job_id: jobId,
     approval_id: approvalId,
     sandbox_root: sandboxRoot,
     candidate_patch_path: run.candidate_patch_path,
-    run,
+    run: { ...run, opencode_runtime_mode: runtimeModeForGateway(gateway), mediator: mediatorForGateway(gateway), dev_only_gateway: gatewayIsDevOnly(gateway) },
     runtime_installed: true,
     working_tree_clean_before: true,
     working_tree_clean_after: cleanAfter,
@@ -186,8 +228,11 @@ module.exports = {
   DEFAULT_SMOKE_PATH,
   DEFAULT_SMOKE_TASK,
   SUPPORTED_GATEWAYS,
+  runtimeModeForGateway,
+  mediatorForGateway,
   timestampId,
   gitStatusShort,
   commandExists,
+  runGatewayCandidatePatch,
   runRealExternalAgentSmoke
 };

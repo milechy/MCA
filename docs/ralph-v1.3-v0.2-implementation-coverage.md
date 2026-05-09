@@ -1,6 +1,6 @@
 # Ralph v1.3 / Detailed Design v0.2 Implementation Coverage
 
-This document tracks implementation coverage against the confirmed v1.3 requirements, v0.2 detailed design direction, and the later Issue #11 autonomous OpenCode development loop.
+This document tracks implementation coverage against the confirmed v1.3 requirements, v0.2 detailed design direction, and later autonomous OpenCode development loop work.
 
 ## Status Legend
 
@@ -9,6 +9,7 @@ DONE      implemented with tests and local gates green
 PARTIAL   implemented as a skeleton or bounded subset
 TODO      not implemented yet
 BLOCKED   intentionally not implemented without separate approval
+DEV-ONLY  intentionally available only behind explicit development opt-in
 ```
 
 ## Core Requirements Coverage
@@ -69,9 +70,16 @@ BLOCKED   intentionally not implemented without separate approval
 | OpenCode | autonomous candidate.patch dispatch from story loop | DONE | `src/ralph/autonomous-loop.js`, `tests/ralph/autonomous-loop.spec.js` |
 | OpenCode | patch preview / approval / apply / gates / commit / push / PR chain | DONE | `src/telegram/opencode-*.js` |
 | OpenCode | bounded status/abort/artifact retrieval | DONE | `src/telegram/opencode-jobs.js`, `src/telegram/opencode-artifacts.js` |
-| External Gateway | NemoClaw/OpenClaw boundary policy | DONE | `src/ralph/external-agent-gateway.js`, `docs/opencode-external-agent-gateway-boundary.md` |
+| NemoClaw Runtime | NemoClaw-mediated OpenCode default dispatch | DONE | `src/ralph/autonomous-loop.js`, `src/ralph/nemoclaw-opencode-gateway.js`, `tests/ralph/nemoclaw-opencode-gateway.spec.js` |
+| NemoClaw Runtime | candidate.patch-only NemoClaw policy | DONE | `src/ralph/nemoclaw-policy.js`, `tests/ralph/nemoclaw-opencode-gateway.spec.js` |
+| NemoClaw Runtime | apply/commit/push/PR/deploy/migration/merge/shell escalation denied | DONE | `src/ralph/nemoclaw-policy.js`, `tests/ralph/nemoclaw-opencode-gateway.spec.js` |
+| NemoClaw Runtime | raw logs and secret display/persistence denied/redacted | DONE | `src/ralph/nemoclaw-policy.js`, `src/ralph/nemoclaw-opencode-gateway.js`, `tests/ralph/nemoclaw-opencode-gateway.spec.js` |
+| NemoClaw Runtime | runtime-not-installed behavior | DONE | `src/ralph/nemoclaw-opencode-gateway.js`, `tests/ralph/nemoclaw-opencode-gateway.spec.js` |
+| NemoClaw Runtime | runtime smoke reports mediated/direct-dev-only mode | DONE | `scripts/ralph/real-external-agent-smoke.js`, `tests/ralph/external-agent-dev-only-policy.spec.js` |
+| External Gateway | Generic external gateway boundary policy | DONE | `src/ralph/external-agent-gateway.js`, `docs/opencode-external-agent-gateway-boundary.md` |
 | External Gateway | NemoClaw/OpenClaw runtime approval record | DONE | GitHub issue `#10` operator approval comment |
-| External Gateway | NemoClaw/OpenClaw candidate.patch-only adapter | DONE | `src/ralph/external-agent-adapter.js`, `tests/ralph/external-agent-adapter.spec.js` |
+| External Gateway | NemoClaw candidate.patch-only adapter metadata | DONE | `src/ralph/external-agent-adapter.js`, `tests/ralph/external-agent-adapter.spec.js` |
+| External Gateway | OpenClaw/generic non-NemoClaw paths require explicit dev-only opt-in | DEV-ONLY | `src/ralph/external-agent-gateway.js`, `tests/ralph/external-agent-dev-only-policy.spec.js` |
 | External Gateway | External agent job status/abort records | DONE | `src/ralph/external-agent-jobs.js`, `tests/ralph/external-agent-jobs.spec.js` |
 | External Gateway | External agent bounded artifact retrieval | DONE | `src/ralph/external-agent-artifacts.js`, `tests/ralph/external-agent-artifacts.spec.js` |
 | External Gateway | Optional real runtime smoke | DONE | `scripts/ralph/real-external-agent-smoke.js`, `tests/ralph/real-external-agent-smoke.spec.js`, `npm run ralph:real-external-agent-smoke` |
@@ -86,7 +94,7 @@ BLOCKED   intentionally not implemented without separate approval
 DONE  Phase A: story-queue + deterministic UltraPlan object
 DONE  Phase B: autonomous-loop single-step runner
 DONE  Phase C: Telegram /ralph-start and /ralph-loop-status
-DONE  Phase D: OpenCode dispatch integration
+DONE  Phase D: NemoClaw-mediated OpenCode candidate.patch dispatch integration
 DONE  Phase E: gate/fix/retry loop
 DONE  Phase F: approval wait/resume integration
 DONE  Telegram /ralph-tick
@@ -101,7 +109,20 @@ Current autonomous UX:
 → approval boundary
 → /approve APR-*
 → /ralph-run-until-blocked STORY-*
-→ candidate.patch / diff / gates / fix loop / commit-push-PR approval boundary
+→ NemoClaw-mediated candidate.patch / diff / gates / fix loop / commit-push-PR approval boundary
+```
+
+## Issue #14 NemoClaw-Mediated OpenCode Runtime Coverage
+
+```text
+DONE  Ralph autonomous loop dispatches OpenCode through NemoClaw gateway by default
+DONE  Direct/non-NemoClaw execution path blocked by default or marked dev-only
+DONE  NemoClaw gateway enforces candidate.patch-only output
+DONE  NemoClaw gateway denies apply/commit/push/PR/deploy/migration/merge/shell escalation
+DONE  NemoClaw gateway blocks raw logs and secret display/persistence via bounded redaction
+DONE  Runtime smoke reports opencode_runtime_mode and mediator
+DONE  Tests cover allowed candidate.patch generation, forbidden commands, secret redaction, policy failure, and runtime-not-installed behavior
+DONE  All outputs are bounded/redacted
 ```
 
 ## Previously Identified Gaps Now Closed
@@ -113,7 +134,8 @@ DONE  production-change-policy.js into execution-preflight
 DONE  secrets-policy.js into runtime env injection preflight
 DONE  Telegram config loading through runtime env injection preflight
 DONE  NemoClaw/OpenClaw explicit runtime approval recorded in #10
-DONE  NemoClaw/OpenClaw candidate.patch-only adapter
+DONE  NemoClaw-mediated OpenCode runtime default for autonomous loop
+DONE  NemoClaw candidate.patch-only policy and gateway
 DONE  External agent job status/abort records
 DONE  External agent bounded candidate.patch/stdout/stderr artifact retrieval
 DONE  Telegram read-only planning graph command
@@ -127,6 +149,7 @@ DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
 ```text
 None for the confirmed v1.3 / detailed design v0.2 MVP scope.
 None for Issue #11 MVP acceptance criteria.
+None for Issue #14 NemoClaw-mediated OpenCode runtime acceptance criteria.
 ```
 
 ## Still Blocked / Explicit Non-goals
@@ -138,6 +161,7 @@ merge from Telegram
 unrestricted shell
 raw logs
 agent-initiated apply/commit/push/PR without the existing approval chain
+non-NemoClaw OpenCode runtime as a default execution path
 ```
 
 ## Current Green Evidence

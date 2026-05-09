@@ -2,10 +2,15 @@ const { STORY_STATUSES, readStory, updateStory, summarizeStory } = require('./st
 const { runUltraPlan } = require('./ultraplan-runner');
 const { buildRepairDecision, appendRepairHistory } = require('./repair-strategy');
 const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
+const { runNemoClawOpenCodeCandidatePatch } = require('./nemoclaw-opencode-gateway');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
 
 const AUTONOMOUS_LOOP_VERSION = 'autonomous_loop_v0_1';
+const OPENCODE_RUNTIME_MODES = Object.freeze({
+  NEMOCLAW: 'nemoclaw-mediated',
+  DIRECT_DEV_ONLY: 'direct-dev-only'
+});
 const LOOP_PHASES = Object.freeze({
   PLAN: 'PLAN',
   PLAN_APPROVAL_PENDING: 'PLAN_APPROVAL_PENDING',
@@ -41,6 +46,8 @@ function baseResult(overrides = {}) {
     approval_id: null,
     job_id: null,
     candidate_patch_path: null,
+    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    mediator: 'nemoclaw',
     execution_connected: false,
     commands_executed: [],
     files_modified: [],
@@ -128,7 +135,7 @@ function nextActionForPhase(phase) {
     case LOOP_PHASES.DIFF_APPROVAL_PENDING:
       return 'request_diff_approval_then_resume';
     case LOOP_PHASES.OPENCODE_RUNNING:
-      return 'dispatch_opencode_candidate_patch';
+      return 'dispatch_opencode_candidate_patch_via_nemoclaw';
     case LOOP_PHASES.PATCH_PREVIEW:
       return 'preview_candidate_patch_and_decide_apply';
     case LOOP_PHASES.APPLY:
@@ -136,7 +143,7 @@ function nextActionForPhase(phase) {
     case LOOP_PHASES.GATES:
       return 'run_gates_for_applied_patch';
     case LOOP_PHASES.FIX_LOOP:
-      return 'dispatch_opencode_fix_candidate_patch';
+      return 'dispatch_opencode_fix_candidate_patch_via_nemoclaw';
     case LOOP_PHASES.COMMIT_APPROVAL_PENDING:
       return 'request_commit_approval_then_resume';
     case LOOP_PHASES.PUSH_APPROVAL_PENDING:
@@ -231,16 +238,38 @@ function buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok }
   });
 }
 
-function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms }) {
+function directOpenCodeDevOnlyAllowed(env = process.env) {
+  return env.RALPH_OPENCODE_DIRECT_DEV_ONLY === 'true';
+}
+
+function buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }) {
+  return ({ approval_id, job_id, sandbox_root, task, requested_paths }) => {
+    const preflight = buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok });
+    if (!preflight.ok) return { ...preflight, job_id, approval_id, sandbox_root, task_preview: task, candidate_patch_path: null, patch_preview: null, opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: 'nemoclaw' };
+    if (directOpenCodeDevOnlyAllowed(env)) {
+      return { ...runOpenCodeCandidatePatch(preflight, { rootDir, task, command: opencode_command, args: opencode_args, env: { ...env, [OPENCODE_SANDBOX_ENV]: 'true' }, timeout_ms, now: () => now }), opencode_runtime_mode: OPENCODE_RUNTIME_MODES.DIRECT_DEV_ONLY, mediator: 'none', direct_dev_only: true };
+    }
+    return runNemoClawOpenCodeCandidatePatch({
+      rootDir,
+      approval_id,
+      job_id,
+      sandbox_root,
+      requested_paths,
+      task,
+      env,
+      timeout_ms,
+      spawn: nemclaw_spawn,
+      now: () => now
+    });
+  };
+}
+
+function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }) {
   const approvalId = story.current_approval_id || defaultApprovalId(story);
   const jobId = story.current_job_id || defaultJobId(story);
   const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
   const task = taskForStory(story);
-  const dispatcher = opencode_dispatcher || (() => {
-    const preflight = buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok });
-    if (!preflight.ok) return { ...preflight, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, task_preview: task, candidate_patch_path: null, patch_preview: null };
-    return runOpenCodeCandidatePatch(preflight, { rootDir, task, command: opencode_command, args: opencode_args, env: { ...env, [OPENCODE_SANDBOX_ENV]: 'true' }, timeout_ms, now: () => now });
-  });
+  const dispatcher = opencode_dispatcher || buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn });
   const opencode = dispatcher({ rootDir, story, approval_id: approvalId, job_id: jobId, sandbox_root: sandboxRoot, task, requested_paths: story.requested_paths || [], now });
   const ok = opencode.ok === true;
   const nextPhase = ok ? LOOP_PHASES.PATCH_PREVIEW : LOOP_PHASES.OPENCODE_RUNNING;
@@ -249,6 +278,8 @@ function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, p
     current_job_id: opencode.job_id || jobId,
     current_sandbox_root: sandboxRoot,
     current_candidate_patch_path: opencode.candidate_patch_path || null,
+    current_opencode_runtime_mode: opencode.opencode_runtime_mode || OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    current_opencode_mediator: opencode.mediator || 'nemoclaw',
     blocked_reason: ok ? null : opencode.reason || 'opencode_dispatch_failed'
   }, { rootDir, now, event: ok ? 'opencode_candidate_patch_created' : 'opencode_dispatch_failed' });
 
@@ -263,6 +294,8 @@ function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, p
     approval_id: approvalId,
     job_id: opencode.job_id || jobId,
     candidate_patch_path: opencode.candidate_patch_path || null,
+    opencode_runtime_mode: opencode.opencode_runtime_mode || OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    mediator: opencode.mediator || 'nemoclaw',
     execution_connected: opencode.execution_connected === true,
     commands_executed: opencode.commands_executed || [],
     files_modified: opencode.files_modified || [],
@@ -332,7 +365,7 @@ function advanceTerminalPhase(story) {
   return baseResult({ ok: true, reason: 'story_terminal', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), next_action: nextActionForPhase(story.current_phase) });
 }
 
-function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms } = {}) {
+function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms, nemclaw_spawn } = {}) {
   if (!story_id) return baseResult({ reason: 'story_id_required' });
   const story = readStory(rootDir, story_id);
   if (!story) return baseResult({ reason: 'story_not_found', story_id });
@@ -350,7 +383,7 @@ function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(
     case LOOP_PHASES.PR_APPROVAL_PENDING:
       return advanceWaitingApprovalPhase(story, { rootDir, now, approvals });
     case LOOP_PHASES.OPENCODE_RUNNING:
-      return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms });
+      return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn });
     case LOOP_PHASES.PATCH_PREVIEW:
       return advancePatchPreviewPhase(story, { rootDir, now });
     case LOOP_PHASES.APPLY:
@@ -372,6 +405,7 @@ function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reaso
 
 module.exports = {
   AUTONOMOUS_LOOP_VERSION,
+  OPENCODE_RUNTIME_MODES,
   LOOP_PHASES,
   boundedFailureSummary,
   defaultApprovalId,
@@ -382,6 +416,8 @@ module.exports = {
   statusForPhase,
   nextActionForPhase,
   buildOpenCodePreflight,
+  directOpenCodeDevOnlyAllowed,
+  buildDefaultOpenCodeDispatcher,
   tickAutonomousLoop,
   pauseStory
 };

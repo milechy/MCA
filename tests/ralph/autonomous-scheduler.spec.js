@@ -77,6 +77,6 @@ test('schedulerTick advances selected stories without mutating repository direct
     repository_files_modified: [],
     next_action: 'continue_scheduler_or_review_blocked_stories'
   });
-  expect(result.results[0].ticks[0]).toMatchObject({ story_id: 'STORY-SCHED', from_phase: 'PLAN', to_phase: 'OPENCODE_RUNNING', next_action: 'dispatch_opencode_candidate_patch' });
+  expect(result.results[0].ticks[0]).toMatchObject({ story_id: 'STORY-SCHED', from_phase: 'PLAN', to_phase: 'OPENCODE_RUNNING', next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw' });
   expect(readStory(rootDir, 'STORY-SCHED')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING' });
 });
