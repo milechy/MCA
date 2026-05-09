@@ -80,7 +80,9 @@ test('GATES success advances to commit approval boundary', () => {
 
 test('GATES failure records bounded failure and enters FIX_LOOP', () => {
   const rootDir = tmpRoot();
-  seed(rootDir, { status: 'running', current_phase: LOOP_PHASES.GATES, attempts: 0, max_attempts: 3, last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement original task' }] } });
+  seed(rootDir, { status: 'running', current_phase: LOOP_PHASES.GATES, attempts: 0, max_attempts: 3 });
+  const update = updateStory('STORY-GATES', { last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement original task' }] } }, { rootDir, now: new Date('2026-05-08T15:03:30.000Z'), event: 'seed_ultraplan_fixture' });
+  expect(update.ok).toBe(true);
   const result = tickAutonomousLoop({
     rootDir,
     story_id: 'STORY-GATES',
@@ -95,7 +97,12 @@ test('GATES failure records bounded failure and enters FIX_LOOP', () => {
 
 test('FIX_LOOP returns to OPENCODE_RUNNING with failure context in task', () => {
   const rootDir = tmpRoot();
-  seed(rootDir, { status: 'running', current_phase: LOOP_PHASES.FIX_LOOP, last_gate_failure_summary: { reason: 'opencode_gates_failed', stdout_preview: 'failing test output' }, last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement original task' }] } });
+  seed(rootDir, { status: 'running', current_phase: LOOP_PHASES.FIX_LOOP });
+  const update = updateStory('STORY-GATES', {
+    last_gate_failure_summary: { reason: 'opencode_gates_failed', stdout_preview: 'failing test output' },
+    last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement original task' }] }
+  }, { rootDir, now: new Date('2026-05-08T15:04:30.000Z'), event: 'seed_fix_loop_fixture' });
+  expect(update.ok).toBe(true);
   expect(taskForStory(readStory(rootDir, 'STORY-GATES'))).toContain('Fix bounded gate failure');
   const result = tickAutonomousLoop({ rootDir, story_id: 'STORY-GATES', now: new Date('2026-05-08T15:05:00.000Z') });
   expect(result).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.FIX_LOOP, to_phase: LOOP_PHASES.OPENCODE_RUNNING, next_action: 'dispatch_opencode_candidate_patch' });
