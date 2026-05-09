@@ -57,7 +57,15 @@ DEV-ONLY  intentionally available only behind explicit development opt-in
 | LangGraph | Ralph CLI command | DONE | `node src/ralph/cli.js plan <story.json>`, `tests/ralph/cli-plan.spec.js` |
 | LangGraph | Telegram read-only planning graph command | DONE | `/ralph-plan`, `tests/telegram/handlers.spec.js` |
 | LangGraph | non-executing graph with plan/risk/decision/route | DONE | `src/ralph/langgraph-planning-layer.js` |
+| Provider Roles | Gemini planning provider config | DONE | `src/ralph/provider-config.js`, `tests/ralph/provider-config.spec.js` |
+| Provider Roles | Kimi execution provider config through NemoClaw | DONE | `src/ralph/provider-config.js`, `src/ralph/autonomous-loop.js`, `tests/ralph/provider-config.spec.js`, `tests/ralph/autonomous-loop.spec.js` |
+| Provider Roles | provider secrets redacted and never logged raw | DONE | `src/ralph/provider-config.js`, `tests/ralph/provider-config.spec.js`, `tests/ralph/autonomous-loop.spec.js` |
+| Provider Roles | legacy `llm` maps to Gemini planning role | DONE | `src/ralph/provider-config.js`, `src/ralph/ultraplan-provider.js`, `tests/ralph/provider-config.spec.js`, `tests/ralph/ultraplan-provider.spec.js` |
+| Provider Roles | Kimi execution cannot override Ralph/NemoClaw policies | DONE | `src/ralph/provider-config.js`, `tests/ralph/provider-config.spec.js` |
 | UltraPlan | deterministic UltraPlan-style plan object | DONE | `src/ralph/ultraplan-runner.js`, `tests/ralph/ultraplan-runner.spec.js` |
+| UltraPlan | optional Gemini planning provider with deterministic fallback | DONE | `src/ralph/ultraplan-provider.js`, `tests/ralph/ultraplan-provider.spec.js` |
+| UltraPlan | Gemini plan schema validation / canonicalization / hash | DONE | `src/ralph/ultraplan-schema.js`, `src/ralph/ultraplan-provider.js`, `tests/ralph/ultraplan-provider.spec.js` |
+| UltraPlan | malformed/missing-env/provider-failure fallback | DONE | `src/ralph/ultraplan-provider.js`, `tests/ralph/ultraplan-provider.spec.js` |
 | UltraPlan | story queue persistence | DONE | `src/ralph/story-queue.js`, `tests/ralph/story-queue.spec.js` |
 | UltraPlan | autonomous single-step loop | DONE | `src/ralph/autonomous-loop.js`, `tests/ralph/autonomous-loop.spec.js` |
 | UltraPlan | Telegram `/ralph-start` | DONE | `src/telegram/autonomous-command.js`, `tests/telegram/autonomous-command.spec.js` |
@@ -125,6 +133,21 @@ DONE  Tests cover allowed candidate.patch generation, forbidden commands, secret
 DONE  All outputs are bounded/redacted
 ```
 
+## Issue #15 Gemini/Kimi Role Separation Coverage
+
+```text
+DONE  Explicit planning provider abstraction for Gemini
+DONE  Explicit execution provider config for Kimi/OpenCode
+DONE  Deterministic UltraPlan remains default fallback
+DONE  Gemini-generated plan is schema validated, canonicalized, and hashed
+DONE  Malformed Gemini output falls back safely without execution
+DONE  Missing Gemini env falls back safely without execution
+DONE  Kimi execution role cannot override Ralph/NemoClaw policies
+DONE  Provider config never logs raw API keys or secret values
+DONE  Autonomous loop exposes redacted provider role metadata
+DONE  Tests cover provider selection, fallback, malformed output, missing env, and role boundaries
+```
+
 ## Previously Identified Gaps Now Closed
 
 ```text
@@ -142,6 +165,7 @@ DONE  Telegram read-only planning graph command
 DONE  Telegram read-only gate manifest command
 DONE  Optional real external agent smoke for installed runtime
 DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
+DONE  Gemini/Kimi provider role separation for Issue #15
 ```
 
 ## Remaining Implementation Gaps
@@ -150,6 +174,7 @@ DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
 None for the confirmed v1.3 / detailed design v0.2 MVP scope.
 None for Issue #11 MVP acceptance criteria.
 None for Issue #14 NemoClaw-mediated OpenCode runtime acceptance criteria.
+None for Issue #15 Gemini/Kimi provider role separation acceptance criteria.
 ```
 
 ## Still Blocked / Explicit Non-goals
@@ -162,6 +187,8 @@ unrestricted shell
 raw logs
 agent-initiated apply/commit/push/PR without the existing approval chain
 non-NemoClaw OpenCode runtime as a default execution path
+model-driven policy bypass
+model access to raw secrets
 ```
 
 ## Current Green Evidence
