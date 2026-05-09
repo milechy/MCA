@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createStory, readStory, updateStory, STORY_STATUSES } = require('../../src/ralph/story-queue');
-const { LOOP_PHASES, phaseForUltraPlan, statusForPhase, nextActionForPhase, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
+const { LOOP_PHASES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-autonomous-loop-'));
@@ -24,6 +24,9 @@ function seedStory(rootDir, overrides = {}) {
 }
 
 test('phase helpers map control decisions to bounded next steps', () => {
+  expect(defaultApprovalId({ story_id: 'STORY-LOOP' })).toBe('APR-OPENCODE-AUTO-LOOP');
+  expect(defaultJobId({ story_id: 'STORY-LOOP' })).toBe('JOB-OPENCODE-AUTO-LOOP');
+  expect(defaultSandboxRoot({ story_id: 'STORY-LOOP' })).toBe('.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP');
   expect(phaseForUltraPlan({ control_decision: { action: 'auto_execute' } })).toBe(LOOP_PHASES.OPENCODE_RUNNING);
   expect(phaseForUltraPlan({ control_decision: { action: 'require_plan_approval' } })).toBe(LOOP_PHASES.PLAN_APPROVAL_PENDING);
   expect(phaseForUltraPlan({ control_decision: { action: 'require_diff_approval' } })).toBe(LOOP_PHASES.DIFF_APPROVAL_PENDING);
@@ -93,20 +96,71 @@ test('tickAutonomousLoop waits at approval boundary until approval map says appr
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING' });
 });
 
-test('tickAutonomousLoop reports running OpenCode phase as not connected until later phase', () => {
+test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_RUNNING phase', () => {
   const rootDir = tmpRoot();
-  seedStory(rootDir, { status: 'running', current_phase: LOOP_PHASES.OPENCODE_RUNNING });
+  seedStory(rootDir, { status: 'running', current_phase: LOOP_PHASES.OPENCODE_RUNNING, current_plan_hash: 'sha256:abc', last_ultraplan: { tasks: [{ agent: 'opencode', objective: 'Implement loop test' }] } });
+  const calls = [];
+  const dispatcher = (input) => {
+    calls.push(input);
+    return {
+      ok: true,
+      reason: null,
+      job_id: input.job_id,
+      approval_id: input.approval_id,
+      sandbox_root: input.sandbox_root,
+      candidate_patch_path: `${input.sandbox_root}/candidate.patch`,
+      execution_connected: true,
+      commands_executed: ['opencode run bounded task'],
+      files_modified: [`${input.sandbox_root}/candidate.patch`],
+      repository_files_modified: [],
+      patch_preview: { ok: true, requires_approval: true }
+    };
+  };
 
-  const result = tickAutonomousLoop({ rootDir, story_id: 'STORY-LOOP' });
+  const result = tickAutonomousLoop({ rootDir, story_id: 'STORY-LOOP', now: new Date('2026-05-08T13:03:00.000Z'), opencode_dispatcher: dispatcher });
+
   expect(result).toMatchObject({
     ok: true,
-    reason: 'opencode_dispatch_not_connected_yet',
+    reason: null,
     from_phase: LOOP_PHASES.OPENCODE_RUNNING,
-    to_phase: LOOP_PHASES.OPENCODE_RUNNING,
-    execution_connected: false,
-    commands_executed: [],
-    next_action: 'phase_c_or_d_connect_opencode_dispatch'
+    to_phase: LOOP_PHASES.PATCH_PREVIEW,
+    approval_id: 'APR-OPENCODE-AUTO-LOOP',
+    job_id: 'JOB-OPENCODE-AUTO-LOOP',
+    candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch',
+    execution_connected: true,
+    commands_executed: ['opencode run bounded task'],
+    files_modified: ['.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch'],
+    repository_files_modified: [],
+    apply_allowed: false,
+    commit_allowed: false,
+    push_allowed: false,
+    pr_allowed: false,
+    merge_allowed: false,
+    deploy_allowed: false,
+    migration_allowed: false,
+    next_action: 'preview_candidate_patch_and_decide_apply'
   });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ task: 'Implement loop test', requested_paths: ['tests/ralph/autonomous-loop.spec.js'] });
+  expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({
+    status: 'running',
+    current_phase: 'PATCH_PREVIEW',
+    current_approval_id: 'APR-OPENCODE-AUTO-LOOP',
+    current_job_id: 'JOB-OPENCODE-AUTO-LOOP',
+    current_candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch'
+  });
+});
+
+test('tickAutonomousLoop keeps OPENCODE_RUNNING when OpenCode dispatch fails', () => {
+  const rootDir = tmpRoot();
+  seedStory(rootDir, { status: 'running', current_phase: LOOP_PHASES.OPENCODE_RUNNING });
+  const result = tickAutonomousLoop({
+    rootDir,
+    story_id: 'STORY-LOOP',
+    opencode_dispatcher: (input) => ({ ok: false, reason: 'preflight_failed', job_id: input.job_id, approval_id: input.approval_id, sandbox_root: input.sandbox_root, execution_connected: false, commands_executed: [], files_modified: [] })
+  });
+  expect(result).toMatchObject({ ok: false, reason: 'preflight_failed', from_phase: LOOP_PHASES.OPENCODE_RUNNING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, next_action: 'fix_opencode_dispatch_failure' });
+  expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING', blocked_reason: 'preflight_failed' });
 });
 
 test('tickAutonomousLoop handles missing and terminal stories safely', () => {
