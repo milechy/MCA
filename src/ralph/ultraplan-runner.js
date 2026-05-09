@@ -64,6 +64,28 @@ function buildTasks(story, requestedPaths) {
   ];
 }
 
+function riskSubjectForPlan(plan) {
+  return {
+    story_id: plan.story_id,
+    title: plan.title,
+    requirement: plan.requirement,
+    objective: plan.objective,
+    mode: plan.mode,
+    target_env: plan.target_env,
+    requested_paths: plan.requested_paths,
+    planned_files: plan.planned_files,
+    acceptance_criteria: plan.acceptance_criteria,
+    tasks: plan.tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      objective: task.objective,
+      requested_paths: task.requested_paths,
+      expected_output: task.expected_output,
+      agent: task.agent
+    }))
+  };
+}
+
 function buildUltraPlan(story) {
   const requirement = oneLine(story.requirement || story.objective || story.prompt, 4000);
   const requestedPaths = Array.isArray(story.requested_paths) && story.requested_paths.length > 0
@@ -122,6 +144,7 @@ function runUltraPlan(story) {
     };
   }
   const plan = buildUltraPlan(story);
+  const riskSubject = riskSubjectForPlan(plan);
   const planningGraph = createPlanningGraph({
     story_id: story.story_id,
     title: plan.title,
@@ -129,13 +152,13 @@ function runUltraPlan(story) {
     target_env: plan.target_env,
     mode: plan.mode,
     requested_paths: plan.requested_paths,
-    constraints: plan.forbidden_actions
+    constraints: []
   });
-  const risk = evaluateRisk(plan);
-  const productionPolicy = decideProductionChangePolicy(plan, { mode: plan.mode });
+  const risk = evaluateRisk(riskSubject);
+  const productionPolicy = decideProductionChangePolicy(riskSubject, { mode: plan.mode });
   const controlDecision = productionPolicy.decision?.action && productionPolicy.decision.action !== 'auto_execute'
     ? productionPolicy.decision
-    : decideControlAction(risk, { mode: plan.mode, target_env: targetEnv(plan) });
+    : decideControlAction(risk, { mode: plan.mode, target_env: targetEnv(riskSubject) });
   return {
     ok: true,
     stage: 'ultraplan_runner',
@@ -147,6 +170,7 @@ function runUltraPlan(story) {
     tasks: plan.tasks,
     acceptance_criteria: plan.acceptance_criteria,
     requested_paths: plan.requested_paths,
+    risk_subject: riskSubject,
     planning_graph: planningGraph,
     risk,
     production_policy: productionPolicy,
@@ -171,6 +195,7 @@ module.exports = {
   inferRequestedPaths,
   buildAcceptanceCriteria,
   buildTasks,
+  riskSubjectForPlan,
   buildUltraPlan,
   runUltraPlan
 };
