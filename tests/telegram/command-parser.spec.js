@@ -10,6 +10,16 @@ test('parses basic Telegram commands', () => {
   expect(parseTelegramCommand('/confirm MODE-123')).toMatchObject({ type: 'confirm', args: ['MODE-123'] });
 });
 
+test('parses autonomous Ralph loop commands', () => {
+  expect(parseTelegramCommand('/ralph-start add customer search')).toMatchObject({ type: 'ralph_start', args: ['add', 'customer', 'search'] });
+  expect(parseTelegramCommand('/ralph-loop-status')).toMatchObject({ type: 'ralph_loop_status', args: [] });
+  expect(parseTelegramCommand('/ralph-loop-status STORY-1')).toMatchObject({ type: 'ralph_loop_status', args: ['STORY-1'] });
+  expect(parseTelegramCommand('/ralph-pause STORY-1')).toMatchObject({ type: 'ralph_pause', args: ['STORY-1'] });
+  expect(parseTelegramCommand('/ralph-resume STORY-1 APR-1')).toMatchObject({ type: 'ralph_resume', args: ['STORY-1', 'APR-1'] });
+  expect(parseTelegramCommand('/ralph-stop STORY-1')).toMatchObject({ type: 'ralph_stop', args: ['STORY-1'] });
+  expect(parseTelegramCommand('/ralph-artifact JOB-1 stdout')).toMatchObject({ type: 'ralph_artifact', args: ['JOB-1', 'stdout'] });
+});
+
 test('parses read-only Ralph planning and gate manifest commands', () => {
   expect(parseTelegramCommand('/ralph-plan STORY-1 staging approval add tests')).toMatchObject({ type: 'ralph_plan', args: ['STORY-1', 'staging', 'approval', 'add', 'tests'] });
   expect(parseTelegramCommand('/ralph-gate-manifest')).toMatchObject({ type: 'ralph_gate_manifest', args: [] });
