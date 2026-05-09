@@ -35,6 +35,10 @@ DEV-ONLY  intentionally available only behind explicit development opt-in
 | Mode | `/mode fullauto` admin/confirm/expiry | DONE | `src/ralph/mode-manager.js`, Telegram handler coverage |
 | Hashing | canonical JSON plan hash | DONE | `src/ralph/langgraph-planning-layer.js`, `src/ralph/ultraplan-runner.js`, existing approval manager hash coverage |
 | Hashing | diff approval separation | DONE | `src/ralph/state-machine.js`, `src/ralph/production-change-policy.js`, OpenCode patch approval flow, autonomous `DIFF_APPROVAL_PENDING` |
+| Dashboard | Read-only dashboard JSON and Markdown | DONE | `src/ralph/dashboard.js`, `scripts/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
+| Dashboard | Group active, queued, waiting approval, failed, stopped, completed stories | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
+| Dashboard | Include approvals, jobs, gates, hashes, next actions, bounded audit | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
+| Dashboard | Redact secrets/raw logs and bound output | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
 | Gate Runner | ordered gate manifest | DONE | `src/ralph/gate-runner.js` |
 | Gate Runner | Ralph CLI command | DONE | `node src/ralph/cli.js gate-runner`, `tests/ralph/cli-gate-runner.spec.js` |
 | Gate Runner | Telegram read-only manifest command | DONE | `/ralph-gate-manifest`, `tests/telegram/handlers.spec.js` |
@@ -148,6 +152,18 @@ DONE  Autonomous loop exposes redacted provider role metadata
 DONE  Tests cover provider selection, fallback, malformed output, missing env, and role boundaries
 ```
 
+## Issue #19 Dashboard / Status Report Coverage
+
+```text
+DONE  Generate dashboard JSON and Markdown from stories, approvals, jobs, gates, and audit summaries
+DONE  Include active, queued, waiting approval, failed/escalated, stopped, and completed stories
+DONE  Include next_action per story
+DONE  Include bounded recent audit events
+DONE  Include approval IDs, job IDs, plan_hash/diff_hash where available
+DONE  Exclude raw logs, secrets, tokens, and unbounded stdout/stderr
+DONE  Tests cover output shape, grouping, redaction, missing optional files, and bounded output
+```
+
 ## Previously Identified Gaps Now Closed
 
 ```text
@@ -166,6 +182,7 @@ DONE  Telegram read-only gate manifest command
 DONE  Optional real external agent smoke for installed runtime
 DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
 DONE  Gemini/Kimi provider role separation for Issue #15
+DONE  Dashboard/status report for Issue #19
 ```
 
 ## Remaining Implementation Gaps
@@ -175,6 +192,7 @@ None for the confirmed v1.3 / detailed design v0.2 MVP scope.
 None for Issue #11 MVP acceptance criteria.
 None for Issue #14 NemoClaw-mediated OpenCode runtime acceptance criteria.
 None for Issue #15 Gemini/Kimi provider role separation acceptance criteria.
+None for Issue #19 dashboard/status report acceptance criteria.
 ```
 
 ## Still Blocked / Explicit Non-goals

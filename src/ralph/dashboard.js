@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { listStories, STORY_STATUSES } = require('./story-queue');
+const { listExternalAgentJobs, summarizeExternalAgentJob } = require('./external-agent-jobs');
 
 const DASHBOARD_VERSION = 'ralph_dashboard_v0_1';
 const DEFAULT_RECENT_LIMIT = 25;
@@ -16,6 +17,8 @@ function oneLine(value, maxLength = 500) {
 function redactText(value, maxLength = 1000) {
   return oneLine(value, maxLength)
     .replace(/gh[pousr]_[A-Za-z0-9_]{20,}/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/sk-[A-Za-z0-9_-]{16,}/g, '[REDACTED_SECRET]')
+    .replace(/\b[A-Za-z0-9+/]{32,}={0,2}\b/g, '[REDACTED_SECRET]')
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
     .replace(/(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s`'\"]+/gi, '$1=[REDACTED]');
 }
@@ -72,6 +75,11 @@ function summarizeStoryForDashboard(story = {}) {
     current_approval_id: redactText(story.current_approval_id || '', 120) || null,
     current_job_id: redactText(story.current_job_id || '', 120) || null,
     current_plan_hash: redactText(story.current_plan_hash || '', 120) || null,
+    current_patch_hash: redactText(story.current_patch_hash || '', 120) || null,
+    current_candidate_patch_path: normalizePath(story.current_candidate_patch_path || '') || null,
+    planning_provider: redactText(story.planning_provider || '', 80) || null,
+    execution_provider: redactText(story.execution_provider || '', 80) || null,
+    execution_mediator: redactText(story.execution_mediator || '', 80) || null,
     attempts: Number.isInteger(story.attempts) ? story.attempts : 0,
     max_attempts: Number.isInteger(story.max_attempts) ? story.max_attempts : null,
     labels: normalizeStringList(story.labels || [], 25, 80),
@@ -90,13 +98,15 @@ function summarizeStoryForDashboard(story = {}) {
 function groupStories(stories = []) {
   const groups = {
     active: [],
+    queued: [],
     waiting_approval: [],
     failed: [],
     completed: [],
     stopped: []
   };
   for (const story of stories.map(summarizeStoryForDashboard)) {
-    if (story.status === STORY_STATUSES.WAITING_APPROVAL) groups.waiting_approval.push(story);
+    if (story.status === STORY_STATUSES.QUEUED) groups.queued.push(story);
+    else if (story.status === STORY_STATUSES.WAITING_APPROVAL) groups.waiting_approval.push(story);
     else if (story.status === STORY_STATUSES.FAILED) groups.failed.push(story);
     else if (story.status === STORY_STATUSES.COMPLETED) groups.completed.push(story);
     else if (story.status === STORY_STATUSES.STOPPED) groups.stopped.push(story);
@@ -145,6 +155,7 @@ function normalizeAuditEvent(event = {}) {
     event: redactText(event.event || event.action || '', 160) || null,
     story_id: redactText(event.story_id || event.summary?.story_id || '', 120) || null,
     approval_id: redactText(event.approval_id || '', 120) || null,
+    job_id: redactText(event.job_id || event.summary?.job_id || '', 120) || null,
     stage: redactText(event.stage || event.summary?.stage || '', 160) || null,
     status: redactText(event.status || '', 80) || null,
     reason: redactText(event.reason || event.summary?.reason || '', 200) || null
@@ -154,33 +165,48 @@ function normalizeAuditEvent(event = {}) {
 function readRecentAuditEvents(rootDir, limit = DEFAULT_RECENT_LIMIT) {
   const auditEvents = safeReadJsonl(path.join(logsDir(rootDir), 'audit.jsonl'), limit).map(normalizeAuditEvent);
   const executionEvents = safeReadJsonl(path.join(logsDir(rootDir), 'execution.jsonl'), limit).map(normalizeAuditEvent);
-  return [...auditEvents, ...executionEvents]
+  const approvalEvents = safeReadJsonl(path.join(rootDir, '.ralph', 'approval-log.jsonl'), limit).map(normalizeAuditEvent);
+  return [...auditEvents, ...executionEvents, ...approvalEvents]
     .filter((event) => event.timestamp || event.event || event.stage)
     .slice(-Math.max(1, Math.min(100, limit)));
 }
 
-function summarizeJobsAndGates(events = []) {
-  const jobs = [];
+function readExternalJobs(rootDir, limit = DEFAULT_RECENT_LIMIT) {
+  return listExternalAgentJobs(rootDir, { limit }).map(summarizeExternalAgentJob).map((job) => ({
+    ...job,
+    stdout_preview: redactText(job.stdout_preview || '', 240),
+    stderr_preview: redactText(job.stderr_preview || '', 240),
+    task_preview: redactText(job.task_preview || '', 240),
+    commands_executed: normalizeStringList(job.commands_executed || [], 5, 160),
+    repository_files_modified: []
+  }));
+}
+
+function summarizeJobsAndGates(events = [], externalJobs = []) {
+  const eventJobs = [];
   const gates = [];
   for (const event of events) {
     if (event.stage && event.stage.includes('gate')) gates.push(event);
-    if (event.event && event.event.includes('opencode')) jobs.push(event);
+    if ((event.event && event.event.includes('opencode')) || event.job_id) eventJobs.push(event);
   }
   return {
-    jobs: jobs.slice(-DEFAULT_RECENT_LIMIT),
+    jobs: [...externalJobs, ...eventJobs].slice(-DEFAULT_RECENT_LIMIT),
     gates: gates.slice(-DEFAULT_RECENT_LIMIT)
   };
 }
 
-function dashboardCounts(groups, approvals) {
+function dashboardCounts(groups, approvals, jobs) {
   return {
     active: groups.active.length,
+    queued: groups.queued.length,
     waiting_approval: groups.waiting_approval.length,
     failed: groups.failed.length,
     completed: groups.completed.length,
     stopped: groups.stopped.length,
     approvals: approvals.length,
-    pending_approvals: approvals.filter((approval) => approval.status === 'pending').length
+    pending_approvals: approvals.filter((approval) => approval.status === 'pending').length,
+    jobs: jobs.length,
+    running_jobs: jobs.filter((job) => job.status === 'running').length
   };
 }
 
@@ -189,13 +215,14 @@ function generateDashboard({ rootDir = process.cwd(), now = new Date(), story_li
   const groups = groupStories(stories);
   const approvals = readApprovals(rootDir, recent_limit);
   const recent_audit_events = readRecentAuditEvents(rootDir, recent_limit);
-  const recent = summarizeJobsAndGates(recent_audit_events);
+  const externalJobs = readExternalJobs(rootDir, recent_limit);
+  const recent = summarizeJobsAndGates(recent_audit_events, externalJobs);
   return {
     ok: true,
     stage: 'ralph_dashboard',
     version: DASHBOARD_VERSION,
     generated_at: now.toISOString(),
-    counts: dashboardCounts(groups, approvals),
+    counts: dashboardCounts(groups, approvals, recent.jobs),
     stories: groups,
     approvals,
     jobs: recent.jobs,
@@ -204,40 +231,63 @@ function generateDashboard({ rootDir = process.cwd(), now = new Date(), story_li
     execution_connected: false,
     commands_executed: [],
     repository_files_modified: [],
-    next_action: groups.waiting_approval.length > 0 ? 'resolve_pending_approvals' : groups.active.length > 0 ? 'run_autonomous_scheduler_tick' : 'wait_for_new_story'
+    raw_logs_included: false,
+    secrets_included: false,
+    bounded_output: true,
+    next_action: groups.waiting_approval.length > 0 ? 'resolve_pending_approvals' : groups.active.length > 0 ? 'run_autonomous_scheduler_tick' : groups.queued.length > 0 ? 'start_next_queued_story' : 'wait_for_new_story'
   };
 }
 
+function renderStoryLine(story) {
+  return `- ${story.story_id}: ${story.title} — ${story.current_phase || story.status}; next: ${story.next_action}${story.current_approval_id ? `; approval: ${story.current_approval_id}` : ''}${story.current_job_id ? `; job: ${story.current_job_id}` : ''}${story.current_plan_hash ? `; plan: ${story.current_plan_hash}` : ''}`;
+}
+
 function dashboardToMarkdown(dashboard) {
+  const stories = dashboard.stories || {};
+  const counts = dashboard.counts || {};
   const lines = [
-    `# Ralph Dashboard`,
-    ``,
-    `Generated: ${dashboard.generated_at}`,
-    ``,
-    `## Counts`,
-    `- Active: ${dashboard.counts.active}`,
-    `- Waiting approval: ${dashboard.counts.waiting_approval}`,
-    `- Failed: ${dashboard.counts.failed}`,
-    `- Completed: ${dashboard.counts.completed}`,
-    `- Stopped: ${dashboard.counts.stopped}`,
-    `- Pending approvals: ${dashboard.counts.pending_approvals}`,
-    ``,
-    `## Active stories`,
-    ...(dashboard.stories.active.length ? dashboard.stories.active.map((story) => `- ${story.story_id}: ${story.title} — ${story.current_phase || story.status}; next: ${story.next_action}`) : ['- None']),
-    ``,
-    `## Waiting approval`,
-    ...(dashboard.stories.waiting_approval.length ? dashboard.stories.waiting_approval.map((story) => `- ${story.story_id}: ${story.title}; approval: ${story.current_approval_id || 'unknown'}; next: ${story.next_action}`) : ['- None']),
-    ``,
-    `## Failed stories`,
-    ...(dashboard.stories.failed.length ? dashboard.stories.failed.map((story) => `- ${story.story_id}: ${story.title}; reason: ${story.blocked_reason || 'unknown'}; next: ${story.next_action}`) : ['- None']),
-    ``,
-    `## Completed stories`,
-    ...(dashboard.stories.completed.length ? dashboard.stories.completed.map((story) => `- ${story.story_id}: ${story.title}`) : ['- None']),
-    ``,
-    `## Recent audit events`,
-    ...(dashboard.recent_audit_events.length ? dashboard.recent_audit_events.map((event) => `- ${event.timestamp || 'unknown'} ${event.event || event.stage || 'event'}${event.story_id ? ` story=${event.story_id}` : ''}${event.reason ? ` reason=${event.reason}` : ''}`) : ['- None'])
+    '# Ralph Dashboard',
+    '',
+    `Generated: ${redactText(dashboard.generated_at || '', 80)}`,
+    '',
+    '## Counts',
+    `- Active: ${counts.active || 0}`,
+    `- Queued: ${counts.queued || 0}`,
+    `- Waiting approval: ${counts.waiting_approval || 0}`,
+    `- Failed: ${counts.failed || 0}`,
+    `- Completed: ${counts.completed || 0}`,
+    `- Stopped: ${counts.stopped || 0}`,
+    `- Pending approvals: ${counts.pending_approvals || 0}`,
+    `- Jobs: ${counts.jobs || 0}`,
+    `- Running jobs: ${counts.running_jobs || 0}`,
+    '',
+    '## Active stories',
+    ...((stories.active || []).length ? stories.active.map(renderStoryLine) : ['- None']),
+    '',
+    '## Queued stories',
+    ...((stories.queued || []).length ? stories.queued.map(renderStoryLine) : ['- None']),
+    '',
+    '## Waiting approval',
+    ...((stories.waiting_approval || []).length ? stories.waiting_approval.map(renderStoryLine) : ['- None']),
+    '',
+    '## Failed stories',
+    ...((stories.failed || []).length ? stories.failed.map((story) => `- ${story.story_id}: ${story.title}; reason: ${story.blocked_reason || 'unknown'}; next: ${story.next_action}`) : ['- None']),
+    '',
+    '## Completed stories',
+    ...((stories.completed || []).length ? stories.completed.map((story) => `- ${story.story_id}: ${story.title}`) : ['- None']),
+    '',
+    '## Jobs',
+    ...((dashboard.jobs || []).length ? dashboard.jobs.map((job) => `- ${job.job_id || job.event || 'job'} [${job.status || job.stage || '-'}] approval=${job.approval_id || '-'} next=${job.next_action || '-'}`) : ['- None']),
+    '',
+    '## Recent audit events',
+    ...((dashboard.recent_audit_events || []).length ? dashboard.recent_audit_events.map((event) => `- ${event.timestamp || 'unknown'} ${event.event || event.stage || 'event'}${event.story_id ? ` story=${event.story_id}` : ''}${event.reason ? ` reason=${event.reason}` : ''}`) : ['- None']),
+    '',
+    '## Safety',
+    '- Raw logs included: false',
+    '- Secrets included: false',
+    '- Output bounded: true'
   ];
-  return lines.join('\n');
+  return `${lines.join('\n')}\n`;
 }
 
 module.exports = {
@@ -249,6 +299,7 @@ module.exports = {
   groupStories,
   readApprovals,
   readRecentAuditEvents,
+  readExternalJobs,
   summarizeJobsAndGates,
   generateDashboard,
   dashboardToMarkdown
