@@ -38,6 +38,25 @@ function normalizeRequestedPaths(value) {
   return Array.from(new Set(value.map(normalizePath).filter(Boolean))).slice(0, 50);
 }
 
+function normalizeLabels(value) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map((item) => {
+    if (typeof item === 'string') return oneLine(item, 80);
+    if (item && typeof item === 'object') return oneLine(item.name || item.label || '', 80);
+    return '';
+  }).filter(Boolean))).slice(0, 25);
+}
+
+function normalizeGitHubIssue(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    issue_number: value.issue_number || value.number || null,
+    title: oneLine(value.title || '', 240),
+    url: value.url || value.html_url || null,
+    labels: normalizeLabels(value.labels || [])
+  };
+}
+
 function safeStoryId(storyId) {
   const value = String(storyId || '').trim();
   return /^STORY-[A-Z0-9][A-Z0-9_-]{0,80}$/.test(value) ? value : null;
@@ -69,6 +88,7 @@ function buildStory(input = {}, { now = new Date() } = {}) {
   if (!requirement) return { ok: false, reason: 'requirement_required' };
   const status = normalizeStatus(input.status || STORY_STATUSES.QUEUED);
   if (!status) return { ok: false, reason: 'story_status_not_allowed' };
+  const priority = Number.isFinite(input.priority) ? Math.max(0, Math.min(1000, input.priority)) : null;
   return {
     ok: true,
     story: {
@@ -77,6 +97,9 @@ function buildStory(input = {}, { now = new Date() } = {}) {
       title: oneLine(input.title || requirement, 160),
       requirement,
       acceptance_criteria: normalizeStringList(input.acceptance_criteria, 25, 300),
+      labels: normalizeLabels(input.labels),
+      priority,
+      github_issue: normalizeGitHubIssue(input.github_issue),
       mode: input.mode || 'approval',
       target_env: input.target_env || input.environment || 'local',
       requested_paths: normalizeRequestedPaths(input.requested_paths),
@@ -102,6 +125,8 @@ function summarizeStory(story) {
     status: story.status,
     mode: story.mode,
     target_env: story.target_env,
+    labels: story.labels || [],
+    priority: story.priority ?? null,
     attempts: story.attempts,
     max_attempts: story.max_attempts,
     current_phase: story.current_phase,
@@ -188,6 +213,8 @@ function updateStory(storyId, patch = {}, { rootDir = process.cwd(), now = new D
     ...patch,
     story_id: current.story_id,
     status,
+    labels: patch.labels ? normalizeLabels(patch.labels) : current.labels,
+    github_issue: patch.github_issue ? normalizeGitHubIssue(patch.github_issue) : current.github_issue,
     requested_paths: patch.requested_paths ? normalizeRequestedPaths(patch.requested_paths) : current.requested_paths,
     acceptance_criteria: patch.acceptance_criteria ? normalizeStringList(patch.acceptance_criteria, 25, 300) : current.acceptance_criteria,
     updated_at: now.toISOString(),
@@ -228,5 +255,6 @@ module.exports = {
   updateStory,
   markStoryForReplanByApproval,
   summarizeStory,
+  normalizeLabels,
   normalizeRequestedPaths
 };
