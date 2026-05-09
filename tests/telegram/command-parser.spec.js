@@ -12,6 +12,8 @@ test('parses basic Telegram commands', () => {
 
 test('parses autonomous Ralph loop commands', () => {
   expect(parseTelegramCommand('/ralph-start add customer search')).toMatchObject({ type: 'ralph_start', args: ['add', 'customer', 'search'] });
+  expect(parseTelegramCommand('/ralph-tick STORY-1')).toMatchObject({ type: 'ralph_tick', args: ['STORY-1'] });
+  expect(parseTelegramCommand('/ralph-run-until-blocked STORY-1 4')).toMatchObject({ type: 'ralph_run_until_blocked', args: ['STORY-1', '4'] });
   expect(parseTelegramCommand('/ralph-loop-status')).toMatchObject({ type: 'ralph_loop_status', args: [] });
   expect(parseTelegramCommand('/ralph-loop-status STORY-1')).toMatchObject({ type: 'ralph_loop_status', args: ['STORY-1'] });
   expect(parseTelegramCommand('/ralph-pause STORY-1')).toMatchObject({ type: 'ralph_pause', args: ['STORY-1'] });
