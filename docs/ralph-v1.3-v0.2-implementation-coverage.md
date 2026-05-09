@@ -35,6 +35,10 @@ DEV-ONLY  intentionally available only behind explicit development opt-in
 | Mode | `/mode fullauto` admin/confirm/expiry | DONE | `src/ralph/mode-manager.js`, Telegram handler coverage |
 | Hashing | canonical JSON plan hash | DONE | `src/ralph/langgraph-planning-layer.js`, `src/ralph/ultraplan-runner.js`, existing approval manager hash coverage |
 | Hashing | diff approval separation | DONE | `src/ralph/state-machine.js`, `src/ralph/production-change-policy.js`, OpenCode patch approval flow, autonomous `DIFF_APPROVAL_PENDING` |
+| Repair Strategy | Classify test/typecheck/build/secret/migration/e2e/timeout/unknown failures | DONE | `src/ralph/repair-strategy.js`, `tests/ralph/repair-strategy.spec.js` |
+| Repair Strategy | Immediate escalation for secret scan, security policy, production DB, RLS disable, migration | DONE | `src/ralph/repair-strategy.js`, `tests/ralph/repair-strategy.spec.js` |
+| Repair Strategy | Failure-type retry caps and bounded repair history | DONE | `src/ralph/repair-strategy.js`, `tests/ralph/repair-strategy.spec.js`, `src/ralph/autonomous-loop.js` |
+| Repair Strategy | Bounded/redacted repair context for OpenCode/Kimi | DONE | `src/ralph/repair-strategy.js`, `tests/ralph/repair-strategy.spec.js` |
 | Dashboard | Read-only dashboard JSON and Markdown | DONE | `src/ralph/dashboard.js`, `scripts/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
 | Dashboard | Group active, queued, waiting approval, failed, stopped, completed stories | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
 | Dashboard | Include approvals, jobs, gates, hashes, next actions, bounded audit | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
@@ -156,6 +160,18 @@ DONE  Autonomous loop exposes redacted provider role metadata
 DONE  Tests cover provider selection, fallback, malformed output, missing env, and role boundaries
 ```
 
+## Issue #16/#18 Advanced Repair Strategy Coverage
+
+```text
+DONE  Classify test, typecheck, build, secret scan, migration, e2e, timeout, production DB, RLS-disable, and unknown failures
+DONE  Generate bounded repair instruction with likely target files
+DONE  Escalate immediately for secret scan, security policy, production DB, RLS-disable, and migration failures
+DONE  Cap retry attempts by failure type
+DONE  Track repair history in story state
+DONE  Feed only bounded/redacted repair context to OpenCode/Kimi
+DONE  Tests cover classification, immediate escalation, retry caps, bounded context, redaction, and repair history
+```
+
 ## Issue #19 Dashboard / Status Report Coverage
 
 ```text
@@ -197,6 +213,7 @@ DONE  Telegram read-only gate manifest command
 DONE  Optional real external agent smoke for installed runtime
 DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
 DONE  Gemini/Kimi provider role separation for Issue #15
+DONE  Advanced repair strategy for Issue #16/#18
 DONE  Dashboard/status report for Issue #19
 DONE  PR body generation for Issue #20
 ```
@@ -208,6 +225,7 @@ None for the confirmed v1.3 / detailed design v0.2 MVP scope.
 None for Issue #11 MVP acceptance criteria.
 None for Issue #14 NemoClaw-mediated OpenCode runtime acceptance criteria.
 None for Issue #15 Gemini/Kimi provider role separation acceptance criteria.
+None for Issue #16/#18 advanced repair strategy acceptance criteria.
 None for Issue #19 dashboard/status report acceptance criteria.
 None for Issue #20 PR body generation acceptance criteria.
 ```
