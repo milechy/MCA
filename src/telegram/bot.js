@@ -2,6 +2,7 @@ const { loadTelegramConfig } = require('./config');
 const { isAllowedTelegramUpdate, getTelegramChatId } = require('./auth');
 const { parseTelegramCommand } = require('./command-parser');
 const { handleTelegramCommand } = require('./handlers');
+const { isAutonomousCommand, handleAutonomousCommand } = require('./autonomous-command');
 const { auditTelegramCommand } = require('./audit');
 
 function extractMessageText(update) {
@@ -33,13 +34,20 @@ async function processTelegramUpdate(update, options = {}) {
   }
 
   const parsed = parseTelegramCommand(extractMessageText(update));
-  const response = handleTelegramCommand(parsed, {
+  const handlerContext = {
     rootDir,
     user_id: auth.user_id,
     chat_id: auth.chat_id,
     roles: options.roles,
-    env
-  });
+    env,
+    now: options.now,
+    requested_paths: options.requested_paths,
+    mode: options.mode,
+    target_env: options.target_env
+  };
+  const response = isAutonomousCommand(parsed.type)
+    ? handleAutonomousCommand(parsed, handlerContext)
+    : handleTelegramCommand(parsed, handlerContext);
 
   auditTelegramCommand({
     command_type: parsed.type,
