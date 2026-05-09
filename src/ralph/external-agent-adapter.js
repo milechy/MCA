@@ -76,6 +76,9 @@ function makeBase(overrides = {}) {
     job_id: null,
     gateway_type: null,
     gateway_name: null,
+    mediator: null,
+    opencode_runtime_mode: null,
+    dev_only_gateway: false,
     sandbox_root: null,
     candidate_patch_path: null,
     command_preview: null,
@@ -95,11 +98,23 @@ function makeBase(overrides = {}) {
     migration_allowed: false,
     unrestricted_shell_allowed: false,
     raw_log_allowed: false,
+    secret_display_allowed: false,
+    secret_persistence_allowed: false,
     files_modified: [],
     repository_files_modified: [],
     job: null,
     next_action: 'fix_external_agent_adapter_failure',
     ...overrides
+  };
+}
+
+function policyFields(policy) {
+  return {
+    gateway_type: policy?.gateway_type || null,
+    gateway_name: policy?.gateway_name || null,
+    mediator: policy?.mediator || null,
+    opencode_runtime_mode: policy?.opencode_runtime_mode || null,
+    dev_only_gateway: policy?.dev_only_gateway === true
   };
 }
 
@@ -111,6 +126,9 @@ function writeAdapterJob(rootDir, result, { approval_id, task_preview, started_a
     approval_id,
     gateway_type: result.gateway_type,
     gateway_name: result.gateway_name,
+    mediator: result.mediator,
+    opencode_runtime_mode: result.opencode_runtime_mode,
+    dev_only_gateway: result.dev_only_gateway,
     sandbox_root: result.sandbox_root,
     candidate_patch_path: result.candidate_patch_path,
     task_preview,
@@ -143,25 +161,26 @@ function runExternalAgentCandidatePatch({
   env = process.env,
   timeout_ms = DEFAULT_TIMEOUT_MS,
   explicit_runtime_approval = false,
+  allow_dev_only_gateway = false,
   spawn = spawnSync,
   now = () => new Date(),
   record_job = true
 } = {}) {
   const allocatedJobId = job_id || defaultExternalAgentJobId(now());
-  const policy = buildExternalGatewayPolicy({ gateway_type, gateway_name, action: GATEWAY_ACTIONS.RUN_CANDIDATE_PATCH, sandbox_root, requested_paths, task });
-  if (!policy.ok) return makeBase({ job_id: allocatedJobId, reason: policy.reason, gateway_type: policy.gateway_type, gateway_name: policy.gateway_name, sandbox_root, timeout_ms });
+  const policy = buildExternalGatewayPolicy({ gateway_type, gateway_name, action: GATEWAY_ACTIONS.RUN_CANDIDATE_PATCH, sandbox_root, requested_paths, task, allow_dev_only_gateway, env });
+  if (!policy.ok) return makeBase({ job_id: allocatedJobId, reason: policy.reason, ...policyFields(policy), sandbox_root, timeout_ms });
 
   const runtimeApproval = gatewayRuntimeDependencyApproved(policy, { explicit_runtime_approval });
-  if (!runtimeApproval.ok) return makeBase({ job_id: allocatedJobId, reason: runtimeApproval.reason, gateway_type: policy.gateway_type, gateway_name: policy.gateway_name, sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
+  if (!runtimeApproval.ok) return makeBase({ job_id: allocatedJobId, reason: runtimeApproval.reason, ...policyFields(policy), sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
 
   const runtimeCommand = normalizeRuntimeCommand(policy.gateway_type, command);
-  if (!runtimeCommand) return makeBase({ job_id: allocatedJobId, reason: 'gateway_runtime_command_not_allowed', gateway_type: policy.gateway_type, gateway_name: policy.gateway_name, sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
+  if (!runtimeCommand) return makeBase({ job_id: allocatedJobId, reason: 'gateway_runtime_command_not_allowed', ...policyFields(policy), sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
 
   const runtimeArgs = args || buildAdapterArgs({ task: policy.task_preview, candidate_patch_path: 'candidate.patch', requested_paths: policy.requested_paths });
-  if (!argsAreAllowed(runtimeArgs)) return makeBase({ job_id: allocatedJobId, reason: 'gateway_runtime_args_not_allowed', gateway_type: policy.gateway_type, gateway_name: policy.gateway_name, sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
+  if (!argsAreAllowed(runtimeArgs)) return makeBase({ job_id: allocatedJobId, reason: 'gateway_runtime_args_not_allowed', ...policyFields(policy), sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
 
   const cwd = ensureSandboxDir(rootDir, policy.sandbox_root);
-  if (!cwd) return makeBase({ job_id: allocatedJobId, reason: 'sandbox_root_not_allowed', gateway_type: policy.gateway_type, gateway_name: policy.gateway_name, sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
+  if (!cwd) return makeBase({ job_id: allocatedJobId, reason: 'sandbox_root_not_allowed', ...policyFields(policy), sandbox_root, candidate_patch_path: policy.candidate_patch_path, timeout_ms });
 
   const started = now();
   if (record_job) {
@@ -171,6 +190,9 @@ function runExternalAgentCandidatePatch({
       approval_id,
       gateway_type: policy.gateway_type,
       gateway_name: policy.gateway_name,
+      mediator: policy.mediator,
+      opencode_runtime_mode: policy.opencode_runtime_mode,
+      dev_only_gateway: policy.dev_only_gateway,
       sandbox_root: policy.sandbox_root,
       candidate_patch_path: policy.candidate_patch_path,
       task_preview: policy.task_preview,
@@ -199,8 +221,7 @@ function runExternalAgentCandidatePatch({
     ok,
     reason: timedOut ? 'gateway_runtime_timeout' : ok ? null : exitCode === 0 ? 'candidate_patch_missing' : 'gateway_runtime_failed',
     job_id: allocatedJobId,
-    gateway_type: policy.gateway_type,
-    gateway_name: policy.gateway_name,
+    ...policyFields(policy),
     sandbox_root: policy.sandbox_root,
     candidate_patch_path: policy.candidate_patch_path,
     command_preview: [runtimeCommand, ...runtimeArgs].join(' '),
