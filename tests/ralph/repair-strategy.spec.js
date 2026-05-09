@@ -73,7 +73,7 @@ test('buildRepairDecision creates bounded repair instruction and target files', 
     ok: true,
     failure_type: FAILURE_TYPES.TEST,
     escalation_required: false,
-    next_action: 'dispatch_opencode_fix_candidate_patch'
+    next_action: 'dispatch_opencode_fix_candidate_patch_via_nemoclaw'
   });
   expect(decision.target_files).toEqual(expect.arrayContaining(['src/ralph/repair-strategy.js', 'tests/ralph/repair-strategy.spec.js']));
   expect(decision.repair_instruction).toContain('Repair failure type: test_failure');
@@ -139,7 +139,7 @@ test('tickAutonomousLoop records repair history and moves test failures to FIX_L
   expect(result).toMatchObject({
     ok: false,
     to_phase: LOOP_PHASES.FIX_LOOP,
-    next_action: 'dispatch_opencode_fix_candidate_patch',
+    next_action: 'dispatch_opencode_fix_candidate_patch_via_nemoclaw',
     repair: {
       failure_type: FAILURE_TYPES.TEST,
       escalation_required: false
