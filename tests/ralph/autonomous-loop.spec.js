@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createStory, readStory, updateStory, STORY_STATUSES } = require('../../src/ralph/story-queue');
-const { LOOP_PHASES, OPENCODE_RUNTIME_MODES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
+const { LOOP_PHASES, OPENCODE_RUNTIME_MODES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, currentSafeProviderConfig, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-autonomous-loop-'));
@@ -23,6 +23,10 @@ function seedStory(rootDir, overrides = {}) {
   return created.story;
 }
 
+function fakeSecret() {
+  return ['sk', 'provider', 'abcdefghijklmnopqrstuvwxyz'].join('-');
+}
+
 test('phase helpers map control decisions to bounded next steps', () => {
   expect(defaultApprovalId({ story_id: 'STORY-LOOP' })).toBe('APR-OPENCODE-AUTO-LOOP');
   expect(defaultJobId({ story_id: 'STORY-LOOP' })).toBe('JOB-OPENCODE-AUTO-LOOP');
@@ -35,6 +39,19 @@ test('phase helpers map control decisions to bounded next steps', () => {
   expect(statusForPhase(LOOP_PHASES.PLAN_APPROVAL_PENDING)).toBe(STORY_STATUSES.WAITING_APPROVAL);
   expect(statusForPhase(LOOP_PHASES.DONE)).toBe(STORY_STATUSES.COMPLETED);
   expect(nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe('dispatch_opencode_candidate_patch_via_nemoclaw');
+});
+
+test('currentSafeProviderConfig redacts Gemini and Kimi secrets while preserving roles', () => {
+  const geminiSecret = fakeSecret();
+  const kimiSecret = `${fakeSecret()}-kimi`;
+  const config = currentSafeProviderConfig({ RALPH_PLANNING_PROVIDER: 'gemini', GEMINI_API_KEY: geminiSecret, KIMI_API_KEY: kimiSecret });
+  expect(config).toMatchObject({
+    stage: 'provider_config_safe_summary',
+    planning: { provider: 'gemini', role: 'planning', api_key_present: true, api_key_value: '<set:redacted>' },
+    execution: { provider: 'kimi', mediated_by: 'nemoclaw', direct_policy_override_allowed: false, apply_allowed: false, commit_allowed: false, push_allowed: false, pr_allowed: false, deploy_allowed: false, migration_allowed: false, secret_access_allowed: false }
+  });
+  expect(JSON.stringify(config)).not.toContain(geminiSecret);
+  expect(JSON.stringify(config)).not.toContain(kimiSecret);
 });
 
 test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-ready phase without execution', () => {
@@ -50,6 +67,10 @@ test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-r
     story_id: 'STORY-LOOP',
     from_phase: 'PLAN',
     to_phase: 'OPENCODE_RUNNING',
+    provider_config: {
+      planning: { provider: 'deterministic', role: 'planning' },
+      execution: { provider: 'kimi', mediated_by: 'nemoclaw', direct_policy_override_allowed: false }
+    },
     opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
     mediator: 'nemoclaw',
     execution_connected: false,
@@ -69,8 +90,38 @@ test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-r
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({
     status: 'running',
     current_phase: 'OPENCODE_RUNNING',
-    current_plan_hash: result.ultraplan.plan_hash
+    current_plan_hash: result.ultraplan.plan_hash,
+    planning_provider: 'deterministic',
+    execution_provider: 'kimi',
+    execution_mediator: 'nemoclaw'
   });
+});
+
+test('tickAutonomousLoop stores redacted provider role metadata for Gemini planning mode', () => {
+  const rootDir = tmpRoot();
+  const geminiSecret = fakeSecret();
+  const kimiSecret = `${fakeSecret()}-kimi`;
+  seedStory(rootDir);
+
+  const result = tickAutonomousLoop({
+    rootDir,
+    story_id: 'STORY-LOOP',
+    now: new Date('2026-05-08T13:01:00.000Z'),
+    env: { RALPH_PLANNING_PROVIDER: 'gemini', GEMINI_API_KEY: geminiSecret, KIMI_API_KEY: kimiSecret }
+  });
+
+  expect(result).toMatchObject({
+    ok: true,
+    provider_config: {
+      planning: { provider: 'gemini', api_key_present: true, api_key_value: '<set:redacted>' },
+      execution: { provider: 'kimi', api_key_present: true, api_key_value: '<set:redacted>', mediated_by: 'nemoclaw' }
+    }
+  });
+  const story = readStory(rootDir, 'STORY-LOOP');
+  expect(story).toMatchObject({ planning_provider: 'gemini', execution_provider: 'kimi', execution_mediator: 'nemoclaw' });
+  const serialized = JSON.stringify({ result, story });
+  expect(serialized).not.toContain(geminiSecret);
+  expect(serialized).not.toContain(kimiSecret);
 });
 
 test('tickAutonomousLoop stops at plan approval boundary', () => {
