@@ -1,5 +1,7 @@
 const { STORY_STATUSES, readStory, updateStory, summarizeStory } = require('./story-queue');
 const { runUltraPlan } = require('./ultraplan-runner');
+const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
+const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 
 const AUTONOMOUS_LOOP_VERSION = 'autonomous_loop_v0_1';
 const LOOP_PHASES = Object.freeze({
@@ -30,8 +32,10 @@ function baseResult(overrides = {}) {
     to_phase: null,
     story: null,
     ultraplan: null,
+    opencode: null,
     approval_id: null,
     job_id: null,
+    candidate_patch_path: null,
     execution_connected: false,
     commands_executed: [],
     files_modified: [],
@@ -46,6 +50,24 @@ function baseResult(overrides = {}) {
     next_action: 'inspect_autonomous_loop_failure',
     ...overrides
   };
+}
+
+function defaultApprovalId(story) {
+  return `APR-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`;
+}
+
+function defaultJobId(story) {
+  return `JOB-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`;
+}
+
+function defaultSandboxRoot(story) {
+  return `.ralph/tmp/opencode-sandbox/${defaultApprovalId(story)}`;
+}
+
+function taskForStory(story) {
+  const plan = story.last_ultraplan || {};
+  const task = Array.isArray(plan.tasks) ? plan.tasks.find((item) => item.agent === 'opencode') : null;
+  return task?.objective || story.requirement;
 }
 
 function phaseForUltraPlan(ultraplan) {
@@ -159,6 +181,61 @@ function advanceWaitingApprovalPhase(story, { rootDir, now, approvals = {} }) {
   });
 }
 
+function buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok }) {
+  const approvalId = story.current_approval_id || defaultApprovalId(story);
+  const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
+  const runEnv = { ...env, [OPENCODE_SANDBOX_ENV]: env?.[OPENCODE_SANDBOX_ENV] || 'true' };
+  return opencodeSandboxRunnerPreflight({
+    rootDir,
+    approval_id: approvalId,
+    sandbox_root: sandboxRoot,
+    requested_paths: story.requested_paths || [],
+    pre_secret_scan_ok: pre_secret_scan_ok === true,
+    env: runEnv,
+    now
+  });
+}
+
+function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms }) {
+  const approvalId = story.current_approval_id || defaultApprovalId(story);
+  const jobId = story.current_job_id || defaultJobId(story);
+  const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
+  const task = taskForStory(story);
+  const dispatcher = opencode_dispatcher || ((input) => {
+    const preflight = buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok });
+    if (!preflight.ok) return { ...preflight, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, task_preview: task, candidate_patch_path: null, patch_preview: null };
+    return runOpenCodeCandidatePatch(preflight, { rootDir, task, command: opencode_command, args: opencode_args, env: { ...env, [OPENCODE_SANDBOX_ENV]: 'true' }, timeout_ms, now: () => now });
+  });
+  const opencode = dispatcher({ rootDir, story, approval_id: approvalId, job_id: jobId, sandbox_root: sandboxRoot, task, requested_paths: story.requested_paths || [], now });
+  const ok = opencode.ok === true;
+  const nextPhase = ok ? LOOP_PHASES.PATCH_PREVIEW : LOOP_PHASES.OPENCODE_RUNNING;
+  const updated = updateStoryForPhase(story, nextPhase, {
+    current_approval_id: approvalId,
+    current_job_id: opencode.job_id || jobId,
+    current_sandbox_root: sandboxRoot,
+    current_candidate_patch_path: opencode.candidate_patch_path || null,
+    blocked_reason: ok ? null : opencode.reason || 'opencode_dispatch_failed'
+  }, { rootDir, now, event: ok ? 'opencode_candidate_patch_created' : 'opencode_dispatch_failed' });
+
+  return baseResult({
+    ok,
+    reason: ok ? null : opencode.reason || 'opencode_dispatch_failed',
+    story_id: story.story_id,
+    from_phase: story.current_phase,
+    to_phase: nextPhase,
+    story: updated.summary,
+    opencode,
+    approval_id: approvalId,
+    job_id: opencode.job_id || jobId,
+    candidate_patch_path: opencode.candidate_patch_path || null,
+    execution_connected: opencode.execution_connected === true,
+    commands_executed: opencode.commands_executed || [],
+    files_modified: opencode.files_modified || [],
+    repository_files_modified: [],
+    next_action: ok ? nextActionForPhase(LOOP_PHASES.PATCH_PREVIEW) : 'fix_opencode_dispatch_failure'
+  });
+}
+
 function advanceTerminalPhase(story) {
   return baseResult({
     ok: true,
@@ -171,7 +248,7 @@ function advanceTerminalPhase(story) {
   });
 }
 
-function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {} } = {}) {
+function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms } = {}) {
   if (!story_id) return baseResult({ reason: 'story_id_required' });
   const story = readStory(rootDir, story_id);
   if (!story) return baseResult({ reason: 'story_not_found', story_id });
@@ -189,7 +266,7 @@ function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(
     case LOOP_PHASES.PR_APPROVAL_PENDING:
       return advanceWaitingApprovalPhase(story, { rootDir, now, approvals });
     case LOOP_PHASES.OPENCODE_RUNNING:
-      return baseResult({ ok: true, reason: 'opencode_dispatch_not_connected_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), next_action: 'phase_c_or_d_connect_opencode_dispatch' });
+      return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms });
     default:
       return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), next_action: 'implement_next_autonomous_loop_phase' });
   }
@@ -204,9 +281,14 @@ function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reaso
 module.exports = {
   AUTONOMOUS_LOOP_VERSION,
   LOOP_PHASES,
+  defaultApprovalId,
+  defaultJobId,
+  defaultSandboxRoot,
+  taskForStory,
   phaseForUltraPlan,
   statusForPhase,
   nextActionForPhase,
+  buildOpenCodePreflight,
   tickAutonomousLoop,
   pauseStory
 };
