@@ -8,7 +8,9 @@ const {
 const {
   deterministicUltraPlanProvider,
   generateUltraPlanWithProvider,
+  geminiProviderPreflight,
   llmProviderPreflight,
+  providerModeToPlanningProvider,
   PROVIDER_MODES
 } = require('../../src/ralph/ultraplan-provider');
 
@@ -21,6 +23,12 @@ const story = {
   requested_paths: ['src/ralph/ultraplan-provider.js', 'tests/ralph/ultraplan-provider.spec.js']
 };
 
+test('provider mode maps legacy llm to Gemini planning provider', () => {
+  expect(providerModeToPlanningProvider(PROVIDER_MODES.LLM)).toBe(PROVIDER_MODES.GEMINI);
+  expect(providerModeToPlanningProvider(PROVIDER_MODES.GEMINI)).toBe(PROVIDER_MODES.GEMINI);
+  expect(providerModeToPlanningProvider(PROVIDER_MODES.DETERMINISTIC)).toBe(PROVIDER_MODES.DETERMINISTIC);
+});
+
 test('deterministic provider remains the default and matches buildUltraPlan', async () => {
   const expected = buildUltraPlan(story);
   const result = await generateUltraPlanWithProvider(story);
@@ -29,6 +37,7 @@ test('deterministic provider remains the default and matches buildUltraPlan', as
     ok: true,
     stage: 'ultraplan_provider',
     provider: PROVIDER_MODES.DETERMINISTIC,
+    planning_provider: PROVIDER_MODES.DETERMINISTIC,
     fallback_used: false,
     plan_hash: expected.plan_hash,
     execution_connected: false,
@@ -38,38 +47,49 @@ test('deterministic provider remains the default and matches buildUltraPlan', as
   expect(result.plan).toEqual(expected);
 });
 
-test('llm provider can be injected and canonicalized behind preflight', async () => {
-  const provider = async ({ deterministic_plan }) => ({
-    plan: {
-      ...deterministic_plan,
-      generated_by: 'fixture-provider',
-      model_response_id: 'response-id-ignored-by-hash',
-      tasks: [
-        {
-          id: 'TASK-001',
-          title: 'Analyze provider surface',
-          objective: 'Inspect planning provider seams without executing repository mutations.',
-          requested_paths: ['src/ralph/ultraplan-provider.js'],
-          expected_output: 'provider plan summary',
-          agent: 'ralph'
-        }
-      ]
-    }
-  });
+test('Gemini planning provider can be injected and canonicalized behind preflight', async () => {
+  const provider = async ({ deterministic_plan, provider_config }) => {
+    expect(provider_config.execution.provider).toBe('kimi');
+    expect(provider_config.execution.mediated_by).toBe('nemoclaw');
+    return {
+      plan: {
+        ...deterministic_plan,
+        generated_by: 'gemini-fixture-provider',
+        model_response_id: 'response-id-ignored-by-hash',
+        tasks: [
+          {
+            id: 'TASK-001',
+            title: 'Analyze provider surface',
+            objective: 'Inspect planning provider seams without executing repository mutations.',
+            requested_paths: ['src/ralph/ultraplan-provider.js'],
+            expected_output: 'provider plan summary',
+            agent: 'ralph'
+          }
+        ]
+      }
+    };
+  };
 
   const result = await generateUltraPlanWithProvider(story, {
     provider,
-    providerMode: PROVIDER_MODES.LLM,
+    providerMode: PROVIDER_MODES.GEMINI,
     apiKey: 'fixture-key'
   });
 
   expect(result).toMatchObject({
     ok: true,
-    provider: PROVIDER_MODES.LLM,
+    provider: PROVIDER_MODES.GEMINI,
+    planning_provider: PROVIDER_MODES.GEMINI,
     fallback_used: false,
     execution_connected: false,
     commands_executed: [],
-    repository_files_modified: []
+    repository_files_modified: [],
+    apply_allowed: false,
+    commit_allowed: false,
+    push_allowed: false,
+    pr_allowed: false,
+    deploy_allowed: false,
+    migration_allowed: false
   });
   expect(result.plan.tasks).toHaveLength(1);
   expect(result.plan.tasks[0]).toMatchObject({ id: 'TASK-001', agent: 'ralph' });
@@ -81,7 +101,7 @@ test('canonical plan hash remains stable for semantically identical canonical pl
   const base = buildUltraPlan(story);
   const withVolatileFields = {
     ...base,
-    generated_by: 'llm-a',
+    generated_by: 'gemini-a',
     trace_id: 'trace-1',
     latency_ms: 1234,
     tasks: base.tasks.map((task) => ({ ...task }))
@@ -95,55 +115,58 @@ test('canonical plan hash remains stable for semantically identical canonical pl
   expect(first.plan.plan_hash).toBe(second.plan.plan_hash);
 });
 
-test('malformed llm output falls back to deterministic plan', async () => {
+test('malformed Gemini output falls back to deterministic plan', async () => {
   const fallback = buildUltraPlan(story);
   const result = await generateUltraPlanWithProvider(story, {
     provider: async () => ({ plan: { story_id: story.story_id, tasks: [] } }),
-    providerMode: PROVIDER_MODES.LLM,
+    providerMode: PROVIDER_MODES.GEMINI,
     apiKey: 'fixture-key'
   });
 
   expect(result).toMatchObject({
     ok: true,
+    planning_provider: PROVIDER_MODES.GEMINI,
     fallback_used: true,
     fallback_reason: 'requirement_required',
     plan_hash: fallback.plan_hash
   });
 });
 
-test('missing llm secret/env falls back to deterministic provider', async () => {
+test('missing Gemini secret/env falls back to deterministic provider', async () => {
   const fallback = buildUltraPlan(story);
   const result = await generateUltraPlanWithProvider(story, {
     provider: async () => { throw new Error('should_not_call_provider'); },
-    providerMode: PROVIDER_MODES.LLM,
+    providerMode: PROVIDER_MODES.GEMINI,
     apiKey: null
   });
 
   expect(result).toMatchObject({
     ok: true,
+    planning_provider: PROVIDER_MODES.GEMINI,
     fallback_used: true,
-    fallback_reason: 'llm_api_key_missing',
+    fallback_reason: 'gemini_api_key_missing',
     plan_hash: fallback.plan_hash
   });
 });
 
-test('provider failure falls back to deterministic plan', async () => {
+test('Gemini provider failure falls back to deterministic plan', async () => {
   const fallback = buildUltraPlan(story);
   const result = await generateUltraPlanWithProvider(story, {
     provider: async () => { throw new Error('provider_unavailable'); },
-    providerMode: PROVIDER_MODES.LLM,
+    providerMode: PROVIDER_MODES.GEMINI,
     apiKey: 'fixture-key'
   });
 
   expect(result).toMatchObject({
     ok: true,
+    planning_provider: PROVIDER_MODES.GEMINI,
     fallback_used: true,
     fallback_reason: 'provider_unavailable',
     plan_hash: fallback.plan_hash
   });
 });
 
-test('llm provider cannot request direct apply commit push PR deploy or migration actions', async () => {
+test('Gemini provider cannot request direct apply commit push PR deploy or migration actions', async () => {
   const fallback = buildUltraPlan(story);
   const unsafeTask = {
     id: 'TASK-999',
@@ -151,7 +174,7 @@ test('llm provider cannot request direct apply commit push PR deploy or migratio
     objective: 'Commit the patch, push the branch, create PR, deploy production, and run migration.',
     requested_paths: ['src/ralph/ultraplan-provider.js'],
     expected_output: 'merged production change',
-    agent: 'llm'
+    agent: 'gemini'
   };
 
   expect(taskRequestsForbiddenAction(unsafeTask)).toBe(true);
@@ -160,19 +183,20 @@ test('llm provider cannot request direct apply commit push PR deploy or migratio
     provider: async ({ deterministic_plan }) => ({
       plan: { ...deterministic_plan, tasks: [unsafeTask] }
     }),
-    providerMode: PROVIDER_MODES.LLM,
+    providerMode: PROVIDER_MODES.GEMINI,
     apiKey: 'fixture-key'
   });
 
   expect(result).toMatchObject({
     ok: true,
+    planning_provider: PROVIDER_MODES.GEMINI,
     fallback_used: true,
     fallback_reason: 'task_requests_forbidden_direct_action',
     plan_hash: fallback.plan_hash
   });
 });
 
-test('runUltraPlan remains deterministic while runUltraPlanWithProvider can use optional provider result', async () => {
+test('runUltraPlan remains deterministic while runUltraPlanWithProvider can use optional Gemini result', async () => {
   const deterministic = runUltraPlan(story);
   const providerRunner = await runUltraPlanWithProvider(story, {
     provider: async ({ deterministic_plan }) => ({
@@ -190,7 +214,7 @@ test('runUltraPlan remains deterministic while runUltraPlanWithProvider can use 
         ]
       }
     }),
-    providerMode: PROVIDER_MODES.LLM,
+    providerMode: PROVIDER_MODES.GEMINI,
     apiKey: 'fixture-key'
   });
 
@@ -198,7 +222,7 @@ test('runUltraPlan remains deterministic while runUltraPlanWithProvider can use 
   expect(providerRunner).toMatchObject({
     ok: true,
     stage: 'ultraplan_runner',
-    provider: PROVIDER_MODES.LLM,
+    provider: PROVIDER_MODES.GEMINI,
     fallback_used: false,
     execution_connected: false,
     apply_allowed: false,
@@ -212,9 +236,15 @@ test('runUltraPlan remains deterministic while runUltraPlanWithProvider can use 
   expect(providerRunner.tasks.map((task) => task.id)).toEqual(['TASK-010']);
 });
 
-test('llmProviderPreflight requires explicit enablement and secret', () => {
-  expect(llmProviderPreflight({ enabled: false, apiKey: 'fixture-key' })).toMatchObject({ ok: false, reason: 'llm_provider_not_enabled' });
-  expect(llmProviderPreflight({ enabled: true, apiKey: null })).toMatchObject({ ok: false, reason: 'llm_api_key_missing' });
+test('Gemini preflight requires explicit enablement and secret', () => {
+  expect(geminiProviderPreflight({ enabled: false, apiKey: 'fixture-key' })).toMatchObject({ ok: false, reason: 'gemini_provider_not_enabled' });
+  expect(geminiProviderPreflight({ enabled: true, apiKey: null })).toMatchObject({ ok: false, reason: 'gemini_api_key_missing' });
+  expect(geminiProviderPreflight({ enabled: true, apiKey: 'fixture-key' })).toMatchObject({ ok: true });
+});
+
+test('legacy llmProviderPreflight aliases Gemini planning preflight', () => {
+  expect(llmProviderPreflight({ enabled: false, apiKey: 'fixture-key' })).toMatchObject({ ok: false, reason: 'gemini_provider_not_enabled' });
+  expect(llmProviderPreflight({ enabled: true, apiKey: null })).toMatchObject({ ok: false, reason: 'gemini_api_key_missing' });
   expect(llmProviderPreflight({ enabled: true, apiKey: 'fixture-key' })).toMatchObject({ ok: true });
 });
 
@@ -223,6 +253,7 @@ test('deterministicUltraPlanProvider exposes deterministic plan without executio
   expect(result).toMatchObject({
     ok: true,
     provider: PROVIDER_MODES.DETERMINISTIC,
+    planning_provider: PROVIDER_MODES.DETERMINISTIC,
     fallback_used: false
   });
   expect(result.plan.plan_hash).toBe(buildUltraPlan(story).plan_hash);
