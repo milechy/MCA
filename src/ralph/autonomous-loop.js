@@ -286,6 +286,18 @@ function advanceApplyPhase(story, { rootDir, now, apply_result = null }) {
   return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.GATES, story: updated.summary, next_action: nextActionForPhase(LOOP_PHASES.GATES) });
 }
 
+function gateFailureReason(gates, repair) {
+  if (!repair.escalation_required) return gates.reason || 'gates_failed';
+  if (repair.immediate_escalation) return repair.repair_event.reason;
+  return 'retry_exhausted';
+}
+
+function gateBlockedReason(gates, repair) {
+  if (!repair.escalation_required) return gates.reason || 'gates_failed';
+  if (repair.immediate_escalation) return repair.repair_event.reason;
+  return gates.reason || 'gates_failed';
+}
+
 function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
   const runner = gate_runner || (() => runOpenCodeAppliedPatchGates({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now }));
   const gates = runner({ rootDir, story, now });
@@ -302,13 +314,13 @@ function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
   const repairHistory = appendRepairHistory(story, repair.repair_event);
   const updated = updateStoryForPhase(story, nextPhase, {
     attempts,
-    blocked_reason: repair.escalation_required ? repair.repair_event.reason : gates.reason || 'gates_failed',
+    blocked_reason: gateBlockedReason(gates, repair),
     last_gate_failure_summary: summary,
     last_repair_type: repair.failure_type,
     last_repair_instruction: repair.escalation_required ? null : repair.repair_instruction,
     repair_history: repairHistory
   }, { rootDir, now, event: repair.escalation_required ? 'gate_repair_escalated' : 'gate_failed_fix_required' });
-  return baseResult({ ok: false, reason: repair.escalation_required ? repair.repair_event.reason : gates.reason || 'gates_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, failure_summary: summary, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
+  return baseResult({ ok: false, reason: gateFailureReason(gates, repair), story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, failure_summary: summary, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
 }
 
 function advanceFixLoopPhase(story, { rootDir, now }) {
