@@ -19,7 +19,7 @@ const FAILURE_TYPE_ATTEMPT_CAPS = Object.freeze({
   [FAILURE_TYPES.BUILD]: 2,
   [FAILURE_TYPES.E2E]: 2,
   [FAILURE_TYPES.TEST]: 3,
-  [FAILURE_TYPES.UNKNOWN]: 1
+  [FAILURE_TYPES.UNKNOWN]: null
 });
 
 function oneLine(value, maxLength = 600) {
@@ -84,8 +84,9 @@ function classifyFailure(failure = {}) {
   return FAILURE_TYPES.UNKNOWN;
 }
 
-function attemptCapForFailureType(failure_type) {
-  return FAILURE_TYPE_ATTEMPT_CAPS[failure_type] ?? FAILURE_TYPE_ATTEMPT_CAPS[FAILURE_TYPES.UNKNOWN];
+function attemptCapForFailureType(failure_type, configuredCap = 3) {
+  const cap = FAILURE_TYPE_ATTEMPT_CAPS[failure_type];
+  return cap === null || cap === undefined ? configuredCap : cap;
 }
 
 function shouldEscalateImmediately(failure_type) {
@@ -120,8 +121,8 @@ function buildRepairInstruction({ story = {}, failure = {}, failure_type, target
 
 function buildRepairDecision({ story = {}, failure = {}, attempts = 0, max_attempts = null, now = new Date() } = {}) {
   const failure_type = classifyFailure(failure);
-  const typeCap = attemptCapForFailureType(failure_type);
   const configuredCap = Number.isInteger(max_attempts) && max_attempts >= 0 ? max_attempts : Number.isInteger(story.max_attempts) ? story.max_attempts : 3;
+  const typeCap = attemptCapForFailureType(failure_type, configuredCap);
   const effective_cap = Math.min(typeCap, configuredCap);
   const target_files = extractTargetFiles(failure, story);
   const immediate = shouldEscalateImmediately(failure_type);
