@@ -1,5 +1,6 @@
 const { readApproval } = require('../ralph/approval-manager');
 const { APPROVAL_STATUSES } = require('../ralph/types');
+const { buildPrBody } = require('../ralph/pr-body-generator');
 const { currentHead, currentBranch, gitStatusShort } = require('./opencode-push-approval');
 
 function nowIso(now = () => new Date()) {
@@ -39,6 +40,8 @@ function blocked(reason, extra = {}) {
     merge_performed: false,
     deploy_performed: false,
     migration_performed: false,
+    pr_body_generated: false,
+    pr_body_generator: null,
     next_action: 'fix_pr_preflight_failure'
   };
 }
@@ -75,6 +78,7 @@ function opencodePrPreflight({ rootDir = process.cwd(), approval_id, now } = {})
     stage: 'opencode_pr_preflight',
     reason: null,
     approval_id,
+    approval,
     commit_sha: approval.commit_sha,
     head_branch: approval.head_branch,
     base_branch: approval.base_branch,
@@ -102,14 +106,34 @@ function createPullRequestWithClient(client, input) {
   return client.createPullRequest(input);
 }
 
+function buildFallbackPrBodyFromApproval(approval) {
+  return buildPrBody({
+    story: approval.story || {
+      story_id: approval.story_id,
+      title: approval.title,
+      requirement: approval.plan_summary,
+      current_plan_hash: approval.plan_hash,
+      current_patch_hash: approval.post_exec_diff_hash || approval.pre_exec_diff_hash,
+      github_issue: approval.github_issue || null
+    },
+    ultraplan: approval.ultraplan || approval.plan || {},
+    changed_files: approval.changed_files || approval.files_modified || approval.repository_files_modified || [],
+    gates: approval.gates || approval.gate_results || {},
+    approvals: approval.approval_trail || [approval],
+    plan_hash: approval.plan_hash,
+    diff_hash: approval.post_exec_diff_hash || approval.pre_exec_diff_hash
+  });
+}
+
 function createOpenCodePullRequest({ rootDir = process.cwd(), approval_id, githubClient, repository_full_name, now = () => new Date() } = {}) {
   const preflight = opencodePrPreflight({ rootDir, approval_id, now });
   if (!preflight.ok) return { ...preflight, stage: 'opencode_pr' };
+  const bodyResult = preflight.body ? { ok: true, body: preflight.body, body_length: preflight.body.length, bounded_output: true, raw_logs_included: false, secrets_included: false } : buildFallbackPrBodyFromApproval(preflight.approval);
   const startedAt = nowIso(now);
   const created = createPullRequestWithClient(githubClient, {
     repository_full_name,
     title: preflight.title,
-    body: preflight.body,
+    body: bodyResult.body,
     head: preflight.head_branch,
     base: preflight.base_branch
   });
@@ -140,8 +164,17 @@ function createOpenCodePullRequest({ rootDir = process.cwd(), approval_id, githu
     merge_performed: false,
     deploy_performed: false,
     migration_performed: false,
+    pr_body_generated: !preflight.body,
+    pr_body_generator: bodyResult.ok ? {
+      ok: true,
+      stage: bodyResult.stage || 'pr_body_generator',
+      body_length: bodyResult.body_length || String(bodyResult.body || '').length,
+      bounded_output: bodyResult.bounded_output === true,
+      raw_logs_included: bodyResult.raw_logs_included === true,
+      secrets_included: bodyResult.secrets_included === true
+    } : null,
     next_action: ok ? 'review_pull_request' : 'fix_pr_creation_failure'
   };
 }
 
-module.exports = { opencodePrPreflight, createOpenCodePullRequest, createPullRequestWithClient };
+module.exports = { opencodePrPreflight, createOpenCodePullRequest, createPullRequestWithClient, buildFallbackPrBodyFromApproval };

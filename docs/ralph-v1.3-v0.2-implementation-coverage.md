@@ -39,6 +39,10 @@ DEV-ONLY  intentionally available only behind explicit development opt-in
 | Dashboard | Group active, queued, waiting approval, failed, stopped, completed stories | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
 | Dashboard | Include approvals, jobs, gates, hashes, next actions, bounded audit | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
 | Dashboard | Redact secrets/raw logs and bound output | DONE | `src/ralph/dashboard.js`, `tests/ralph/dashboard.spec.js` |
+| PR Body | Deterministic PR body generation from story/plan/gates/approvals | DONE | `src/ralph/pr-body-generator.js`, `tests/ralph/pr-body-generator.spec.js` |
+| PR Body | GitHub issue, changed files, hashes, approval trail, safety checklist | DONE | `src/ralph/pr-body-generator.js`, `tests/ralph/pr-body-generator.spec.js` |
+| PR Body | PR creation fallback body when approval body is empty | DONE | `src/telegram/opencode-pr.js`, `tests/telegram/opencode-pr.spec.js` |
+| PR Body | Bounded/redacted body with no raw logs or secrets | DONE | `src/ralph/pr-body-generator.js`, `tests/ralph/pr-body-generator.spec.js`, `tests/telegram/opencode-pr.spec.js` |
 | Gate Runner | ordered gate manifest | DONE | `src/ralph/gate-runner.js` |
 | Gate Runner | Ralph CLI command | DONE | `node src/ralph/cli.js gate-runner`, `tests/ralph/cli-gate-runner.spec.js` |
 | Gate Runner | Telegram read-only manifest command | DONE | `/ralph-gate-manifest`, `tests/telegram/handlers.spec.js` |
@@ -164,6 +168,17 @@ DONE  Exclude raw logs, secrets, tokens, and unbounded stdout/stderr
 DONE  Tests cover output shape, grouping, redaction, missing optional files, and bounded output
 ```
 
+## Issue #20 PR Body Generation Coverage
+
+```text
+DONE  Generate deterministic PR body from story, plan, changed files, gates, and approvals
+DONE  Include GitHub issue metadata, plan_hash, diff_hash, changed files, gate summary, approval trail, and safety checklist
+DONE  Preserve explicit approval body when provided
+DONE  Generate fallback PR body when PR approval body is empty
+DONE  Bound and redact generated body; no raw logs or secret values
+DONE  Tests cover output shape, redaction, bounded metadata, and Telegram PR flow fallback
+```
+
 ## Previously Identified Gaps Now Closed
 
 ```text
@@ -183,6 +198,7 @@ DONE  Optional real external agent smoke for installed runtime
 DONE  Ralph Autonomous Loop / UltraPlan Runner for Issue #11
 DONE  Gemini/Kimi provider role separation for Issue #15
 DONE  Dashboard/status report for Issue #19
+DONE  PR body generation for Issue #20
 ```
 
 ## Remaining Implementation Gaps
@@ -193,6 +209,7 @@ None for Issue #11 MVP acceptance criteria.
 None for Issue #14 NemoClaw-mediated OpenCode runtime acceptance criteria.
 None for Issue #15 Gemini/Kimi provider role separation acceptance criteria.
 None for Issue #19 dashboard/status report acceptance criteria.
+None for Issue #20 PR body generation acceptance criteria.
 ```
 
 ## Still Blocked / Explicit Non-goals
@@ -214,7 +231,7 @@ model access to raw secrets
 Latest operator-provided verification:
 
 ```text
-telegram-tests: 261 passed
+telegram-tests: 263 passed
 supabase-local passed
 playwright-e2e passed
 post-secret-scan passed
