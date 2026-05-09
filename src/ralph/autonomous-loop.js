@@ -1,5 +1,6 @@
 const { STORY_STATUSES, readStory, updateStory, summarizeStory } = require('./story-queue');
 const { runUltraPlan } = require('./ultraplan-runner');
+const { buildRepairDecision, appendRepairHistory } = require('./repair-strategy');
 const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
@@ -35,6 +36,7 @@ function baseResult(overrides = {}) {
     ultraplan: null,
     opencode: null,
     gates: null,
+    repair: null,
     failure_summary: null,
     approval_id: null,
     job_id: null,
@@ -68,6 +70,7 @@ function boundedFailureSummary(result = {}) {
     ok: result.ok === true,
     stage: result.stage || null,
     reason: result.reason || null,
+    failed_gate: result.failed_gate || null,
     command: result.command || null,
     exit_code: typeof result.exit_code === 'number' ? result.exit_code : null,
     stdout_preview: oneLine(result.stdout_preview || result.stdout || ''),
@@ -93,6 +96,9 @@ function defaultSandboxRoot(story) {
 function taskForStory(story) {
   const plan = story.last_ultraplan || {};
   const task = Array.isArray(plan.tasks) ? plan.tasks.find((item) => item.agent === 'opencode') : null;
+  if (story.last_repair_instruction) {
+    return `${task?.objective || story.requirement}\n${story.last_repair_instruction}`;
+  }
   if (story.last_gate_failure_summary) {
     return `${task?.objective || story.requirement}\nFix bounded gate failure: ${JSON.stringify(story.last_gate_failure_summary)}`;
   }
@@ -284,22 +290,30 @@ function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
   const runner = gate_runner || (() => runOpenCodeAppliedPatchGates({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now }));
   const gates = runner({ rootDir, story, now });
   if (gates.ok === true) {
-    const updated = updateStoryForPhase(story, LOOP_PHASES.COMMIT_APPROVAL_PENDING, { blocked_reason: null, last_gate_failure_summary: null }, { rootDir, now, event: 'gates_passed' });
+    const updated = updateStoryForPhase(story, LOOP_PHASES.COMMIT_APPROVAL_PENDING, { blocked_reason: null, last_gate_failure_summary: null, last_repair_instruction: null }, { rootDir, now, event: 'gates_passed' });
     return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.COMMIT_APPROVAL_PENDING, story: updated.summary, gates, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: nextActionForPhase(LOOP_PHASES.COMMIT_APPROVAL_PENDING) });
   }
 
   const attempts = Number.isInteger(story.attempts) ? story.attempts + 1 : 1;
   const maxAttempts = Number.isInteger(story.max_attempts) ? story.max_attempts : 3;
   const summary = boundedFailureSummary(gates);
-  const exhausted = attempts >= maxAttempts;
-  const nextPhase = exhausted ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP;
-  const updated = updateStoryForPhase(story, nextPhase, { attempts, blocked_reason: gates.reason || 'gates_failed', last_gate_failure_summary: summary }, { rootDir, now, event: exhausted ? 'gate_retry_exhausted' : 'gate_failed_fix_required' });
-  return baseResult({ ok: false, reason: exhausted ? 'retry_exhausted' : gates.reason || 'gates_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, failure_summary: summary, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: exhausted ? nextActionForPhase(LOOP_PHASES.ESCALATED) : nextActionForPhase(LOOP_PHASES.FIX_LOOP) });
+  const repair = buildRepairDecision({ story, failure: summary, attempts, max_attempts: maxAttempts, now });
+  const nextPhase = repair.escalation_required ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP;
+  const repairHistory = appendRepairHistory(story, repair.repair_event);
+  const updated = updateStoryForPhase(story, nextPhase, {
+    attempts,
+    blocked_reason: repair.escalation_required ? repair.repair_event.reason : gates.reason || 'gates_failed',
+    last_gate_failure_summary: summary,
+    last_repair_type: repair.failure_type,
+    last_repair_instruction: repair.escalation_required ? null : repair.repair_instruction,
+    repair_history: repairHistory
+  }, { rootDir, now, event: repair.escalation_required ? 'gate_repair_escalated' : 'gate_failed_fix_required' });
+  return baseResult({ ok: false, reason: repair.escalation_required ? repair.repair_event.reason : gates.reason || 'gates_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, failure_summary: summary, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
 }
 
 function advanceFixLoopPhase(story, { rootDir, now }) {
   const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, { blocked_reason: null, current_job_id: null, current_candidate_patch_path: null }, { rootDir, now, event: 'fix_loop_dispatch_ready' });
-  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, failure_summary: story.last_gate_failure_summary || null, next_action: nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING) });
+  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, failure_summary: story.last_gate_failure_summary || null, repair: { failure_type: story.last_repair_type || null, repair_instruction: story.last_repair_instruction || null }, next_action: nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING) });
 }
 
 function advanceTerminalPhase(story) {
