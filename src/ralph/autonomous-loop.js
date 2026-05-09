@@ -2,6 +2,7 @@ const { STORY_STATUSES, readStory, updateStory, summarizeStory } = require('./st
 const { runUltraPlan } = require('./ultraplan-runner');
 const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
+const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
 
 const AUTONOMOUS_LOOP_VERSION = 'autonomous_loop_v0_1';
 const LOOP_PHASES = Object.freeze({
@@ -33,6 +34,8 @@ function baseResult(overrides = {}) {
     story: null,
     ultraplan: null,
     opencode: null,
+    gates: null,
+    failure_summary: null,
     approval_id: null,
     job_id: null,
     candidate_patch_path: null,
@@ -52,6 +55,29 @@ function baseResult(overrides = {}) {
   };
 }
 
+function oneLine(value, maxLength = 600) {
+  const normalized = String(value || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function boundedFailureSummary(result = {}) {
+  return {
+    ok: result.ok === true,
+    stage: result.stage || null,
+    reason: result.reason || null,
+    command: result.command || null,
+    exit_code: typeof result.exit_code === 'number' ? result.exit_code : null,
+    stdout_preview: oneLine(result.stdout_preview || result.stdout || ''),
+    stderr_preview: oneLine(result.stderr_preview || result.stderr || ''),
+    commands_executed: Array.isArray(result.commands_executed) ? result.commands_executed.map((item) => oneLine(item, 180)).slice(0, 10) : [],
+    files_modified: Array.isArray(result.files_modified) ? result.files_modified.slice(0, 50) : [],
+    repository_files_modified: Array.isArray(result.repository_files_modified) ? result.repository_files_modified.slice(0, 50) : []
+  };
+}
+
 function defaultApprovalId(story) {
   return `APR-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`;
 }
@@ -67,6 +93,9 @@ function defaultSandboxRoot(story) {
 function taskForStory(story) {
   const plan = story.last_ultraplan || {};
   const task = Array.isArray(plan.tasks) ? plan.tasks.find((item) => item.agent === 'opencode') : null;
+  if (story.last_gate_failure_summary) {
+    return `${task?.objective || story.requirement}\nFix bounded gate failure: ${JSON.stringify(story.last_gate_failure_summary)}`;
+  }
   return task?.objective || story.requirement;
 }
 
@@ -201,7 +230,7 @@ function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, p
   const jobId = story.current_job_id || defaultJobId(story);
   const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
   const task = taskForStory(story);
-  const dispatcher = opencode_dispatcher || ((input) => {
+  const dispatcher = opencode_dispatcher || (() => {
     const preflight = buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok });
     if (!preflight.ok) return { ...preflight, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, task_preview: task, candidate_patch_path: null, patch_preview: null };
     return runOpenCodeCandidatePatch(preflight, { rootDir, task, command: opencode_command, args: opencode_args, env: { ...env, [OPENCODE_SANDBOX_ENV]: 'true' }, timeout_ms, now: () => now });
@@ -236,19 +265,48 @@ function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, p
   });
 }
 
-function advanceTerminalPhase(story) {
-  return baseResult({
-    ok: true,
-    reason: 'story_terminal',
-    story_id: story.story_id,
-    from_phase: story.current_phase,
-    to_phase: story.current_phase,
-    story: summarizeStory(story),
-    next_action: nextActionForPhase(story.current_phase)
-  });
+function advancePatchPreviewPhase(story, { rootDir, now }) {
+  const updated = updateStoryForPhase(story, LOOP_PHASES.DIFF_APPROVAL_PENDING, { blocked_reason: 'diff_approval_required' }, { rootDir, now, event: 'diff_approval_required' });
+  return baseResult({ ok: true, reason: 'diff_approval_required', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.DIFF_APPROVAL_PENDING, story: updated.summary, approval_id: story.current_approval_id || null, job_id: story.current_job_id || null, candidate_patch_path: story.current_candidate_patch_path || null, next_action: nextActionForPhase(LOOP_PHASES.DIFF_APPROVAL_PENDING) });
 }
 
-function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms } = {}) {
+function advanceApplyPhase(story, { rootDir, now, apply_result = null }) {
+  if (apply_result && apply_result.ok === false) {
+    const summary = boundedFailureSummary(apply_result);
+    const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: apply_result.reason || 'apply_failed', last_gate_failure_summary: summary }, { rootDir, now, event: 'apply_failed' });
+    return baseResult({ ok: false, reason: apply_result.reason || 'apply_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, next_action: 'human_escalation_required' });
+  }
+  const updated = updateStoryForPhase(story, LOOP_PHASES.GATES, { blocked_reason: null }, { rootDir, now, event: 'apply_completed_or_deferred' });
+  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.GATES, story: updated.summary, next_action: nextActionForPhase(LOOP_PHASES.GATES) });
+}
+
+function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
+  const runner = gate_runner || (() => runOpenCodeAppliedPatchGates({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now }));
+  const gates = runner({ rootDir, story, now });
+  if (gates.ok === true) {
+    const updated = updateStoryForPhase(story, LOOP_PHASES.COMMIT_APPROVAL_PENDING, { blocked_reason: null, last_gate_failure_summary: null }, { rootDir, now, event: 'gates_passed' });
+    return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.COMMIT_APPROVAL_PENDING, story: updated.summary, gates, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: nextActionForPhase(LOOP_PHASES.COMMIT_APPROVAL_PENDING) });
+  }
+
+  const attempts = Number.isInteger(story.attempts) ? story.attempts + 1 : 1;
+  const maxAttempts = Number.isInteger(story.max_attempts) ? story.max_attempts : 3;
+  const summary = boundedFailureSummary(gates);
+  const exhausted = attempts >= maxAttempts;
+  const nextPhase = exhausted ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP;
+  const updated = updateStoryForPhase(story, nextPhase, { attempts, blocked_reason: gates.reason || 'gates_failed', last_gate_failure_summary: summary }, { rootDir, now, event: exhausted ? 'gate_retry_exhausted' : 'gate_failed_fix_required' });
+  return baseResult({ ok: false, reason: exhausted ? 'retry_exhausted' : gates.reason || 'gates_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, failure_summary: summary, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: exhausted ? nextActionForPhase(LOOP_PHASES.ESCALATED) : nextActionForPhase(LOOP_PHASES.FIX_LOOP) });
+}
+
+function advanceFixLoopPhase(story, { rootDir, now }) {
+  const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, { blocked_reason: null, current_job_id: null, current_candidate_patch_path: null }, { rootDir, now, event: 'fix_loop_dispatch_ready' });
+  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, failure_summary: story.last_gate_failure_summary || null, next_action: nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING) });
+}
+
+function advanceTerminalPhase(story) {
+  return baseResult({ ok: true, reason: 'story_terminal', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), next_action: nextActionForPhase(story.current_phase) });
+}
+
+function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms } = {}) {
   if (!story_id) return baseResult({ reason: 'story_id_required' });
   const story = readStory(rootDir, story_id);
   if (!story) return baseResult({ reason: 'story_not_found', story_id });
@@ -267,6 +325,14 @@ function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(
       return advanceWaitingApprovalPhase(story, { rootDir, now, approvals });
     case LOOP_PHASES.OPENCODE_RUNNING:
       return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms });
+    case LOOP_PHASES.PATCH_PREVIEW:
+      return advancePatchPreviewPhase(story, { rootDir, now });
+    case LOOP_PHASES.APPLY:
+      return advanceApplyPhase(story, { rootDir, now, apply_result });
+    case LOOP_PHASES.GATES:
+      return advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms });
+    case LOOP_PHASES.FIX_LOOP:
+      return advanceFixLoopPhase(story, { rootDir, now });
     default:
       return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), next_action: 'implement_next_autonomous_loop_phase' });
   }
@@ -281,6 +347,7 @@ function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reaso
 module.exports = {
   AUTONOMOUS_LOOP_VERSION,
   LOOP_PHASES,
+  boundedFailureSummary,
   defaultApprovalId,
   defaultJobId,
   defaultSandboxRoot,
