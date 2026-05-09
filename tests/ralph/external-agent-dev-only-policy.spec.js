@@ -13,7 +13,7 @@ const {
   runtimeModeForGateway
 } = require('../../src/ralph/external-agent-gateway');
 const { runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
-const { runRealExternalAgentSmoke } = require('../../scripts/ralph/real-external-agent-smoke');
+const { runGatewayCandidatePatch, runRealExternalAgentSmoke } = require('../../scripts/ralph/real-external-agent-smoke');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-external-agent-dev-only-'));
@@ -179,5 +179,40 @@ test('real external agent smoke blocks non-NemoClaw gateway unless explicitly op
     dev_only_gateway: true,
     execution_connected: false,
     next_action: 'rerun_with_explicit_dev_only_gateway_opt_in_or_use_nemoclaw'
+  });
+});
+
+test('real smoke routes NemoClaw through NemoClaw OpenCode gateway', () => {
+  const rootDir = tmpRoot();
+  const result = runGatewayCandidatePatch({
+    gateway: 'nemoclaw',
+    rootDir,
+    approvalId: 'APR-SMOKE-NEMO',
+    jobId: 'JOB-SMOKE-NEMO',
+    sandboxRoot: '.ralph/tmp/external-agent-smoke/APR-SMOKE-NEMO',
+    requested_paths: ['tests/generated.js'],
+    task: 'Generate candidate.patch only.',
+    command: 'nemoclaw',
+    env: {},
+    timeout_ms: 60000,
+    allow_dev_only_gateway: false,
+    now: () => new Date('2026-05-09T07:20:00.000Z')
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'nemoclaw_runtime_not_installed',
+    mediator: 'nemoclaw',
+    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW_MEDIATED,
+    runtime_installed: false,
+    execution_connected: false,
+    real_gateway_process_started: false,
+    opencode_execution_started: false,
+    apply_allowed: false,
+    commit_allowed: false,
+    push_allowed: false,
+    pr_allowed: false,
+    deploy_allowed: false,
+    migration_allowed: false
   });
 });
