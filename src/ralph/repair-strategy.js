@@ -154,7 +154,7 @@ function buildRepairDecision({ story = {}, failure = {}, attempts = 0, max_attem
     execution_connected: false,
     commands_executed: [],
     repository_files_modified: [],
-    next_action: escalation_required ? 'human_escalation_required' : 'dispatch_opencode_fix_candidate_patch'
+    next_action: escalation_required ? 'human_escalation_required' : 'dispatch_opencode_fix_candidate_patch_via_nemoclaw'
   };
 }
 
