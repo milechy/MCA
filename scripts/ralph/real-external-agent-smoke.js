@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
+const { runNemoClawOpenCodeCandidatePatch } = require('../../src/ralph/nemoclaw-opencode-gateway');
 const { GATEWAY_TYPES, gatewayIsDevOnly, devOnlyGatewayAllowed } = require('../../src/ralph/external-agent-gateway');
 
 const DEFAULT_SMOKE_PATH = 'tests/external-agent-generated.spec.js';
@@ -110,6 +111,39 @@ function normalizeGateway(value) {
   return SUPPORTED_GATEWAYS.includes(gateway) ? gateway : null;
 }
 
+function runGatewayCandidatePatch({ gateway, rootDir, approvalId, jobId, sandboxRoot, requested_paths, task, command, env, timeout_ms, allow_dev_only_gateway, now }) {
+  if (gateway === GATEWAY_TYPES.NEMOCLAW) {
+    return runNemoClawOpenCodeCandidatePatch({
+      rootDir,
+      approval_id: approvalId,
+      job_id: jobId,
+      sandbox_root: sandboxRoot,
+      requested_paths,
+      task,
+      command: command || 'nemoclaw',
+      env,
+      timeout_ms,
+      now
+    });
+  }
+  return runExternalAgentCandidatePatch({
+    rootDir,
+    approval_id: approvalId,
+    job_id: jobId,
+    gateway_type: gateway,
+    gateway_name: gateway,
+    sandbox_root: sandboxRoot,
+    requested_paths,
+    task,
+    command,
+    env,
+    timeout_ms,
+    explicit_runtime_approval: true,
+    allow_dev_only_gateway,
+    now
+  });
+}
+
 function runRealExternalAgentSmoke({
   rootDir = process.cwd(),
   gateway_type = process.env.RALPH_EXTERNAL_AGENT_SMOKE_GATEWAY || 'nemoclaw',
@@ -145,22 +179,7 @@ function runRealExternalAgentSmoke({
   if (statusBefore === null) return blocked('git_status_failed', { rootDir, gateway_type: gateway, gateway_name: gateway, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, runtime_installed: true });
   if (statusBefore !== '') return blocked('working_tree_dirty_before_smoke', { rootDir, gateway_type: gateway, gateway_name: gateway, job_id: jobId, approval_id: approvalId, sandbox_root: sandboxRoot, runtime_installed: true, working_tree_clean_before: false });
 
-  const run = runExternalAgentCandidatePatch({
-    rootDir,
-    approval_id: approvalId,
-    job_id: jobId,
-    gateway_type: gateway,
-    gateway_name: gateway,
-    sandbox_root: sandboxRoot,
-    requested_paths,
-    task,
-    command: runtimeCommand,
-    env,
-    timeout_ms,
-    explicit_runtime_approval: true,
-    allow_dev_only_gateway,
-    now
-  });
+  const run = runGatewayCandidatePatch({ gateway, rootDir, approvalId, jobId, sandboxRoot, requested_paths, task, command: runtimeCommand, env, timeout_ms, allow_dev_only_gateway, now });
   gitRestoreRuntimeFiles(rootDir);
 
   const statusAfter = gitStatusShort(rootDir);
@@ -214,5 +233,6 @@ module.exports = {
   timestampId,
   gitStatusShort,
   commandExists,
+  runGatewayCandidatePatch,
   runRealExternalAgentSmoke
 };
