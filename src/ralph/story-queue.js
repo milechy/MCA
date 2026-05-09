@@ -173,6 +173,11 @@ function listStories({ rootDir = process.cwd(), status = null, limit = 20 } = {}
     .slice(0, Math.max(1, Math.min(100, limit)));
 }
 
+function findStoryByApprovalId(rootDir, approvalId) {
+  if (!approvalId) return null;
+  return listStories({ rootDir, limit: 100 }).find((story) => story.current_approval_id === approvalId) || null;
+}
+
 function updateStory(storyId, patch = {}, { rootDir = process.cwd(), now = new Date(), event = 'story_updated' } = {}) {
   const current = readStory(rootDir, storyId);
   if (!current) return { ok: false, stage: 'story_queue_update', reason: 'story_not_found', story_id: safeStoryId(storyId) };
@@ -191,6 +196,23 @@ function updateStory(storyId, patch = {}, { rootDir = process.cwd(), now = new D
   return writeStory(rootDir, updated);
 }
 
+function markStoryForReplanByApproval(approvalId, instruction, { rootDir = process.cwd(), now = new Date() } = {}) {
+  const story = findStoryByApprovalId(rootDir, approvalId);
+  if (!story) return { ok: false, stage: 'story_queue_replan', reason: 'story_not_found_for_approval', approval_id: approvalId };
+  const updated = updateStory(story.story_id, {
+    status: STORY_STATUSES.QUEUED,
+    current_phase: 'PLAN',
+    current_approval_id: null,
+    current_job_id: null,
+    current_plan_hash: null,
+    current_candidate_patch_path: null,
+    blocked_reason: 'modify_requires_replan',
+    modify_instruction: oneLine(instruction, 1000),
+    requirement: instruction ? `${story.requirement} Modify: ${oneLine(instruction, 1000)}` : story.requirement
+  }, { rootDir, now, event: 'story_replan_requested' });
+  return { ...updated, stage: 'story_queue_replan', approval_id: approvalId };
+}
+
 module.exports = {
   STORY_QUEUE_VERSION,
   STORY_DIR,
@@ -202,7 +224,9 @@ module.exports = {
   writeStory,
   readStory,
   listStories,
+  findStoryByApprovalId,
   updateStory,
+  markStoryForReplanByApproval,
   summarizeStory,
   normalizeRequestedPaths
 };
