@@ -36,6 +36,7 @@ function redactValue(value) {
 
 function normalizePlanningProvider(value) {
   const provider = String(value || PLANNING_PROVIDERS.DETERMINISTIC).trim().toLowerCase();
+  if (provider === 'llm') return PLANNING_PROVIDERS.GEMINI;
   return Object.values(PLANNING_PROVIDERS).includes(provider) ? provider : null;
 }
 
