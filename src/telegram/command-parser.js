@@ -11,6 +11,8 @@ function parseTelegramCommand(text) {
   if (command === '/status') return { type: 'status', raw, args };
   if (command === '/policy') return { type: 'policy', raw, args };
   if (command === '/ralph-start') return { type: 'ralph_start', raw, args };
+  if (command === '/ralph-tick') return { type: 'ralph_tick', raw, args };
+  if (command === '/ralph-run-until-blocked') return { type: 'ralph_run_until_blocked', raw, args };
   if (command === '/ralph-loop-status') return { type: 'ralph_loop_status', raw, args };
   if (command === '/ralph-pause') return { type: 'ralph_pause', raw, args };
   if (command === '/ralph-resume') return { type: 'ralph_resume', raw, args };
