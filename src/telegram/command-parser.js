@@ -10,6 +10,12 @@ function parseTelegramCommand(text) {
   if (command === '/ping') return { type: 'ping', raw, args };
   if (command === '/status') return { type: 'status', raw, args };
   if (command === '/policy') return { type: 'policy', raw, args };
+  if (command === '/ralph-start') return { type: 'ralph_start', raw, args };
+  if (command === '/ralph-loop-status') return { type: 'ralph_loop_status', raw, args };
+  if (command === '/ralph-pause') return { type: 'ralph_pause', raw, args };
+  if (command === '/ralph-resume') return { type: 'ralph_resume', raw, args };
+  if (command === '/ralph-stop') return { type: 'ralph_stop', raw, args };
+  if (command === '/ralph-artifact') return { type: 'ralph_artifact', raw, args };
   if (command === '/ralph-plan') return { type: 'ralph_plan', raw, args };
   if (command === '/ralph-gate-manifest') return { type: 'ralph_gate_manifest', raw, args };
   if (command === '/confirm') return { type: 'confirm', raw, args };
