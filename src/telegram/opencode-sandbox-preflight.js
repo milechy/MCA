@@ -4,6 +4,13 @@ const { isAllowedSandboxRoot } = require('./opencode-sandbox-plan');
 const { DEFAULT_ALLOWED_PATHS, DEFAULT_FORBIDDEN_PATHS } = require('./opencode-dry-run');
 
 const OPENCODE_SANDBOX_ENV = 'RALPH_OPENCODE_SANDBOX_ENABLED';
+const RALPH_RUNTIME_STATE_PATTERNS = Object.freeze([
+  '.ralph/stories/',
+  '.ralph/tmp/',
+  '.ralph/approval-pending/',
+  '.ralph/logs/',
+  '.ralph/approval-log.jsonl'
+]);
 
 function oneLine(value, maxLength = 180) {
   const normalized = String(value || '')
@@ -22,12 +29,45 @@ function runGit(args, rootDir) {
   return execFileSync('git', args, { cwd: rootDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 }
 
-function workingTreeClean(rootDir) {
+function parseGitStatusPorcelain(statusText = '') {
+  return String(statusText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const status = line.slice(0, 2);
+      const rawPath = line.slice(3).trim();
+      const path = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop() : rawPath;
+      return { status, path: path.replace(/\\/g, '/') };
+    })
+    .filter((entry) => entry.path);
+}
+
+function isRalphRuntimeStatePath(filePath) {
+  const normalized = String(filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return RALPH_RUNTIME_STATE_PATTERNS.some((pattern) => {
+    if (pattern.endsWith('/')) return normalized === pattern.slice(0, -1) || normalized.startsWith(pattern);
+    return normalized === pattern;
+  });
+}
+
+function dirtyEntries(rootDir) {
   try {
-    return runGit(['status', '--porcelain'], rootDir) === '';
+    return parseGitStatusPorcelain(runGit(['status', '--porcelain'], rootDir));
   } catch {
-    return false;
+    return null;
   }
+}
+
+function blockingDirtyEntries(rootDir) {
+  const entries = dirtyEntries(rootDir);
+  if (entries === null) return null;
+  return entries.filter((entry) => !isRalphRuntimeStatePath(entry.path));
+}
+
+function workingTreeClean(rootDir) {
+  const blocking = blockingDirtyEntries(rootDir);
+  return Array.isArray(blocking) && blocking.length === 0;
 }
 
 function currentBranch(rootDir) {
@@ -109,6 +149,8 @@ function makeBaseResult(overrides = {}) {
     sandbox_root: null,
     branch: null,
     working_tree_clean: false,
+    dirty_entries: [],
+    ignored_runtime_state_entries: [],
     opencode_sandbox_enabled: false,
     requested_paths: [],
     blocked_paths: [],
@@ -128,7 +170,11 @@ function makeBaseResult(overrides = {}) {
 
 function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, sandbox_root, requested_paths = [], pre_secret_scan_ok = false, env = process.env, now = new Date() } = {}) {
   const branch = currentBranch(rootDir);
-  const clean = workingTreeClean(rootDir);
+  const entries = dirtyEntries(rootDir);
+  const gitStatusFailed = entries === null;
+  const blockingEntries = gitStatusFailed ? [] : entries.filter((entry) => !isRalphRuntimeStatePath(entry.path));
+  const ignoredEntries = gitStatusFailed ? [] : entries.filter((entry) => isRalphRuntimeStatePath(entry.path));
+  const clean = !gitStatusFailed && blockingEntries.length === 0;
   const enabled = opencodeSandboxEnabled(env);
   const { requested, blocked } = classifyRequestedPaths(requested_paths);
   const base = {
@@ -136,12 +182,15 @@ function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, 
     sandbox_root: sandbox_root || null,
     branch,
     working_tree_clean: clean,
+    dirty_entries: blockingEntries.map((entry) => entry.path).slice(0, 20),
+    ignored_runtime_state_entries: ignoredEntries.map((entry) => entry.path).slice(0, 20),
     opencode_sandbox_enabled: enabled,
     requested_paths: requested,
     blocked_paths: blocked,
     pre_secret_scan_ok: pre_secret_scan_ok === true
   };
 
+  if (gitStatusFailed) return makeBaseResult({ ...base, reason: 'git_status_failed' });
   if (!approval_id) return makeBaseResult({ ...base, reason: 'approval_id_required' });
   const approval = loadApproval(rootDir, approval_id);
   const approvalCheck = approvalStatus(approval, now);
@@ -165,7 +214,12 @@ function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, 
 
 module.exports = {
   OPENCODE_SANDBOX_ENV,
+  RALPH_RUNTIME_STATE_PATTERNS,
   opencodeSandboxEnabled,
+  parseGitStatusPorcelain,
+  isRalphRuntimeStatePath,
+  dirtyEntries,
+  blockingDirtyEntries,
   workingTreeClean,
   currentBranch,
   branchAllowed,
