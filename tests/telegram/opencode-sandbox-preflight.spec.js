@@ -120,7 +120,7 @@ test('OpenCode sandbox runner preflight ignores Ralph runtime state entries', ()
     reason: null,
     working_tree_clean: true,
     dirty_entries: [],
-    ignored_runtime_state_entries: expect.arrayContaining(['.ralph/approval-log.jsonl', '.ralph/stories/'])
+    ignored_runtime_state_entries: expect.arrayContaining(['.ralph/approval-log.jsonl', '.ralph/stories/STORY-GH-27.json'])
   });
 });
 
