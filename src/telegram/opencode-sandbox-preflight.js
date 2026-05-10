@@ -57,7 +57,7 @@ function isRalphRuntimeStatePath(filePath) {
 
 function dirtyEntries(rootDir) {
   try {
-    return parseGitStatusPorcelain(runGitRaw(['status', '--porcelain'], rootDir));
+    return parseGitStatusPorcelain(runGitRaw(['status', '--porcelain', '-uall'], rootDir));
   } catch {
     return null;
   }
