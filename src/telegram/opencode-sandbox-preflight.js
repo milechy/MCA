@@ -29,16 +29,20 @@ function runGit(args, rootDir) {
   return execFileSync('git', args, { cwd: rootDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 }
 
+function runGitRaw(args, rootDir) {
+  return execFileSync('git', args, { cwd: rootDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
 function parseGitStatusPorcelain(statusText = '') {
   return String(statusText || '')
     .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean)
+    .map((line) => line.replace(/\r$/g, ''))
+    .filter((line) => line.length > 0)
     .map((line) => {
       const status = line.slice(0, 2);
-      const rawPath = line.slice(3).trim();
-      const path = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop() : rawPath;
-      return { status, path: path.replace(/\\/g, '/') };
+      const rawPath = line.length > 3 ? line.slice(3).trim() : '';
+      const filePath = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop() : rawPath;
+      return { status, path: filePath.replace(/\\/g, '/') };
     })
     .filter((entry) => entry.path);
 }
@@ -53,7 +57,7 @@ function isRalphRuntimeStatePath(filePath) {
 
 function dirtyEntries(rootDir) {
   try {
-    return parseGitStatusPorcelain(runGit(['status', '--porcelain'], rootDir));
+    return parseGitStatusPorcelain(runGitRaw(['status', '--porcelain'], rootDir));
   } catch {
     return null;
   }
