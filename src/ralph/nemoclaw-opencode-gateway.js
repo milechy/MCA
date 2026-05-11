@@ -99,6 +99,7 @@ function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [], file_co
   return [
     'You are OpenCode running inside a NemoClaw/OpenShell sandbox under Ralph control.',
     'Produce a candidate.patch for review only.',
+    'Output contract: candidate.patch must exist in the current working directory, or your reply must contain a unified git diff. Any prose-only response is invalid.',
     'Preferred: create exactly one file named candidate.patch in the current working directory.',
     'Fallback: if file writing is unavailable, reply with a unified git diff only. Prefer including a diff --git header.',
     'For existing files in bounded file context, never use /dev/null as the old file; emit a context diff against the supplied content.',
@@ -225,6 +226,13 @@ function classifyNemoClawFailureReason({ timedOut = false, ok = false, patchLook
   return 'nemoclaw_runtime_failed';
 }
 
+function nextActionForNemoClawFailure(reason) {
+  if (reason === 'provider_rate_limited') return 'retry_after_provider_rate_limit';
+  if (reason === 'candidate_patch_missing') return 'retry_after_agent_output_contract_violation';
+  if (reason === 'candidate_patch_invalid') return 'repair_agent_candidate_patch_output';
+  return 'fix_nemoclaw_gateway_failure';
+}
+
 function makeBase(overrides = {}) {
   return { ok: false, stage: 'nemoclaw_opencode_gateway', reason: null, mediator: 'nemoclaw', opencode_runtime_mode: 'nemoclaw-mediated', gateway_type: 'nemoclaw', gateway_name: 'nemoclaw', job_id: null, approval_id: null, sandbox_root: null, candidate_patch_path: null, command_preview: null, exit_code: null, stdout_preview: '', stderr_preview: '', duration_ms: 0, timeout_ms: DEFAULT_TIMEOUT_MS, runtime_installed: false, candidate_patch_command_available: false, execution_connected: false, real_gateway_process_started: false, opencode_execution_started: false, apply_allowed: false, commit_allowed: false, push_allowed: false, pr_allowed: false, merge_allowed: false, deploy_allowed: false, migration_allowed: false, unrestricted_shell_allowed: false, raw_log_allowed: false, secret_display_allowed: false, secret_persistence_allowed: false, bounded_metadata_only: true, commands_executed: [], files_modified: [], repository_files_modified: [], job: null, next_action: 'fix_nemoclaw_gateway_failure', ...overrides };
 }
@@ -276,10 +284,10 @@ function runNemoClawOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_i
   const ok = exitCode === 0 && !timedOut && patchLooksValid && patchValidation.ok;
   const combinedOutput = `${runResult.stdout || ''}\n${runResult.stderr || runResult.error?.message || ''}\n${catResult.stdout || ''}\n${catResult.stderr || catResult.error?.message || ''}`;
   const reason = classifyNemoClawFailureReason({ timedOut, ok, patchLooksValid, patchValidation, catExitCode, stdoutPatchText, outputText: combinedOutput });
-  const raw = makeBase({ ok, reason, job_id: allocatedJobId, approval_id, sandbox_root: policy.sandbox_root, candidate_patch_path: policy.candidate_patch_path, command_preview: commandPreview(OPENSHELL_COMMAND, agentArgs), exit_code: exitCode, stdout_preview: `${runResult.stdout || ''}\n${catResult.stdout || ''}`, stderr_preview: `${runResult.stderr || runResult.error?.message || ''}\n${catResult.stderr || catResult.error?.message || ''}`, duration_ms: Math.max(0, finished.getTime() - started.getTime()), timeout_ms, runtime_installed: true, candidate_patch_command_available: true, execution_connected: true, real_gateway_process_started: true, opencode_execution_started: true, patch_source: patchSource, patch_validation: patchValidation, commands_executed: [commandPreview(OPENSHELL_COMMAND, agentArgs), commandPreview(OPENSHELL_COMMAND, catArgs)], files_modified: ok ? [policy.candidate_patch_path] : [], repository_files_modified: [], next_action: ok ? 'preview_candidate_patch_before_apply' : reason === 'provider_rate_limited' ? 'retry_after_provider_rate_limit' : 'fix_nemoclaw_gateway_failure' });
+  const raw = makeBase({ ok, reason, job_id: allocatedJobId, approval_id, sandbox_root: policy.sandbox_root, candidate_patch_path: policy.candidate_patch_path, command_preview: commandPreview(OPENSHELL_COMMAND, agentArgs), exit_code: exitCode, stdout_preview: `${runResult.stdout || ''}\n${catResult.stdout || ''}`, stderr_preview: `${runResult.stderr || runResult.error?.message || ''}\n${catResult.stderr || catResult.error?.message || ''}`, duration_ms: Math.max(0, finished.getTime() - started.getTime()), timeout_ms, runtime_installed: true, candidate_patch_command_available: true, execution_connected: true, real_gateway_process_started: true, opencode_execution_started: true, patch_source: patchSource, patch_validation: patchValidation, commands_executed: [commandPreview(OPENSHELL_COMMAND, agentArgs), commandPreview(OPENSHELL_COMMAND, catArgs)], files_modified: ok ? [policy.candidate_patch_path] : [], repository_files_modified: [], next_action: ok ? 'preview_candidate_patch_before_apply' : nextActionForNemoClawFailure(reason) });
   const safe = sanitizeGatewayResult(raw, policy);
   if (!record_job) return safe;
   return writeGatewayJob(rootDir, safe, { task_preview: policy.task_preview, started_at: started.toISOString(), finished_at: finished.toISOString(), status: ok ? 'completed' : 'failed' });
 }
 
-module.exports = { DEFAULT_TIMEOUT_MS, NEMOCLAW_COMMAND, OPENSHELL_COMMAND, NEMOCLAW_SANDBOX_ENV, DEFAULT_NEMOCLAW_SANDBOX, DEFAULT_OPENCLAW_SESSION_ID, UNSUPPORTED_CANDIDATE_PATCH_REASON, MAX_CONTEXT_FILE_CHARS, MAX_CONTEXT_TOTAL_CHARS, ensureSandboxDir, buildNemoClawArgs, runtimeInstalled, candidatePatchCommandAvailable, sandboxNameFromEnv, escapeNewlinesForArg, buildRequestedFileContext, buildOpenClawCandidatePatchPrompt, buildOpenShellAgentArgs, buildOpenShellCatArgs, synthesizeGitHeaderForUnifiedDiff, extractUnifiedDiffFromText, validPatchText, parsePatchFileSections, validateCandidatePatchAgainstRepository, classifyNemoClawFailureReason, commandPreview, runNemoClawOpenCodeCandidatePatch };
+module.exports = { DEFAULT_TIMEOUT_MS, NEMOCLAW_COMMAND, OPENSHELL_COMMAND, NEMOCLAW_SANDBOX_ENV, DEFAULT_NEMOCLAW_SANDBOX, DEFAULT_OPENCLAW_SESSION_ID, UNSUPPORTED_CANDIDATE_PATCH_REASON, MAX_CONTEXT_FILE_CHARS, MAX_CONTEXT_TOTAL_CHARS, ensureSandboxDir, buildNemoClawArgs, runtimeInstalled, candidatePatchCommandAvailable, sandboxNameFromEnv, escapeNewlinesForArg, buildRequestedFileContext, buildOpenClawCandidatePatchPrompt, buildOpenShellAgentArgs, buildOpenShellCatArgs, synthesizeGitHeaderForUnifiedDiff, extractUnifiedDiffFromText, validPatchText, parsePatchFileSections, validateCandidatePatchAgainstRepository, classifyNemoClawFailureReason, nextActionForNemoClawFailure, commandPreview, runNemoClawOpenCodeCandidatePatch };
