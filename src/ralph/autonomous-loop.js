@@ -2,6 +2,8 @@ const { STORY_STATUSES, readStory, updateStory, summarizeStory } = require('./st
 const { runUltraPlan } = require('./ultraplan-runner');
 const { buildRepairDecision, appendRepairHistory } = require('./repair-strategy');
 const { buildProviderConfig, safeProviderConfig } = require('./provider-config');
+const { createApproval, approveApprovalRecordOnly } = require('./approval-manager');
+const { APPROVAL_TYPES } = require('./types');
 const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
 const { runNemoClawOpenCodeCandidatePatch } = require('./nemoclaw-opencode-gateway');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
@@ -175,6 +177,25 @@ function currentSafeProviderConfig(env = process.env) {
   return safeProviderConfig(buildProviderConfig({ env }));
 }
 
+function ensureOpenCodeApprovalRecord(story, { rootDir, approval_id, now }) {
+  const plan = story.last_ultraplan || { story_id: story.story_id, objective: story.requirement, requested_paths: story.requested_paths || [] };
+  const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+  try {
+    createApproval(plan, { score: 0, category: 'low', label: 'RISK_0_LOW', requires_approval: true }, {
+      rootDir,
+      approval_id,
+      approval_type: APPROVAL_TYPES.DIFF,
+      requested_action: 'opencode_candidate_patch',
+      allowed_user_ids: [],
+      expires_at: expiresAt
+    });
+    approveApprovalRecordOnly(approval_id, 'autonomous-loop', { rootDir, channel: 'ralph' });
+    return { ok: true, approval_id, created: true, approved_record_only: true };
+  } catch (error) {
+    return { ok: false, reason: 'approval_record_create_failed', approval_id, error_preview: oneLine(error && error.message ? error.message : String(error)) };
+  }
+}
+
 function advancePlanPhase(story, { rootDir, now, env = process.env }) {
   const providerConfig = currentSafeProviderConfig(env);
   const ultraplan = runUltraPlan(story);
@@ -283,6 +304,16 @@ function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, p
   const jobId = story.current_job_id || defaultJobId(story);
   const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
   const task = taskForStory(story);
+  const approvalRecord = ensureOpenCodeApprovalRecord(story, { rootDir, approval_id: approvalId, now });
+  if (!approvalRecord.ok) {
+    const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, {
+      current_approval_id: approvalId,
+      current_job_id: jobId,
+      current_sandbox_root: sandboxRoot,
+      blocked_reason: approvalRecord.reason
+    }, { rootDir, now, event: 'opencode_approval_record_failed' });
+    return baseResult({ ok: false, reason: approvalRecord.reason, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, approval_id: approvalId, job_id: jobId, provider_config: story.last_provider_config || null, next_action: 'fix_opencode_approval_record_failure' });
+  }
   const dispatcher = opencode_dispatcher || buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn });
   const opencode = dispatcher({ rootDir, story, approval_id: approvalId, job_id: jobId, sandbox_root: sandboxRoot, task, requested_paths: story.requested_paths || [], now });
   const ok = opencode.ok === true;
