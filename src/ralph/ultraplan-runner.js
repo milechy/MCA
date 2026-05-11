@@ -16,9 +16,10 @@ function oneLine(value, maxLength = 4000) {
 function inferRequestedPaths(requirement) {
   const text = oneLine(requirement).toLowerCase();
   const paths = [];
-  if (/test|spec|テスト|回帰/.test(text)) paths.push('tests/ralph/autonomous-generated.spec.js');
+  if (/readme|docs?|documentation|ドキュメント|説明/.test(text)) paths.push('README.md');
+  if (/test|spec|テスト|回帰/.test(text) && paths.length === 0) paths.push('tests/ralph/autonomous-generated.spec.js');
   if (/telegram|テレグラム/.test(text)) paths.push('src/telegram/handlers.js', 'tests/telegram/handlers.spec.js');
-  if (/ralph|autonomous|自律|loop|ループ|ultraplan|plan/.test(text)) paths.push('src/ralph/autonomous-loop.js', 'tests/ralph/autonomous-loop.spec.js');
+  if (/ralph|autonomous|自律|loop|ループ|ultraplan|plan/.test(text) && !paths.includes('README.md')) paths.push('src/ralph/autonomous-loop.js', 'tests/ralph/autonomous-loop.spec.js');
   if (/ui|画面|page|component|顧客|一覧|検索|pagination|ページネーション/.test(text)) paths.push('src/app/autonomous-generated.js', 'tests/e2e/autonomous-generated.spec.js');
   return Array.from(new Set(paths)).slice(0, 10);
 }
