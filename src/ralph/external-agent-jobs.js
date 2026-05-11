@@ -16,7 +16,7 @@ function oneLine(value, maxLength = MAX_PREVIEW_CHARS) {
 
 function safeExternalAgentJobId(job_id) {
   const value = String(job_id || '').trim();
-  return /^JOB-EXTAGENT-[A-Z0-9_-]{1,80}$/.test(value) ? value : null;
+  return /^JOB-(?:EXTAGENT|OPENCODE|OPENCODE-AUTO)-[A-Z0-9_-]{1,80}$/.test(value) ? value : null;
 }
 
 function defaultExternalAgentJobId(date = new Date()) {
