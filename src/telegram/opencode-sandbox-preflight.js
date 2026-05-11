@@ -4,6 +4,7 @@ const { isAllowedSandboxRoot } = require('./opencode-sandbox-plan');
 const { DEFAULT_ALLOWED_PATHS, DEFAULT_FORBIDDEN_PATHS } = require('./opencode-dry-run');
 
 const OPENCODE_SANDBOX_ENV = 'RALPH_OPENCODE_SANDBOX_ENABLED';
+const DEFAULT_SANDBOX_ALLOWED_PATHS = Object.freeze(['README.md', ...DEFAULT_ALLOWED_PATHS]);
 const RALPH_RUNTIME_STATE_PATTERNS = Object.freeze([
   '.ralph/stories/',
   '.ralph/tmp/',
@@ -132,12 +133,12 @@ function isForbiddenRequestedPath(requestedPath, forbiddenPatterns = DEFAULT_FOR
   return forbiddenPatterns.some((pattern) => pathMatchesPattern(normalized, pattern));
 }
 
-function isAllowedRequestedPath(requestedPath, allowedPatterns = DEFAULT_ALLOWED_PATHS) {
+function isAllowedRequestedPath(requestedPath, allowedPatterns = DEFAULT_SANDBOX_ALLOWED_PATHS) {
   const normalized = String(requestedPath || '').replace(/\\/g, '/');
   return allowedPatterns.some((pattern) => pathMatchesPattern(normalized, pattern));
 }
 
-function classifyRequestedPaths(paths, allowedPatterns = DEFAULT_ALLOWED_PATHS, forbiddenPatterns = DEFAULT_FORBIDDEN_PATHS) {
+function classifyRequestedPaths(paths, allowedPatterns = DEFAULT_SANDBOX_ALLOWED_PATHS, forbiddenPatterns = DEFAULT_FORBIDDEN_PATHS) {
   const requested = normalizeRequestedPaths(paths);
   const blocked = requested.filter((p) => isForbiddenRequestedPath(p, forbiddenPatterns) || !isAllowedRequestedPath(p, allowedPatterns));
   return { requested, blocked };
@@ -218,6 +219,7 @@ function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, 
 
 module.exports = {
   OPENCODE_SANDBOX_ENV,
+  DEFAULT_SANDBOX_ALLOWED_PATHS,
   RALPH_RUNTIME_STATE_PATTERNS,
   opencodeSandboxEnabled,
   parseGitStatusPorcelain,
