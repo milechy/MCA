@@ -3,7 +3,8 @@ const path = require('node:path');
 
 const JOB_STATUSES = Object.freeze(['planned', 'running', 'completed', 'failed', 'aborted']);
 const JOB_DIR = path.join('.ralph', 'external-agent-jobs');
-const MAX_PREVIEW_CHARS = 240;
+const MAX_PREVIEW_CHARS = 1200;
+const MAX_COMMAND_PREVIEW_CHARS = 180;
 
 function oneLine(value, maxLength = MAX_PREVIEW_CHARS) {
   const normalized = String(value || '')
@@ -60,7 +61,7 @@ function summarizeExternalAgentJob(job) {
     execution_connected: job.execution_connected === true,
     real_gateway_process_started: job.real_gateway_process_started === true,
     abort_requested: job.abort_requested === true,
-    commands_executed: Array.isArray(job.commands_executed) ? job.commands_executed.map((entry) => oneLine(entry, 160)).slice(0, 5) : [],
+    commands_executed: Array.isArray(job.commands_executed) ? job.commands_executed.map((entry) => oneLine(entry, MAX_COMMAND_PREVIEW_CHARS)).slice(0, 5) : [],
     files_modified: Array.isArray(job.files_modified) ? job.files_modified.slice(0, 20) : [],
     repository_files_modified: Array.isArray(job.repository_files_modified) ? job.repository_files_modified.slice(0, 20) : [],
     apply_allowed: false,
@@ -99,7 +100,7 @@ function writeExternalAgentJob(rootDir, job) {
     execution_connected: job.execution_connected === true,
     real_gateway_process_started: job.real_gateway_process_started === true,
     abort_requested: job.abort_requested === true,
-    commands_executed: Array.isArray(job.commands_executed) ? job.commands_executed.map((entry) => oneLine(entry, 160)).slice(0, 5) : [],
+    commands_executed: Array.isArray(job.commands_executed) ? job.commands_executed.map((entry) => oneLine(entry, MAX_COMMAND_PREVIEW_CHARS)).slice(0, 5) : [],
     files_modified: Array.isArray(job.files_modified) ? job.files_modified.slice(0, 20) : [],
     repository_files_modified: [],
     apply_allowed: false,
