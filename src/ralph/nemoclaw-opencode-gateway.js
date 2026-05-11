@@ -112,9 +112,24 @@ function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [], file_co
   ].join('\n');
 }
 
-function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], timeout_ms = DEFAULT_TIMEOUT_MS, file_context = '', session_id = DEFAULT_OPENCLAW_SESSION_ID }) {
+function buildOpenClawDiffOnlyPrompt({ task, requested_paths = [], file_context = '' }) {
+  const paths = requested_paths.length ? requested_paths.join(', ') : '(no requested paths supplied)';
+  return [
+    'Return ONLY a unified git diff. No prose. No markdown fence.',
+    'The first line must begin with: diff --git',
+    `Allowed paths: ${paths}`,
+    `Task: ${String(task || '').slice(0, 4000)}`,
+    file_context ? `File context:\n${file_context}` : 'File context: files may be missing or empty.',
+    'Do not apply, commit, push, create a PR, deploy, run migrations, or print secrets.'
+  ].join('\n');
+}
+
+function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], timeout_ms = DEFAULT_TIMEOUT_MS, file_context = '', session_id = DEFAULT_OPENCLAW_SESSION_ID, diff_only = false }) {
   const seconds = String(Math.max(1, Math.ceil(timeout_ms / 1000)));
-  return ['sandbox', 'exec', '-n', sandbox_name, '--workdir', '/sandbox', '--timeout', seconds, '--no-tty', '--', 'openclaw', 'agent', '--session-id', session_id, '--message', escapeNewlinesForArg(buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context })), '--json', '--timeout', seconds];
+  const prompt = diff_only
+    ? buildOpenClawDiffOnlyPrompt({ task, requested_paths, file_context })
+    : buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context });
+  return ['sandbox', 'exec', '-n', sandbox_name, '--workdir', '/sandbox', '--timeout', seconds, '--no-tty', '--', 'openclaw', 'agent', '--session-id', session_id, '--message', escapeNewlinesForArg(prompt), '--json', '--timeout', seconds];
 }
 
 function buildOpenShellCatArgs({ sandbox_name }) {
@@ -215,10 +230,13 @@ function validateCandidatePatchAgainstRepository({ rootDir = process.cwd(), patc
   return { ok: true, reason: null };
 }
 
+function outputLooksRateLimited(outputText = '') {
+  return /rate limit|ratelimit|too many requests|quota exceeded|resource exhausted|429/i.test(String(outputText || ''));
+}
+
 function classifyNemoClawFailureReason({ timedOut = false, ok = false, patchLooksValid = false, patchValidation = {}, catExitCode = null, stdoutPatchText = '', outputText = '' } = {}) {
   if (ok) return null;
-  const text = String(outputText || '').toLowerCase();
-  if (/rate limit|ratelimit|too many requests|quota exceeded|resource exhausted|429/.test(text)) return 'provider_rate_limited';
+  if (outputLooksRateLimited(outputText)) return 'provider_rate_limited';
   if (timedOut) return 'nemoclaw_runtime_timeout';
   if (patchLooksValid && patchValidation && patchValidation.ok === false) return patchValidation.reason || 'candidate_patch_invalid';
   if (catExitCode !== 0 && !stdoutPatchText) return 'candidate_patch_missing';
@@ -243,6 +261,18 @@ function writeGatewayJob(rootDir, result, { task_preview, started_at, finished_a
   return { ...result, job: written.ok ? written.summary : null };
 }
 
+function runOpenShellAgentAttempt({ spawn, cwd, env, args, timeout_ms }) {
+  return spawn(OPENSHELL_COMMAND, args, { cwd, env: { PATH: env.PATH, HOME: env.HOME, CI: env.CI, OPENSHELL_GATEWAY: env.OPENSHELL_GATEWAY || 'nemoclaw' }, encoding: 'utf8', timeout: timeout_ms, maxBuffer: 1024 * 256 });
+}
+
+function runOpenShellCatAttempt({ spawn, cwd, env, args }) {
+  return spawn(OPENSHELL_COMMAND, args, { cwd, env: { PATH: env.PATH, HOME: env.HOME, CI: env.CI, OPENSHELL_GATEWAY: env.OPENSHELL_GATEWAY || 'nemoclaw' }, encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 256 });
+}
+
+function resultOutput(result = {}) {
+  return `${result.stdout || ''}\n${result.stderr || result.error?.message || ''}`;
+}
+
 function runNemoClawOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_id = null, job_id, sandbox_root, requested_paths = [], task, command = NEMOCLAW_COMMAND, args = null, env = process.env, timeout_ms = DEFAULT_TIMEOUT_MS, spawn = spawnSync, now = () => new Date(), record_job = true } = {}) {
   const allocatedJobId = job_id || defaultExternalAgentJobId(now());
   const policyArgs = args || buildNemoClawArgs({ task, candidate_patch_path: 'candidate.patch', requested_paths });
@@ -264,30 +294,48 @@ function runNemoClawOpenCodeCandidatePatch({ rootDir = process.cwd(), approval_i
   const sandboxName = sandboxNameFromEnv(env);
   const fileContext = buildRequestedFileContext({ rootDir, requested_paths });
   const agentArgs = buildOpenShellAgentArgs({ sandbox_name: sandboxName, task, requested_paths, timeout_ms, file_context: fileContext });
+  const retryAgentArgs = buildOpenShellAgentArgs({ sandbox_name: sandboxName, task, requested_paths, timeout_ms, file_context: fileContext, session_id: `${DEFAULT_OPENCLAW_SESSION_ID}-retry`, diff_only: true });
   const catArgs = buildOpenShellCatArgs({ sandbox_name: sandboxName });
   const started = now();
-  if (record_job) writeExternalAgentJob(rootDir, { job_id: allocatedJobId, status: 'running', approval_id, gateway_type: 'nemoclaw', gateway_name: 'nemoclaw', sandbox_root: policy.sandbox_root, candidate_patch_path: policy.candidate_patch_path, task_preview: policy.task_preview, started_at: started.toISOString(), updated_at: started.toISOString(), execution_connected: true, real_gateway_process_started: true, commands_executed: [commandPreview(OPENSHELL_COMMAND, agentArgs), commandPreview(OPENSHELL_COMMAND, catArgs)], next_action: 'openshell_openclaw_candidate_patch_running' });
+  const commands = [commandPreview(OPENSHELL_COMMAND, agentArgs), commandPreview(OPENSHELL_COMMAND, catArgs)];
+  if (record_job) writeExternalAgentJob(rootDir, { job_id: allocatedJobId, status: 'running', approval_id, gateway_type: 'nemoclaw', gateway_name: 'nemoclaw', sandbox_root: policy.sandbox_root, candidate_patch_path: policy.candidate_patch_path, task_preview: policy.task_preview, started_at: started.toISOString(), updated_at: started.toISOString(), execution_connected: true, real_gateway_process_started: true, commands_executed: commands, next_action: 'openshell_openclaw_candidate_patch_running' });
 
-  const runResult = spawn(OPENSHELL_COMMAND, agentArgs, { cwd, env: { PATH: env.PATH, HOME: env.HOME, CI: env.CI, OPENSHELL_GATEWAY: env.OPENSHELL_GATEWAY || 'nemoclaw' }, encoding: 'utf8', timeout: timeout_ms, maxBuffer: 1024 * 256 });
-  const catResult = spawn(OPENSHELL_COMMAND, catArgs, { cwd, env: { PATH: env.PATH, HOME: env.HOME, CI: env.CI, OPENSHELL_GATEWAY: env.OPENSHELL_GATEWAY || 'nemoclaw' }, encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 256 });
+  const runResult = runOpenShellAgentAttempt({ spawn, cwd, env, args: agentArgs, timeout_ms });
+  const catResult = runOpenShellCatAttempt({ spawn, cwd, env, args: catArgs });
+  let retryResult = null;
+  let retryCatResult = null;
+  const firstCombinedOutput = `${resultOutput(runResult)}\n${resultOutput(catResult)}`;
+  const firstTimedOut = (runResult.error && runResult.error.code === 'ETIMEDOUT') || (catResult.error && catResult.error.code === 'ETIMEDOUT');
+  const firstPatchText = validPatchText(catResult.stdout || '') ? String(catResult.stdout || '') : extractUnifiedDiffFromText(runResult.stdout || '');
+  if (!firstPatchText && !firstTimedOut && !outputLooksRateLimited(firstCombinedOutput)) {
+    try { fs.rmSync(candidateAbs, { force: true }); } catch {}
+    retryResult = runOpenShellAgentAttempt({ spawn, cwd, env, args: retryAgentArgs, timeout_ms });
+    retryCatResult = runOpenShellCatAttempt({ spawn, cwd, env, args: catArgs });
+    commands.push(commandPreview(OPENSHELL_COMMAND, retryAgentArgs), commandPreview(OPENSHELL_COMMAND, catArgs));
+  }
+
   const finished = now();
-  const timedOut = (runResult.error && runResult.error.code === 'ETIMEDOUT') || (catResult.error && catResult.error.code === 'ETIMEDOUT');
-  const exitCode = typeof runResult.status === 'number' ? runResult.status : null;
-  const catExitCode = typeof catResult.status === 'number' ? catResult.status : null;
-  const catPatchText = String(catResult.stdout || '');
-  const stdoutPatchText = extractUnifiedDiffFromText(runResult.stdout || '');
+  const allRunResults = [runResult, retryResult].filter(Boolean);
+  const allCatResults = [catResult, retryCatResult].filter(Boolean);
+  const timedOut = allRunResults.concat(allCatResults).some((result) => result && result.error && result.error.code === 'ETIMEDOUT');
+  const lastRunResult = retryResult || runResult;
+  const lastCatResult = retryCatResult || catResult;
+  const exitCode = typeof lastRunResult.status === 'number' ? lastRunResult.status : null;
+  const catExitCode = typeof lastCatResult.status === 'number' ? lastCatResult.status : null;
+  const stdoutPatchText = allRunResults.map((result) => extractUnifiedDiffFromText(result.stdout || '')).find(Boolean) || '';
+  const catPatchText = allCatResults.map((result) => String(result.stdout || '')).find((text) => validPatchText(text)) || '';
   const patchText = validPatchText(catPatchText) ? catPatchText : stdoutPatchText;
-  const patchSource = validPatchText(catPatchText) ? 'sandbox_file' : stdoutPatchText ? 'agent_stdout' : null;
+  const patchSource = validPatchText(catPatchText) ? 'sandbox_file' : stdoutPatchText ? (retryResult ? 'agent_stdout_retry' : 'agent_stdout') : null;
   const patchLooksValid = validPatchText(patchText);
   const patchValidation = patchLooksValid ? validateCandidatePatchAgainstRepository({ rootDir, patchText, requested_paths }) : { ok: false, reason: 'candidate_patch_invalid' };
   if (patchLooksValid && patchValidation.ok) fs.writeFileSync(candidateAbs, patchText);
   const ok = exitCode === 0 && !timedOut && patchLooksValid && patchValidation.ok;
-  const combinedOutput = `${runResult.stdout || ''}\n${runResult.stderr || runResult.error?.message || ''}\n${catResult.stdout || ''}\n${catResult.stderr || catResult.error?.message || ''}`;
+  const combinedOutput = allRunResults.concat(allCatResults).map(resultOutput).join('\n');
   const reason = classifyNemoClawFailureReason({ timedOut, ok, patchLooksValid, patchValidation, catExitCode, stdoutPatchText, outputText: combinedOutput });
-  const raw = makeBase({ ok, reason, job_id: allocatedJobId, approval_id, sandbox_root: policy.sandbox_root, candidate_patch_path: policy.candidate_patch_path, command_preview: commandPreview(OPENSHELL_COMMAND, agentArgs), exit_code: exitCode, stdout_preview: `${runResult.stdout || ''}\n${catResult.stdout || ''}`, stderr_preview: `${runResult.stderr || runResult.error?.message || ''}\n${catResult.stderr || catResult.error?.message || ''}`, duration_ms: Math.max(0, finished.getTime() - started.getTime()), timeout_ms, runtime_installed: true, candidate_patch_command_available: true, execution_connected: true, real_gateway_process_started: true, opencode_execution_started: true, patch_source: patchSource, patch_validation: patchValidation, commands_executed: [commandPreview(OPENSHELL_COMMAND, agentArgs), commandPreview(OPENSHELL_COMMAND, catArgs)], files_modified: ok ? [policy.candidate_patch_path] : [], repository_files_modified: [], next_action: ok ? 'preview_candidate_patch_before_apply' : nextActionForNemoClawFailure(reason) });
+  const raw = makeBase({ ok, reason, job_id: allocatedJobId, approval_id, sandbox_root: policy.sandbox_root, candidate_patch_path: policy.candidate_patch_path, command_preview: commandPreview(OPENSHELL_COMMAND, retryResult ? retryAgentArgs : agentArgs), exit_code: exitCode, stdout_preview: allRunResults.concat(allCatResults).map((result) => result.stdout || '').join('\n'), stderr_preview: allRunResults.concat(allCatResults).map((result) => result.stderr || result.error?.message || '').join('\n'), duration_ms: Math.max(0, finished.getTime() - started.getTime()), timeout_ms, runtime_installed: true, candidate_patch_command_available: true, execution_connected: true, real_gateway_process_started: true, opencode_execution_started: true, retry_attempted: Boolean(retryResult), patch_source: patchSource, patch_validation: patchValidation, commands_executed: commands, files_modified: ok ? [policy.candidate_patch_path] : [], repository_files_modified: [], next_action: ok ? 'preview_candidate_patch_before_apply' : nextActionForNemoClawFailure(reason) });
   const safe = sanitizeGatewayResult(raw, policy);
   if (!record_job) return safe;
   return writeGatewayJob(rootDir, safe, { task_preview: policy.task_preview, started_at: started.toISOString(), finished_at: finished.toISOString(), status: ok ? 'completed' : 'failed' });
 }
 
-module.exports = { DEFAULT_TIMEOUT_MS, NEMOCLAW_COMMAND, OPENSHELL_COMMAND, NEMOCLAW_SANDBOX_ENV, DEFAULT_NEMOCLAW_SANDBOX, DEFAULT_OPENCLAW_SESSION_ID, UNSUPPORTED_CANDIDATE_PATCH_REASON, MAX_CONTEXT_FILE_CHARS, MAX_CONTEXT_TOTAL_CHARS, ensureSandboxDir, buildNemoClawArgs, runtimeInstalled, candidatePatchCommandAvailable, sandboxNameFromEnv, escapeNewlinesForArg, buildRequestedFileContext, buildOpenClawCandidatePatchPrompt, buildOpenShellAgentArgs, buildOpenShellCatArgs, synthesizeGitHeaderForUnifiedDiff, extractUnifiedDiffFromText, validPatchText, parsePatchFileSections, validateCandidatePatchAgainstRepository, classifyNemoClawFailureReason, nextActionForNemoClawFailure, commandPreview, runNemoClawOpenCodeCandidatePatch };
+module.exports = { DEFAULT_TIMEOUT_MS, NEMOCLAW_COMMAND, OPENSHELL_COMMAND, NEMOCLAW_SANDBOX_ENV, DEFAULT_NEMOCLAW_SANDBOX, DEFAULT_OPENCLAW_SESSION_ID, UNSUPPORTED_CANDIDATE_PATCH_REASON, MAX_CONTEXT_FILE_CHARS, MAX_CONTEXT_TOTAL_CHARS, ensureSandboxDir, buildNemoClawArgs, runtimeInstalled, candidatePatchCommandAvailable, sandboxNameFromEnv, escapeNewlinesForArg, buildRequestedFileContext, buildOpenClawCandidatePatchPrompt, buildOpenClawDiffOnlyPrompt, buildOpenShellAgentArgs, buildOpenShellCatArgs, synthesizeGitHeaderForUnifiedDiff, extractUnifiedDiffFromText, validPatchText, parsePatchFileSections, validateCandidatePatchAgainstRepository, classifyNemoClawFailureReason, nextActionForNemoClawFailure, commandPreview, runNemoClawOpenCodeCandidatePatch };
