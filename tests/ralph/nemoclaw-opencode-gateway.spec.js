@@ -12,8 +12,10 @@ const {
 } = require('../../src/ralph/nemoclaw-policy');
 const {
   buildNemoClawArgs,
+  candidatePatchCommandAvailable,
   runtimeInstalled,
-  runNemoClawOpenCodeCandidatePatch
+  runNemoClawOpenCodeCandidatePatch,
+  UNSUPPORTED_CANDIDATE_PATCH_REASON
 } = require('../../src/ralph/nemoclaw-opencode-gateway');
 
 function tmpRoot() {
@@ -27,8 +29,19 @@ function fakeGitHubToken() {
 function spawnRuntimeInstalledThenRun({ writePatch = true, stdout = '', stderr = '', status = 0 } = {}) {
   return (command, args, options = {}) => {
     if (args[0] === '--version') return { status: 0, stdout: 'nemoclaw 0.1.0', stderr: '' };
+    if (args[0] === 'opencode' && args[1] === 'run-candidate-patch' && args.includes('--help')) return { status: 0, stdout: 'run-candidate-patch usage', stderr: '' };
     if (writePatch) fs.writeFileSync(path.join(options.cwd, 'candidate.patch'), 'diff --git a/tests/generated.js b/tests/generated.js\n');
     return { status, stdout, stderr };
+  };
+}
+
+function spawnRuntimeInstalledUnsupportedCommand() {
+  return (command, args) => {
+    if (args[0] === '--version') return { status: 0, stdout: 'nemoclaw v0.0.38', stderr: '' };
+    if (args[0] === 'opencode' && args[1] === 'run-candidate-patch' && args.includes('--help')) {
+      return { status: 1, stdout: 'Usage: nemoclaw opencode connect [--probe-only]', stderr: 'Unknown command: opencode' };
+    }
+    return { status: 1, stdout: '', stderr: 'should not execute unsupported command' };
   };
 }
 
@@ -114,6 +127,43 @@ test('runNemoClawOpenCodeCandidatePatch reports runtime-not-installed without st
   });
 });
 
+test('candidatePatchCommandAvailable detects installed runtime without candidate patch contract', () => {
+  const result = candidatePatchCommandAvailable('nemoclaw', { spawn: spawnRuntimeInstalledUnsupportedCommand() });
+  expect(result).toMatchObject({ ok: false, reason: UNSUPPORTED_CANDIDATE_PATCH_REASON });
+  expect(JSON.stringify(result)).toContain('Unknown command');
+});
+
+test('runNemoClawOpenCodeCandidatePatch fails closed when candidate patch command is unavailable', () => {
+  const rootDir = tmpRoot();
+  const result = runNemoClawOpenCodeCandidatePatch({
+    rootDir,
+    approval_id: 'APR-NEMO-UNSUPPORTED',
+    job_id: 'JOB-NEMO-UNSUPPORTED',
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-UNSUPPORTED',
+    requested_paths: ['README.md'],
+    task: 'Generate candidate.patch only.',
+    spawn: spawnRuntimeInstalledUnsupportedCommand(),
+    record_job: false
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    reason: UNSUPPORTED_CANDIDATE_PATCH_REASON,
+    runtime_installed: true,
+    candidate_patch_command_available: false,
+    execution_connected: false,
+    real_gateway_process_started: false,
+    opencode_execution_started: false,
+    apply_allowed: false,
+    commit_allowed: false,
+    push_allowed: false,
+    pr_allowed: false,
+    deploy_allowed: false,
+    migration_allowed: false,
+    next_action: 'implement_supported_nemoclaw_candidate_patch_adapter_or_use_approved_dev_only_direct_path'
+  });
+});
+
 test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch generation and no repository mutation', () => {
   const rootDir = tmpRoot();
   const result = runNemoClawOpenCodeCandidatePatch({
@@ -134,6 +184,7 @@ test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch genera
     mediator: 'nemoclaw',
     opencode_runtime_mode: 'nemoclaw-mediated',
     runtime_installed: true,
+    candidate_patch_command_available: true,
     execution_connected: true,
     real_gateway_process_started: true,
     opencode_execution_started: true,
