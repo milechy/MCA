@@ -66,11 +66,13 @@ function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [] }) {
   const paths = requested_paths.length ? requested_paths.join(', ') : '(no requested paths supplied)';
   return [
     'You are OpenCode running inside a NemoClaw/OpenShell sandbox under Ralph control.',
-    'Create exactly one file named candidate.patch in the current working directory.',
-    'The file must be a unified git diff only. Do not apply the patch. Do not commit. Do not push. Do not create a PR. Do not deploy. Do not run migrations. Do not print secrets or raw logs.',
+    'Produce a candidate.patch for review only.',
+    'Preferred: create exactly one file named candidate.patch in the current working directory.',
+    'Fallback: if file writing is unavailable, reply with the unified git diff only, beginning with diff --git.',
+    'Do not apply the patch. Do not commit. Do not push. Do not create a PR. Do not deploy. Do not run migrations. Do not print secrets or raw logs.',
     `Requested paths: ${paths}`,
     `Task: ${String(task || '').slice(0, 4000)}`,
-    'When finished, reply with a short bounded status only.'
+    'When finished, output only candidate.patch content or a short bounded status if the file was written.'
   ].join('\n');
 }
 
@@ -91,6 +93,38 @@ function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], tim
 
 function buildOpenShellCatArgs({ sandbox_name }) {
   return ['sandbox', 'exec', '-n', sandbox_name, '--workdir', '/sandbox', '--timeout', '30', '--no-tty', '--', 'cat', 'candidate.patch'];
+}
+
+function stripCodeFence(text) {
+  const trimmed = String(text || '').trim();
+  const fenced = trimmed.match(/^```(?:diff|patch)?\s*\n([\s\S]*?)\n```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function collectJsonStrings(value, output = []) {
+  if (typeof value === 'string') output.push(value);
+  else if (Array.isArray(value)) value.forEach((item) => collectJsonStrings(item, output));
+  else if (value && typeof value === 'object') Object.values(value).forEach((item) => collectJsonStrings(item, output));
+  return output;
+}
+
+function extractUnifiedDiffFromText(text) {
+  const raw = String(text || '');
+  const candidates = [raw];
+  try { candidates.push(...collectJsonStrings(JSON.parse(raw))); } catch {}
+  for (const candidate of candidates) {
+    const stripped = stripCodeFence(candidate);
+    const index = stripped.indexOf('diff --git ');
+    if (index === -1) continue;
+    const diff = stripped.slice(index).trim();
+    if (/^diff --git /m.test(diff) && /^--- /m.test(diff) && /^\+\+\+ /m.test(diff)) return `${diff}\n`;
+  }
+  return '';
+}
+
+function validPatchText(text) {
+  const patch = String(text || '');
+  return /^diff --git /m.test(patch) && /^--- /m.test(patch) && /^\+\+\+ /m.test(patch) && !/^```/m.test(patch.trim());
 }
 
 function makeBase(overrides = {}) {
@@ -252,13 +286,16 @@ function runNemoClawOpenCodeCandidatePatch({
   const timedOut = (runResult.error && runResult.error.code === 'ETIMEDOUT') || (catResult.error && catResult.error.code === 'ETIMEDOUT');
   const exitCode = typeof runResult.status === 'number' ? runResult.status : null;
   const catExitCode = typeof catResult.status === 'number' ? catResult.status : null;
-  const patchText = String(catResult.stdout || '');
-  const patchLooksValid = /^diff --git /m.test(patchText) && !/^```/m.test(patchText.trim());
+  const catPatchText = String(catResult.stdout || '');
+  const stdoutPatchText = extractUnifiedDiffFromText(runResult.stdout || '');
+  const patchText = validPatchText(catPatchText) ? catPatchText : stdoutPatchText;
+  const patchSource = validPatchText(catPatchText) ? 'sandbox_file' : stdoutPatchText ? 'agent_stdout' : null;
+  const patchLooksValid = validPatchText(patchText);
   if (patchLooksValid) fs.writeFileSync(candidateAbs, patchText);
-  const ok = exitCode === 0 && catExitCode === 0 && !timedOut && patchLooksValid;
+  const ok = exitCode === 0 && !timedOut && patchLooksValid;
   const raw = makeBase({
     ok,
-    reason: timedOut ? 'nemoclaw_runtime_timeout' : ok ? null : catExitCode !== 0 ? 'candidate_patch_missing' : !patchLooksValid ? 'candidate_patch_invalid' : 'nemoclaw_runtime_failed',
+    reason: timedOut ? 'nemoclaw_runtime_timeout' : ok ? null : catExitCode !== 0 && !stdoutPatchText ? 'candidate_patch_missing' : !patchLooksValid ? 'candidate_patch_invalid' : 'nemoclaw_runtime_failed',
     job_id: allocatedJobId,
     approval_id,
     sandbox_root: policy.sandbox_root,
@@ -274,6 +311,7 @@ function runNemoClawOpenCodeCandidatePatch({
     execution_connected: true,
     real_gateway_process_started: true,
     opencode_execution_started: true,
+    patch_source: patchSource,
     commands_executed: [commandPreview(OPENSHELL_COMMAND, agentArgs), commandPreview(OPENSHELL_COMMAND, catArgs)],
     files_modified: ok ? [policy.candidate_patch_path] : [],
     repository_files_modified: [],
@@ -304,6 +342,8 @@ module.exports = {
   buildOpenClawCandidatePatchPrompt,
   buildOpenShellAgentArgs,
   buildOpenShellCatArgs,
+  extractUnifiedDiffFromText,
+  validPatchText,
   commandPreview,
   runNemoClawOpenCodeCandidatePatch
 };
