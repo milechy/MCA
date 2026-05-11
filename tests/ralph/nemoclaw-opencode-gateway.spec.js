@@ -178,7 +178,8 @@ test('runNemoClawOpenCodeCandidatePatch fails closed when OpenShell exec is unav
 test('OpenShell adapter prompt and args are bounded and candidate.patch-only', () => {
   const prompt = buildOpenClawCandidatePatchPrompt({ task: 'Update README', requested_paths: ['README.md'] });
   expect(prompt).toContain('Produce a candidate.patch for review only');
-  expect(prompt).toContain('reply with the unified git diff only');
+  expect(prompt).toContain('reply with a unified git diff only');
+  expect(prompt).toContain('Prefer including a diff --git header');
   expect(prompt).toContain('Do not apply the patch');
   expect(prompt).toContain('Requested paths: README.md');
   const args = buildOpenShellAgentArgs({ sandbox_name: 'mca-ralph', task: 'Update README', requested_paths: ['README.md'], timeout_ms: 60000 });
@@ -312,6 +313,7 @@ test('candidate.patch extraction helpers accept valid unified diffs only', () =>
   expect(validPatchText(VALID_PATCH)).toBe(true);
   expect(validPatchText('diff --git a/a b/a\n')).toBe(false);
   expect(extractUnifiedDiffFromText(JSON.stringify({ message: VALID_PATCH }))).toContain('diff --git');
+  expect(extractUnifiedDiffFromText(JSON.stringify({ message: '```diff\n--- /dev/null\n+++ a/README.md\n@@ -0,0 +1 @@\n+hello\n```' }))).toContain('diff --git a/README.md b/README.md');
 });
 
 test('candidate.patch only helper rejects non-candidate outputs', () => {
