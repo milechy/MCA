@@ -49,7 +49,7 @@ test('GitHub issue queue imports issues as stories and skips duplicates', () => 
   expect(second.skipped).toEqual([{ story_id: 'STORY-GH-12', reason: 'story_already_exists', issue_number: 12 }]);
 });
 
-test('scheduler selects runnable stories by priority and ignores blocked terminal states', () => {
+test('scheduler selects runnable stories by priority and includes waiting approval resume work', () => {
   const rootDir = tmpRoot();
   seed(rootDir, { story_id: 'STORY-NORMAL', labels: [], created_at: '2026-05-08T17:00:00.000Z' });
   seed(rootDir, { story_id: 'STORY-URGENT', labels: ['urgent'], created_at: '2026-05-08T17:01:00.000Z' });
@@ -57,8 +57,9 @@ test('scheduler selects runnable stories by priority and ignores blocked termina
   seed(rootDir, { story_id: 'STORY-DONE', status: 'completed', current_phase: 'DONE' });
 
   expect(isRunnableStory(readStory(rootDir, 'STORY-NORMAL'))).toBe(true);
-  expect(isRunnableStory(readStory(rootDir, 'STORY-WAITING'))).toBe(false);
-  expect(selectRunnableStories({ rootDir, limit: 2 }).map((story) => story.story_id)).toEqual(['STORY-URGENT', 'STORY-NORMAL']);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-WAITING'))).toBe(true);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-DONE'))).toBe(false);
+  expect(selectRunnableStories({ rootDir, limit: 3 }).map((story) => story.story_id)).toEqual(['STORY-URGENT', 'STORY-NORMAL', 'STORY-WAITING']);
 });
 
 test('schedulerTick advances selected stories without mutating repository directly', () => {
