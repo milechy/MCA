@@ -5,19 +5,31 @@ const { sortStoriesByPriority } = require('./story-priority');
 const SCHEDULER_VERSION = 'autonomous_scheduler_v0_1';
 const RUNNABLE_STATUSES = new Set(['queued', 'running', 'waiting_approval']);
 
-function isRunnableStory(story) {
+function retryAfterAt(story) {
+  if (!story || !story.retry_after_at) return null;
+  const timestamp = Date.parse(story.retry_after_at);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function storyBackoffActive(story, now = new Date()) {
+  const retryAt = retryAfterAt(story);
+  return retryAt !== null && retryAt > now.getTime();
+}
+
+function isRunnableStory(story, { now = new Date() } = {}) {
   if (!story || !RUNNABLE_STATUSES.has(story.status)) return false;
   if (story.current_phase === 'STOPPED' || story.current_phase === 'ESCALATED' || story.current_phase === 'DONE') return false;
+  if (storyBackoffActive(story, now)) return false;
   return true;
 }
 
-function selectRunnableStories({ rootDir = process.cwd(), limit = 5 } = {}) {
-  const stories = listStories({ rootDir, limit: 100 }).filter(isRunnableStory);
+function selectRunnableStories({ rootDir = process.cwd(), limit = 5, now = new Date() } = {}) {
+  const stories = listStories({ rootDir, limit: 100 }).filter((story) => isRunnableStory(story, { now }));
   return sortStoriesByPriority(stories).slice(0, Math.max(1, Math.min(25, limit)));
 }
 
 function schedulerTick({ rootDir = process.cwd(), now = new Date(), limit = 1, ticks_per_story = 1, ...tickOptions } = {}) {
-  const selected = selectRunnableStories({ rootDir, limit });
+  const selected = selectRunnableStories({ rootDir, limit, now });
   const results = [];
   for (const story of selected) {
     let current = null;
@@ -53,6 +65,8 @@ function schedulerTick({ rootDir = process.cwd(), now = new Date(), limit = 1, t
 
 module.exports = {
   SCHEDULER_VERSION,
+  retryAfterAt,
+  storyBackoffActive,
   isRunnableStory,
   selectRunnableStories,
   schedulerTick
