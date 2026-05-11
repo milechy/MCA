@@ -9,6 +9,7 @@ const RALPH_RUNTIME_STATE_PATTERNS = Object.freeze([
   '.ralph/stories/',
   '.ralph/tmp/',
   '.ralph/approval-pending/',
+  '.ralph/external-agent-jobs/',
   '.ralph/logs/',
   '.ralph/approval-log.jsonl'
 ]);
