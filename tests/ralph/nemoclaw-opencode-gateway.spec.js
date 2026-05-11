@@ -17,14 +17,27 @@ const {
   candidatePatchCommandAvailable,
   runtimeInstalled,
   runNemoClawOpenCodeCandidatePatch,
+  extractUnifiedDiffFromText,
+  validPatchText,
   UNSUPPORTED_CANDIDATE_PATCH_REASON
 } = require('../../src/ralph/nemoclaw-opencode-gateway');
+
+const VALID_PATCH = [
+  'diff --git a/tests/generated.js b/tests/generated.js',
+  'new file mode 100644',
+  'index 0000000..1111111',
+  '--- /dev/null',
+  '+++ b/tests/generated.js',
+  '@@ -0,0 +1 @@',
+  '+test generated',
+  ''
+].join('\n');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-nemoclaw-gateway-'));
 }
 
-function spawnRuntimeInstalledThenRun({ patch = 'diff --git a/tests/generated.js b/tests/generated.js\n', stdout = '{"ok":true}', stderr = '', status = 0 } = {}) {
+function spawnRuntimeInstalledThenRun({ patch = VALID_PATCH, stdout = '{"ok":true}', stderr = '', status = 0 } = {}) {
   return (command, args) => {
     if (command === 'nemoclaw' && args[0] === '--version') return { status: 0, stdout: 'nemoclaw 0.1.0', stderr: '' };
     if (command === 'openshell' && args[0] === 'sandbox' && args[1] === 'exec' && args.includes('--help')) return { status: 0, stdout: 'Execute a command in a running sandbox', stderr: '' };
@@ -164,7 +177,8 @@ test('runNemoClawOpenCodeCandidatePatch fails closed when OpenShell exec is unav
 
 test('OpenShell adapter prompt and args are bounded and candidate.patch-only', () => {
   const prompt = buildOpenClawCandidatePatchPrompt({ task: 'Update README', requested_paths: ['README.md'] });
-  expect(prompt).toContain('Create exactly one file named candidate.patch');
+  expect(prompt).toContain('Produce a candidate.patch for review only');
+  expect(prompt).toContain('reply with the unified git diff only');
   expect(prompt).toContain('Do not apply the patch');
   expect(prompt).toContain('Requested paths: README.md');
   const args = buildOpenShellAgentArgs({ sandbox_name: 'mca-ralph', task: 'Update README', requested_paths: ['README.md'], timeout_ms: 60000 });
@@ -224,6 +238,23 @@ test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch genera
   expect(fs.existsSync(path.join(rootDir, '.ralph/tmp/opencode-sandbox/APR-NEMO-OK/candidate.patch'))).toBe(true);
 });
 
+test('runNemoClawOpenCodeCandidatePatch extracts candidate.patch from agent stdout when sandbox file is missing', () => {
+  const rootDir = tmpRoot();
+  const result = runNemoClawOpenCodeCandidatePatch({
+    rootDir,
+    approval_id: 'APR-NEMO-STDOUT',
+    job_id: 'JOB-NEMO-STDOUT',
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-STDOUT',
+    requested_paths: ['README.md'],
+    task: 'Generate candidate.patch only.',
+    spawn: spawnRuntimeInstalledThenRun({ patch: '', stdout: JSON.stringify({ reply: VALID_PATCH }) }),
+    record_job: false
+  });
+
+  expect(result).toMatchObject({ ok: true, reason: null, candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-NEMO-STDOUT/candidate.patch' });
+  expect(fs.readFileSync(path.join(rootDir, '.ralph/tmp/opencode-sandbox/APR-NEMO-STDOUT/candidate.patch'), 'utf8')).toContain('diff --git');
+});
+
 test('runNemoClawOpenCodeCandidatePatch rejects invalid candidate.patch content', () => {
   const rootDir = tmpRoot();
   const result = runNemoClawOpenCodeCandidatePatch({
@@ -275,6 +306,12 @@ test('runNemoClawOpenCodeCandidatePatch fails policy before runtime for forbidde
 
   expect(result).toMatchObject({ ok: false, reason: 'nemoclaw_runtime_args_not_allowed', execution_connected: false });
   expect(calls).toHaveLength(0);
+});
+
+test('candidate.patch extraction helpers accept valid unified diffs only', () => {
+  expect(validPatchText(VALID_PATCH)).toBe(true);
+  expect(validPatchText('diff --git a/a b/a\n')).toBe(false);
+  expect(extractUnifiedDiffFromText(JSON.stringify({ message: VALID_PATCH }))).toContain('diff --git');
 });
 
 test('candidate.patch only helper rejects non-candidate outputs', () => {
