@@ -155,7 +155,7 @@ function buildNemoClawPolicy({ action, sandbox_root, requested_paths = [], task,
 
 function sanitizeGatewayResult(result = {}, policy = {}) {
   const candidatePath = policy.candidate_patch_path || result.candidate_patch_path || null;
-  const candidateOnly = candidatePath && outputIsCandidatePatchOnly(candidatePath, policy.sandbox_root || result.sandbox_root);
+  const candidateOnly = result.ok === true && candidatePath && outputIsCandidatePatchOnly(candidatePath, policy.sandbox_root || result.sandbox_root);
   return {
     ...result,
     mediator: 'nemoclaw',
