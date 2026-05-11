@@ -10,6 +10,8 @@ const OPENSHELL_COMMAND = 'openshell';
 const NEMOCLAW_SANDBOX_ENV = 'NEMOCLAW_SANDBOX_NAME';
 const DEFAULT_NEMOCLAW_SANDBOX = 'mca-ralph';
 const UNSUPPORTED_CANDIDATE_PATCH_REASON = 'nemoclaw_candidate_patch_command_unavailable';
+const MAX_CONTEXT_FILE_CHARS = 4000;
+const MAX_CONTEXT_TOTAL_CHARS = 12000;
 
 function ensureSandboxDir(rootDir, sandboxRoot) {
   const resolved = path.resolve(rootDir, sandboxRoot);
@@ -62,21 +64,54 @@ function sandboxNameFromEnv(env = process.env) {
   return String(env[NEMOCLAW_SANDBOX_ENV] || env.OPENSHELL_SANDBOX_NAME || DEFAULT_NEMOCLAW_SANDBOX).trim() || DEFAULT_NEMOCLAW_SANDBOX;
 }
 
-function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [] }) {
+function safeRequestedPath(filePath) {
+  const normalized = String(filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalized || normalized.startsWith('/') || normalized.includes('..')) return null;
+  return normalized;
+}
+
+function buildRequestedFileContext({ rootDir = process.cwd(), requested_paths = [] } = {}) {
+  const chunks = [];
+  let total = 0;
+  for (const requestedPath of requested_paths) {
+    const safePath = safeRequestedPath(requestedPath);
+    if (!safePath) continue;
+    const absolutePath = path.resolve(rootDir, safePath);
+    if (!absolutePath.startsWith(path.resolve(rootDir))) continue;
+    let content;
+    try {
+      const stat = fs.statSync(absolutePath);
+      if (!stat.isFile() || stat.size > 1024 * 256) continue;
+      content = fs.readFileSync(absolutePath, 'utf8');
+    } catch {
+      content = '';
+    }
+    const bounded = content.length > MAX_CONTEXT_FILE_CHARS ? `${content.slice(0, MAX_CONTEXT_FILE_CHARS)}\n[TRUNCATED]\n` : content;
+    const chunk = [`--- FILE ${safePath} ---`, bounded || '[missing or empty]', `--- END FILE ${safePath} ---`].join('\n');
+    if (total + chunk.length > MAX_CONTEXT_TOTAL_CHARS) break;
+    chunks.push(chunk);
+    total += chunk.length;
+  }
+  return chunks.join('\n\n');
+}
+
+function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [], file_context = '' }) {
   const paths = requested_paths.length ? requested_paths.join(', ') : '(no requested paths supplied)';
   return [
     'You are OpenCode running inside a NemoClaw/OpenShell sandbox under Ralph control.',
     'Produce a candidate.patch for review only.',
     'Preferred: create exactly one file named candidate.patch in the current working directory.',
     'Fallback: if file writing is unavailable, reply with the unified git diff only, beginning with diff --git.',
+    'Use the bounded file context below as the repository source of truth. Do not claim you read files from the sandbox unless they are included below.',
     'Do not apply the patch. Do not commit. Do not push. Do not create a PR. Do not deploy. Do not run migrations. Do not print secrets or raw logs.',
     `Requested paths: ${paths}`,
     `Task: ${String(task || '').slice(0, 4000)}`,
+    file_context ? `Bounded file context:\n${file_context}` : 'Bounded file context: (none supplied)',
     'When finished, output only candidate.patch content or a short bounded status if the file was written.'
   ].join('\n');
 }
 
-function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], timeout_ms = DEFAULT_TIMEOUT_MS }) {
+function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], timeout_ms = DEFAULT_TIMEOUT_MS, file_context = '' }) {
   const seconds = String(Math.max(1, Math.ceil(timeout_ms / 1000)));
   return [
     'sandbox', 'exec', '-n', sandbox_name,
@@ -85,7 +120,7 @@ function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], tim
     '--no-tty',
     '--',
     'openclaw', 'agent',
-    '--message', buildOpenClawCandidatePatchPrompt({ task, requested_paths }),
+    '--message', buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context }),
     '--json',
     '--timeout', seconds
   ];
@@ -246,7 +281,8 @@ function runNemoClawOpenCodeCandidatePatch({
   }
 
   const sandboxName = sandboxNameFromEnv(env);
-  const agentArgs = buildOpenShellAgentArgs({ sandbox_name: sandboxName, task, requested_paths, timeout_ms });
+  const fileContext = buildRequestedFileContext({ rootDir, requested_paths });
+  const agentArgs = buildOpenShellAgentArgs({ sandbox_name: sandboxName, task, requested_paths, timeout_ms, file_context: fileContext });
   const catArgs = buildOpenShellCatArgs({ sandbox_name: sandboxName });
   const started = now();
   if (record_job) {
@@ -334,11 +370,14 @@ module.exports = {
   NEMOCLAW_SANDBOX_ENV,
   DEFAULT_NEMOCLAW_SANDBOX,
   UNSUPPORTED_CANDIDATE_PATCH_REASON,
+  MAX_CONTEXT_FILE_CHARS,
+  MAX_CONTEXT_TOTAL_CHARS,
   ensureSandboxDir,
   buildNemoClawArgs,
   runtimeInstalled,
   candidatePatchCommandAvailable,
   sandboxNameFromEnv,
+  buildRequestedFileContext,
   buildOpenClawCandidatePatchPrompt,
   buildOpenShellAgentArgs,
   buildOpenShellCatArgs,
