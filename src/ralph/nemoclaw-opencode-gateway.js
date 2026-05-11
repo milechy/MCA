@@ -106,7 +106,7 @@ function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [], file_co
     'You are OpenCode running inside a NemoClaw/OpenShell sandbox under Ralph control.',
     'Produce a candidate.patch for review only.',
     'Preferred: create exactly one file named candidate.patch in the current working directory.',
-    'Fallback: if file writing is unavailable, reply with the unified git diff only, beginning with diff --git.',
+    'Fallback: if file writing is unavailable, reply with a unified git diff only. Prefer including a diff --git header.',
     'Use the bounded file context below as the repository source of truth. Do not claim you read files from the sandbox unless they are included below.',
     'Do not apply the patch. Do not commit. Do not push. Do not create a PR. Do not deploy. Do not run migrations. Do not print secrets or raw logs.',
     `Requested paths: ${paths}`,
@@ -149,16 +149,43 @@ function collectJsonStrings(value, output = []) {
   return output;
 }
 
+function normalizePatchPath(filePath) {
+  return String(filePath || '')
+    .replace(/^a\//, '')
+    .replace(/^b\//, '')
+    .replace(/^\/dev\/null$/, '')
+    .trim();
+}
+
+function synthesizeGitHeaderForUnifiedDiff(diff) {
+  const text = String(diff || '').trim();
+  if (!/^--- /m.test(text) || !/^\+\+\+ /m.test(text)) return '';
+  if (/^diff --git /m.test(text)) return `${text}\n`;
+  const oldLine = text.match(/^---\s+(\S+)/m);
+  const newLine = text.match(/^\+\+\+\s+(\S+)/m);
+  const oldPath = normalizePatchPath(oldLine && oldLine[1]);
+  const newPath = normalizePatchPath(newLine && newLine[1]);
+  const target = newPath || oldPath;
+  if (!target || target.startsWith('/') || target.includes('..')) return '';
+  return `diff --git a/${target} b/${target}\n${text}\n`;
+}
+
 function extractUnifiedDiffFromText(text) {
   const raw = String(text || '');
   const candidates = [raw];
   try { candidates.push(...collectJsonStrings(JSON.parse(raw))); } catch {}
   for (const candidate of candidates) {
     const stripped = stripCodeFence(candidate);
-    const index = stripped.indexOf('diff --git ');
-    if (index === -1) continue;
-    const diff = stripped.slice(index).trim();
-    if (/^diff --git /m.test(diff) && /^--- /m.test(diff) && /^\+\+\+ /m.test(diff)) return `${diff}\n`;
+    const gitIndex = stripped.indexOf('diff --git ');
+    if (gitIndex !== -1) {
+      const diff = stripped.slice(gitIndex).trim();
+      if (/^diff --git /m.test(diff) && /^--- /m.test(diff) && /^\+\+\+ /m.test(diff)) return `${diff}\n`;
+    }
+    const oldIndex = stripped.search(/^---\s+/m);
+    if (oldIndex !== -1) {
+      const normalized = synthesizeGitHeaderForUnifiedDiff(stripped.slice(oldIndex));
+      if (normalized) return normalized;
+    }
   }
   return '';
 }
@@ -389,6 +416,7 @@ module.exports = {
   buildOpenClawCandidatePatchPrompt,
   buildOpenShellAgentArgs,
   buildOpenShellCatArgs,
+  synthesizeGitHeaderForUnifiedDiff,
   extractUnifiedDiffFromText,
   validPatchText,
   commandPreview,
