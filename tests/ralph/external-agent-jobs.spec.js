@@ -9,10 +9,12 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-external-agent-jobs-'));
 }
 
-test('external agent job ids are scoped to external agent jobs', () => {
+test('external agent job ids include autonomous OpenCode job records', () => {
   expect(defaultExternalAgentJobId(new Date('2026-05-08T09:00:00.000Z'))).toBe('JOB-EXTAGENT-20260508090000');
   expect(safeExternalAgentJobId('JOB-EXTAGENT-ABC_123')).toBe('JOB-EXTAGENT-ABC_123');
-  expect(safeExternalAgentJobId('JOB-OPENCODE-ABC')).toBe(null);
+  expect(safeExternalAgentJobId('JOB-OPENCODE-ABC')).toBe('JOB-OPENCODE-ABC');
+  expect(safeExternalAgentJobId('JOB-OPENCODE-AUTO-GH-27')).toBe('JOB-OPENCODE-AUTO-GH-27');
+  expect(safeExternalAgentJobId('../JOB-OPENCODE-AUTO-GH-27')).toBe(null);
 });
 
 test('writeExternalAgentJob records bounded non-mutating summary', () => {
@@ -56,6 +58,28 @@ test('writeExternalAgentJob records bounded non-mutating summary', () => {
     migration_performed: false
   });
   expect(readExternalAgentJob(rootDir, 'JOB-EXTAGENT-1').repository_files_modified).toEqual([]);
+});
+
+test('writeExternalAgentJob records autonomous OpenCode job ids for diagnostics', () => {
+  const rootDir = tmpRoot();
+  const written = writeExternalAgentJob(rootDir, {
+    job_id: 'JOB-OPENCODE-AUTO-GH-27',
+    status: 'failed',
+    approval_id: 'APR-OPENCODE-AUTO-GH-27',
+    gateway_type: 'nemoclaw',
+    stdout_preview: 'bounded stdout',
+    stderr_preview: 'bounded stderr',
+    execution_connected: true,
+    real_gateway_process_started: true,
+    next_action: 'fix_nemoclaw_gateway_failure'
+  });
+  expect(written.ok).toBe(true);
+  expect(readExternalAgentJob(rootDir, 'JOB-OPENCODE-AUTO-GH-27')).toMatchObject({
+    job_id: 'JOB-OPENCODE-AUTO-GH-27',
+    status: 'failed',
+    stdout_preview: 'bounded stdout',
+    stderr_preview: 'bounded stderr'
+  });
 });
 
 test('externalAgentJobStatus lists and retrieves jobs', () => {
