@@ -168,7 +168,7 @@ test('OpenShell adapter prompt and args are bounded and candidate.patch-only', (
   expect(prompt).toContain('Do not apply the patch');
   expect(prompt).toContain('Requested paths: README.md');
   const args = buildOpenShellAgentArgs({ sandbox_name: 'mca-ralph', task: 'Update README', requested_paths: ['README.md'], timeout_ms: 60000 });
-  expect(args.slice(0, 10)).toEqual(['sandbox', 'exec', '-n', 'mca-ralph', '--workdir', '/sandbox', '--timeout', '60', '--no-tty']);
+  expect(args.slice(0, 11)).toEqual(['sandbox', 'exec', '-n', 'mca-ralph', '--workdir', '/sandbox', '--timeout', '60', '--no-tty', '--']);
   expect(args).toContain('openclaw');
   expect(args).toContain('agent');
   expect(args).toContain('--json');
