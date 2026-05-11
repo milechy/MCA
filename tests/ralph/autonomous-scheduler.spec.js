@@ -6,7 +6,7 @@ const path = require('node:path');
 const { createStory, readStory } = require('../../src/ralph/story-queue');
 const { priorityScore, sortStoriesByPriority } = require('../../src/ralph/story-priority');
 const { importGitHubIssuesAsStories, storyIdForIssue } = require('../../src/ralph/github-issue-queue');
-const { isRunnableStory, selectRunnableStories, schedulerTick } = require('../../src/ralph/autonomous-scheduler');
+const { isRunnableStory, selectRunnableStories, schedulerTick, storyBackoffActive } = require('../../src/ralph/autonomous-scheduler');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-autonomous-scheduler-'));
@@ -60,6 +60,19 @@ test('scheduler selects runnable stories by priority and includes waiting approv
   expect(isRunnableStory(readStory(rootDir, 'STORY-WAITING'))).toBe(true);
   expect(isRunnableStory(readStory(rootDir, 'STORY-DONE'))).toBe(false);
   expect(selectRunnableStories({ rootDir, limit: 3 }).map((story) => story.story_id)).toEqual(['STORY-URGENT', 'STORY-NORMAL', 'STORY-WAITING']);
+});
+
+test('scheduler skips rate-limited stories until retry_after_at', () => {
+  const rootDir = tmpRoot();
+  const now = new Date('2026-05-08T17:00:00.000Z');
+  seed(rootDir, { story_id: 'STORY-BACKOFF', status: 'running', current_phase: 'OPENCODE_RUNNING', retry_after_at: '2026-05-08T17:10:00.000Z' });
+  seed(rootDir, { story_id: 'STORY-READY', status: 'running', current_phase: 'OPENCODE_RUNNING' });
+  seed(rootDir, { story_id: 'STORY-EXPIRED-BACKOFF', status: 'running', current_phase: 'OPENCODE_RUNNING', retry_after_at: '2026-05-08T16:59:00.000Z' });
+
+  expect(storyBackoffActive(readStory(rootDir, 'STORY-BACKOFF'), now)).toBe(true);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-BACKOFF'), { now })).toBe(false);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-EXPIRED-BACKOFF'), { now })).toBe(true);
+  expect(selectRunnableStories({ rootDir, limit: 3, now }).map((story) => story.story_id)).toEqual(['STORY-READY', 'STORY-EXPIRED-BACKOFF']);
 });
 
 test('schedulerTick advances selected stories without mutating repository directly', () => {
