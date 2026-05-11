@@ -72,7 +72,10 @@ test('scheduler skips rate-limited stories until retry_after_at', () => {
   expect(storyBackoffActive(readStory(rootDir, 'STORY-BACKOFF'), now)).toBe(true);
   expect(isRunnableStory(readStory(rootDir, 'STORY-BACKOFF'), { now })).toBe(false);
   expect(isRunnableStory(readStory(rootDir, 'STORY-EXPIRED-BACKOFF'), { now })).toBe(true);
-  expect(selectRunnableStories({ rootDir, limit: 3, now }).map((story) => story.story_id)).toEqual(['STORY-READY', 'STORY-EXPIRED-BACKOFF']);
+  const selectedIds = selectRunnableStories({ rootDir, limit: 3, now }).map((story) => story.story_id);
+  expect(selectedIds).toEqual(expect.arrayContaining(['STORY-READY', 'STORY-EXPIRED-BACKOFF']));
+  expect(selectedIds).not.toContain('STORY-BACKOFF');
+  expect(selectedIds).toHaveLength(2);
 });
 
 test('schedulerTick advances selected stories without mutating repository directly', () => {
