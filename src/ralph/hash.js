@@ -1,6 +1,9 @@
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
+const EMPTY_DIFF_HASH = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const RALPH_RUNTIME_DIFF_EXCLUDES = Object.freeze([':(exclude).ralph/**']);
+
 const VOLATILE_PLAN_FIELDS = new Set([
   'created_at',
   'updated_at',
@@ -44,7 +47,7 @@ function calculatePlanHash(plan) {
 }
 
 function calculateDiffHash(cwd = process.cwd()) {
-  const diff = execFileSync('git', ['diff', '--binary', '--full-index'], {
+  const diff = execFileSync('git', ['diff', '--binary', '--full-index', '--', '.', ...RALPH_RUNTIME_DIFF_EXCLUDES], {
     cwd,
     encoding: 'utf8'
   });
@@ -52,6 +55,8 @@ function calculateDiffHash(cwd = process.cwd()) {
 }
 
 module.exports = {
+  EMPTY_DIFF_HASH,
+  RALPH_RUNTIME_DIFF_EXCLUDES,
   VOLATILE_PLAN_FIELDS,
   sha256,
   canonicalize,
