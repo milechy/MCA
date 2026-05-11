@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { APPROVAL_STATUSES, APPROVAL_TYPES } = require('./types');
-const { calculatePlanHash, calculateDiffHash } = require('./hash');
+const { calculatePlanHash, calculateDiffHash, sha256 } = require('./hash');
 const { appendAuditEvent } = require('./audit-log');
 
 function ensureDir(dirPath) {
@@ -39,6 +39,14 @@ function appendApprovalLog(rootDir, event) {
   fs.appendFileSync(filePath, `${JSON.stringify({ timestamp: nowIso(), ...event })}\n`, 'utf8');
 }
 
+function safePreExecDiffHash(rootDir) {
+  try {
+    return calculateDiffHash(rootDir);
+  } catch {
+    return sha256('diff-unavailable-outside-git-repository');
+  }
+}
+
 function createApproval(plan, risk, options = {}) {
   const rootDir = options.rootDir || process.cwd();
   const approvalId = options.approval_id || defaultApprovalId();
@@ -55,7 +63,7 @@ function createApproval(plan, risk, options = {}) {
       requires_approval: true
     },
     plan_hash: calculatePlanHash(plan),
-    pre_exec_diff_hash: options.pre_exec_diff_hash || calculateDiffHash(rootDir),
+    pre_exec_diff_hash: options.pre_exec_diff_hash || safePreExecDiffHash(rootDir),
     post_exec_diff_hash: null,
     expires_at: expiresAt,
     created_at: createdAt,
