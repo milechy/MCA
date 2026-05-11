@@ -3,7 +3,7 @@ const { tickAutonomousLoop } = require('./autonomous-loop');
 const { sortStoriesByPriority } = require('./story-priority');
 
 const SCHEDULER_VERSION = 'autonomous_scheduler_v0_1';
-const RUNNABLE_STATUSES = new Set(['queued', 'running']);
+const RUNNABLE_STATUSES = new Set(['queued', 'running', 'waiting_approval']);
 
 function isRunnableStory(story) {
   if (!story || !RUNNABLE_STATUSES.has(story.status)) return false;
