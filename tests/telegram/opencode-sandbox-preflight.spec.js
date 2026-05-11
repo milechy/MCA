@@ -81,6 +81,8 @@ test('Ralph runtime state is ignored for preflight cleanliness but repository ch
   fs.mkdirSync(path.join(rootDir, '.ralph', 'stories'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, '.ralph', 'stories', 'STORY-GH-27.json'), '{}\n');
   fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '{"event":"approval"}\n');
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'external-agent-jobs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'external-agent-jobs', 'JOB-OPENCODE-AUTO-GH-27.json'), '{}\n');
   fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), '{"event":"audit"}\n');
 
@@ -90,6 +92,7 @@ test('Ralph runtime state is ignored for preflight cleanliness but repository ch
   ]);
   expect(isRalphRuntimeStatePath('.ralph/stories/STORY-GH-27.json')).toBe(true);
   expect(isRalphRuntimeStatePath('.ralph/approval-log.jsonl')).toBe(true);
+  expect(isRalphRuntimeStatePath('.ralph/external-agent-jobs/JOB-OPENCODE-AUTO-GH-27.json')).toBe(true);
   expect(isRalphRuntimeStatePath('README.md')).toBe(false);
   expect(workingTreeClean(rootDir)).toBe(true);
 
@@ -103,6 +106,8 @@ test('OpenCode sandbox runner preflight ignores Ralph runtime state entries', ()
   writeApproval(rootDir, approvalId);
   fs.mkdirSync(path.join(rootDir, '.ralph', 'stories'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, '.ralph', 'stories', 'STORY-GH-27.json'), '{}\n');
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'external-agent-jobs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'external-agent-jobs', 'JOB-OPENCODE-AUTO-GH-27.json'), '{}\n');
   fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '{"event":"approval"}\n');
 
   const result = opencodeSandboxRunnerPreflight({
@@ -120,7 +125,7 @@ test('OpenCode sandbox runner preflight ignores Ralph runtime state entries', ()
     reason: null,
     working_tree_clean: true,
     dirty_entries: [],
-    ignored_runtime_state_entries: expect.arrayContaining(['.ralph/approval-log.jsonl', '.ralph/stories/STORY-GH-27.json'])
+    ignored_runtime_state_entries: expect.arrayContaining(['.ralph/approval-log.jsonl', '.ralph/stories/STORY-GH-27.json', '.ralph/external-agent-jobs/JOB-OPENCODE-AUTO-GH-27.json'])
   });
 });
 
