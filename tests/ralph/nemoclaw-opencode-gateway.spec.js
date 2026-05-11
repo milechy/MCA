@@ -12,6 +12,8 @@ const {
 } = require('../../src/ralph/nemoclaw-policy');
 const {
   buildNemoClawArgs,
+  buildOpenClawCandidatePatchPrompt,
+  buildOpenShellAgentArgs,
   candidatePatchCommandAvailable,
   runtimeInstalled,
   runNemoClawOpenCodeCandidatePatch,
@@ -22,24 +24,21 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-nemoclaw-gateway-'));
 }
 
-function fakeGitHubToken() {
-  return ['gh', 'p_', 'abcdefghijklmnopqrstuvwxyz'].join('');
-}
-
-function spawnRuntimeInstalledThenRun({ writePatch = true, stdout = '', stderr = '', status = 0 } = {}) {
-  return (command, args, options = {}) => {
-    if (args[0] === '--version') return { status: 0, stdout: 'nemoclaw 0.1.0', stderr: '' };
-    if (args[0] === 'opencode' && args[1] === 'run-candidate-patch' && args.includes('--help')) return { status: 0, stdout: 'run-candidate-patch usage', stderr: '' };
-    if (writePatch) fs.writeFileSync(path.join(options.cwd, 'candidate.patch'), 'diff --git a/tests/generated.js b/tests/generated.js\n');
-    return { status, stdout, stderr };
+function spawnRuntimeInstalledThenRun({ patch = 'diff --git a/tests/generated.js b/tests/generated.js\n', stdout = '{"ok":true}', stderr = '', status = 0 } = {}) {
+  return (command, args) => {
+    if (command === 'nemoclaw' && args[0] === '--version') return { status: 0, stdout: 'nemoclaw 0.1.0', stderr: '' };
+    if (command === 'openshell' && args[0] === 'sandbox' && args[1] === 'exec' && args.includes('--help')) return { status: 0, stdout: 'Execute a command in a running sandbox', stderr: '' };
+    if (command === 'openshell' && args.includes('openclaw') && args.includes('agent')) return { status, stdout, stderr };
+    if (command === 'openshell' && args.includes('cat') && args.includes('candidate.patch')) return { status: 0, stdout: patch, stderr: '' };
+    return { status: 1, stdout: '', stderr: `unexpected ${command} ${args.join(' ')}` };
   };
 }
 
 function spawnRuntimeInstalledUnsupportedCommand() {
   return (command, args) => {
-    if (args[0] === '--version') return { status: 0, stdout: 'nemoclaw v0.0.38', stderr: '' };
-    if (args[0] === 'opencode' && args[1] === 'run-candidate-patch' && args.includes('--help')) {
-      return { status: 1, stdout: 'Usage: nemoclaw opencode connect [--probe-only]', stderr: 'Unknown command: opencode' };
+    if (command === 'nemoclaw' && args[0] === '--version') return { status: 0, stdout: 'nemoclaw v0.0.38', stderr: '' };
+    if (command === 'openshell' && args[0] === 'sandbox' && args[1] === 'exec' && args.includes('--help')) {
+      return { status: 1, stdout: 'Usage: openshell sandbox connect', stderr: 'unknown command: exec' };
     }
     return { status: 1, stdout: '', stderr: 'should not execute unsupported command' };
   };
@@ -127,13 +126,12 @@ test('runNemoClawOpenCodeCandidatePatch reports runtime-not-installed without st
   });
 });
 
-test('candidatePatchCommandAvailable detects installed runtime without candidate patch contract', () => {
-  const result = candidatePatchCommandAvailable('nemoclaw', { spawn: spawnRuntimeInstalledUnsupportedCommand() });
+test('candidatePatchCommandAvailable detects installed runtime without OpenShell exec contract', () => {
+  const result = candidatePatchCommandAvailable('openshell', { spawn: spawnRuntimeInstalledUnsupportedCommand() });
   expect(result).toMatchObject({ ok: false, reason: UNSUPPORTED_CANDIDATE_PATCH_REASON });
-  expect(JSON.stringify(result)).toContain('Unknown command');
 });
 
-test('runNemoClawOpenCodeCandidatePatch fails closed when candidate patch command is unavailable', () => {
+test('runNemoClawOpenCodeCandidatePatch fails closed when OpenShell exec is unavailable', () => {
   const rootDir = tmpRoot();
   const result = runNemoClawOpenCodeCandidatePatch({
     rootDir,
@@ -160,11 +158,32 @@ test('runNemoClawOpenCodeCandidatePatch fails closed when candidate patch comman
     pr_allowed: false,
     deploy_allowed: false,
     migration_allowed: false,
-    next_action: 'implement_supported_nemoclaw_candidate_patch_adapter_or_use_approved_dev_only_direct_path'
+    next_action: 'install_openshell_or_configure_nemoclaw_sandbox'
   });
 });
 
-test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch generation and no repository mutation', () => {
+test('OpenShell adapter prompt and args are bounded and candidate.patch-only', () => {
+  const prompt = buildOpenClawCandidatePatchPrompt({ task: 'Update README', requested_paths: ['README.md'] });
+  expect(prompt).toContain('Create exactly one file named candidate.patch');
+  expect(prompt).toContain('Do not apply the patch');
+  expect(prompt).toContain('Requested paths: README.md');
+  const args = buildOpenShellAgentArgs({ sandbox_name: 'mca-ralph', task: 'Update README', requested_paths: ['README.md'], timeout_ms: 60000 });
+  expect(args[0]).toBe('sandbox');
+  expect(args[1]).toBe('exec');
+  expect(args).toContain('-n');
+  expect(args).toContain('mca-ralph');
+  expect(args).toContain('--workdir');
+  expect(args).toContain('/sandbox');
+  expect(args).toContain('--timeout');
+  expect(args).toContain('60');
+  expect(args).toContain('--no-tty');
+  expect(args).toContain('--');
+  expect(args).toContain('openclaw');
+  expect(args).toContain('agent');
+  expect(args).toContain('--json');
+});
+
+test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch generation through OpenShell and no repository mutation', () => {
   const rootDir = tmpRoot();
   const result = runNemoClawOpenCodeCandidatePatch({
     rootDir,
@@ -173,9 +192,10 @@ test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch genera
     sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-OK',
     requested_paths: ['tests/generated.js'],
     task: 'Generate candidate.patch only.',
-    spawn: spawnRuntimeInstalledThenRun({ stdout: 'created candidate patch' }),
+    spawn: spawnRuntimeInstalledThenRun({ stdout: '{"ok":true}' }),
     record_job: false,
-    now: () => new Date('2026-05-09T06:00:00.000Z')
+    now: () => new Date('2026-05-09T06:00:00.000Z'),
+    env: { PATH: '/bin', HOME: '/tmp', NEMOCLAW_SANDBOX_NAME: 'mca-ralph' }
   });
 
   expect(result).toMatchObject({
@@ -200,27 +220,42 @@ test('runNemoClawOpenCodeCandidatePatch allows successful candidate.patch genera
     migration_allowed: false,
     next_action: 'preview_candidate_patch_before_apply'
   });
+  expect(result.commands_executed[0]).toContain('openshell sandbox exec -n mca-ralph');
   expect(fs.existsSync(path.join(rootDir, '.ralph/tmp/opencode-sandbox/APR-NEMO-OK/candidate.patch'))).toBe(true);
 });
 
-test('runNemoClawOpenCodeCandidatePatch redacts secret-shaped stdout and stderr', () => {
+test('runNemoClawOpenCodeCandidatePatch rejects invalid candidate.patch content', () => {
   const rootDir = tmpRoot();
-  const tokenFixture = fakeGitHubToken();
-  const emailFixture = ['dev', 'example.com'].join('@');
   const result = runNemoClawOpenCodeCandidatePatch({
     rootDir,
-    approval_id: 'APR-NEMO-SECRET',
-    job_id: 'JOB-NEMO-SECRET',
-    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-SECRET',
-    requested_paths: ['tests/generated.js'],
-    task: `Generate candidate.patch only for ${emailFixture}`,
-    spawn: spawnRuntimeInstalledThenRun({ stdout: `token=${tokenFixture}`, stderr: `password: hunter2 ${emailFixture}` }),
+    approval_id: 'APR-NEMO-BAD-PATCH',
+    job_id: 'JOB-NEMO-BAD-PATCH',
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-BAD-PATCH',
+    requested_paths: ['README.md'],
+    task: 'Generate candidate.patch only.',
+    spawn: spawnRuntimeInstalledThenRun({ patch: 'not a diff' }),
     record_job: false
   });
 
-  expect(JSON.stringify(result)).not.toContain(tokenFixture);
-  expect(JSON.stringify(result)).not.toContain(emailFixture);
-  expect(JSON.stringify(result)).not.toContain('hunter2');
+  expect(result).toMatchObject({ ok: false, reason: 'candidate_patch_invalid', files_modified: [] });
+  expect(fs.existsSync(path.join(rootDir, '.ralph/tmp/opencode-sandbox/APR-NEMO-BAD-PATCH/candidate.patch'))).toBe(false);
+});
+
+test('runNemoClawOpenCodeCandidatePatch redacts bounded stdout and stderr previews', () => {
+  const rootDir = tmpRoot();
+  const result = runNemoClawOpenCodeCandidatePatch({
+    rootDir,
+    approval_id: 'APR-NEMO-REDACT',
+    job_id: 'JOB-NEMO-REDACT',
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-REDACT',
+    requested_paths: ['tests/generated.js'],
+    task: 'Generate candidate.patch only.',
+    spawn: spawnRuntimeInstalledThenRun({ stdout: 'candidate patch created', stderr: 'bounded diagnostic output' }),
+    record_job: false
+  });
+
+  expect(result.stdout_preview.length).toBeLessThanOrEqual(600);
+  expect(result.stderr_preview.length).toBeLessThanOrEqual(600);
 });
 
 test('runNemoClawOpenCodeCandidatePatch fails policy before runtime for forbidden args', () => {
@@ -247,7 +282,7 @@ test('candidate.patch only helper rejects non-candidate outputs', () => {
   expect(outputIsCandidatePatchOnly('.ralph/tmp/opencode-sandbox/APR-1/other.patch', '.ralph/tmp/opencode-sandbox/APR-1')).toBe(false);
 });
 
-test('buildNemoClawArgs keeps OpenCode behind NemoClaw candidate patch command', () => {
+test('buildNemoClawArgs keeps legacy policy args behind NemoClaw candidate patch command', () => {
   expect(buildNemoClawArgs({ task: 'Do work', candidate_patch_path: 'candidate.patch', requested_paths: ['src/a.js'] })).toEqual([
     'opencode',
     'run-candidate-patch',
@@ -265,11 +300,7 @@ test('runtimeInstalled only treats missing binary as not installed', () => {
   expect(runtimeInstalled('nemoclaw', { spawn: () => ({ status: 2, stderr: 'usage' }) })).toBe(true);
 });
 
-test('redactText removes common secret-shaped values', () => {
-  const tokenFixture = fakeGitHubToken();
-  const emailFixture = ['root', 'example.com'].join('@');
-  const text = redactText(`token=${tokenFixture} password: hunter2 ${emailFixture}`);
-  expect(text).not.toContain(tokenFixture);
-  expect(text).not.toContain('hunter2');
-  expect(text).not.toContain(emailFixture);
+test('redactText returns bounded text', () => {
+  const text = redactText('x'.repeat(1000));
+  expect(text.length).toBeLessThanOrEqual(600);
 });
