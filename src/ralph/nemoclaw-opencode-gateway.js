@@ -9,6 +9,7 @@ const NEMOCLAW_COMMAND = 'nemoclaw';
 const OPENSHELL_COMMAND = 'openshell';
 const NEMOCLAW_SANDBOX_ENV = 'NEMOCLAW_SANDBOX_NAME';
 const DEFAULT_NEMOCLAW_SANDBOX = 'mca-ralph';
+const DEFAULT_OPENCLAW_SESSION_ID = 'ralph-opencode-candidate-patch';
 const UNSUPPORTED_CANDIDATE_PATCH_REASON = 'nemoclaw_candidate_patch_command_unavailable';
 const MAX_CONTEXT_FILE_CHARS = 4000;
 const MAX_CONTEXT_TOTAL_CHARS = 12000;
@@ -115,7 +116,7 @@ function buildOpenClawCandidatePatchPrompt({ task, requested_paths = [], file_co
   ].join('\n');
 }
 
-function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], timeout_ms = DEFAULT_TIMEOUT_MS, file_context = '' }) {
+function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], timeout_ms = DEFAULT_TIMEOUT_MS, file_context = '', session_id = DEFAULT_OPENCLAW_SESSION_ID }) {
   const seconds = String(Math.max(1, Math.ceil(timeout_ms / 1000)));
   return [
     'sandbox', 'exec', '-n', sandbox_name,
@@ -124,6 +125,7 @@ function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], tim
     '--no-tty',
     '--',
     'openclaw', 'agent',
+    '--session-id', session_id,
     '--message', escapeNewlinesForArg(buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context })),
     '--json',
     '--timeout', seconds
@@ -373,6 +375,7 @@ module.exports = {
   OPENSHELL_COMMAND,
   NEMOCLAW_SANDBOX_ENV,
   DEFAULT_NEMOCLAW_SANDBOX,
+  DEFAULT_OPENCLAW_SESSION_ID,
   UNSUPPORTED_CANDIDATE_PATCH_REASON,
   MAX_CONTEXT_FILE_CHARS,
   MAX_CONTEXT_TOTAL_CHARS,
