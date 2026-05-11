@@ -49,7 +49,7 @@ test('/ralph-start creates story and performs first autonomous tick', () => {
     ok: true,
     stage: 'autonomous_loop_tick',
     to_phase: 'OPENCODE_RUNNING',
-    next_action: 'dispatch_opencode_candidate_patch',
+    next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw',
     execution_connected: false,
     commands_executed: []
   });

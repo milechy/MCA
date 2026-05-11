@@ -1,6 +1,7 @@
 const DEFAULT_MAX_CHANGED_FILES = 50;
 const DEFAULT_MAX_APPROVALS = 20;
 const DEFAULT_MAX_GATES = 20;
+const MAX_PR_BODY_CHARS = 12000;
 
 function oneLine(value, maxLength = 400) {
   const normalized = String(value || '')
@@ -13,6 +14,8 @@ function oneLine(value, maxLength = 400) {
 function redactText(value, maxLength = 1000) {
   return oneLine(value, maxLength)
     .replace(/gh[pousr]_[A-Za-z0-9_]{20,}/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/sk-[A-Za-z0-9_-]{16,}/g, '[REDACTED_SECRET]')
+    .replace(/\b[A-Za-z0-9+/]{32,}={0,2}\b/g, '[REDACTED_SECRET]')
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
     .replace(/(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s`'\"]+/gi, '$1=[REDACTED]');
 }
@@ -40,20 +43,24 @@ function normalizeChangedFiles(changedFiles = [], limit = DEFAULT_MAX_CHANGED_FI
 function normalizeApprovals(approvals = [], limit = DEFAULT_MAX_APPROVALS) {
   if (!Array.isArray(approvals)) return [];
   return approvals.map((approval) => {
-    if (typeof approval === 'string') return { approval_id: redactText(approval, 120), approval_type: null, status: null, approved_by: null, approved_at: null };
+    if (typeof approval === 'string') return { approval_id: redactText(approval, 120), approval_type: null, status: null, requested_action: null, approved_by: null, approved_at: null, plan_hash: null, pre_exec_diff_hash: null, post_exec_diff_hash: null };
     if (!approval || typeof approval !== 'object') return null;
     return {
       approval_id: redactText(approval.approval_id || approval.id || '', 120),
       approval_type: redactText(approval.approval_type || approval.type || '', 80) || null,
       status: redactText(approval.status || '', 80) || null,
+      requested_action: redactText(approval.requested_action || '', 120) || null,
       approved_by: redactText(approval.approved_by || '', 120) || null,
-      approved_at: redactText(approval.approved_at || '', 80) || null
+      approved_at: redactText(approval.approved_at || '', 80) || null,
+      plan_hash: redactText(approval.plan_hash || '', 120) || null,
+      pre_exec_diff_hash: redactText(approval.pre_exec_diff_hash || '', 120) || null,
+      post_exec_diff_hash: redactText(approval.post_exec_diff_hash || '', 120) || null
     };
   }).filter((approval) => approval && approval.approval_id).slice(0, limit);
 }
 
 function normalizeGateSummary(gates = {}, limit = DEFAULT_MAX_GATES) {
-  const list = Array.isArray(gates) ? gates : Array.isArray(gates.gates) ? gates.gates : [];
+  const list = Array.isArray(gates) ? gates : Array.isArray(gates.gates) ? gates.gates : Array.isArray(gates.results) ? gates.results : [];
   return list.map((gate) => ({
     id: redactText(gate.id || gate.name || gate.failed_gate || 'unknown', 120),
     ok: gate.ok === true,
@@ -95,21 +102,35 @@ function buildSafetyChecklist() {
   ];
 }
 
+function storyIssueLine(story = {}) {
+  const issue = story.github_issue || {};
+  const issueNumber = issue.issue_number || issue.number;
+  const issueUrl = issue.url || issue.html_url;
+  if (!issueNumber && !issueUrl) return null;
+  return `- GitHub issue: ${issueNumber ? `#${redactText(issueNumber, 40)}` : 'linked'}${issueUrl ? ` — ${redactText(issueUrl, 240)}` : ''}`;
+}
+
+function boundBody(body) {
+  return body.length <= MAX_PR_BODY_CHARS ? body : `${body.slice(0, MAX_PR_BODY_CHARS - 1)}…`;
+}
+
 function buildPrBody({ story = {}, ultraplan = {}, changed_files = [], gates = {}, approvals = [], plan_hash = null, diff_hash = null } = {}) {
   const normalizedApprovals = normalizeApprovals(approvals);
   const normalizedGates = normalizeGateSummary(gates);
   const files = normalizeChangedFiles(changed_files.length ? changed_files : story.repository_files_modified || story.files_modified || story.requested_paths || []);
-  const resolvedPlanHash = redactText(plan_hash || collectPlanHash(story, ultraplan, approvals), 120) || 'not_available';
-  const resolvedDiffHash = redactText(diff_hash || collectDiffHash(story, approvals, { diff_hash }), 120) || 'not_available';
+  const resolvedPlanHash = redactText(plan_hash || collectPlanHash(story, ultraplan, normalizedApprovals), 120) || 'not_available';
+  const resolvedDiffHash = redactText(diff_hash || collectDiffHash(story, normalizedApprovals, { diff_hash }), 120) || 'not_available';
   const title = redactText(story.title || ultraplan.title || story.requirement || 'Ralph autonomous change', 160);
   const requirement = redactText(story.requirement || ultraplan.requirement || ultraplan.objective || '', 1200);
   const acceptance = normalizeList(story.acceptance_criteria || ultraplan.acceptance_criteria || [], 25, 300);
   const tasks = summarizeTasks(ultraplan);
   const gateOk = gates.ok === true || (normalizedGates.length > 0 && normalizedGates.every((gate) => gate.ok || gate.skipped));
+  const issueLine = storyIssueLine(story);
 
   const lines = [
     `## Summary`,
     `- Story: ${redactText(story.story_id || 'unknown', 120)}`,
+    issueLine,
     `- Title: ${title}`,
     requirement ? `- Requirement: ${requirement}` : null,
     ``,
@@ -129,17 +150,22 @@ function buildPrBody({ story = {}, ultraplan = {}, changed_files = [], gates = {
     normalizedGates.length ? normalizedGates.map((gate) => `- ${gate.ok ? 'PASS' : gate.skipped ? 'SKIP' : 'FAIL'} ${gate.id}${gate.reason ? ` — ${gate.reason}` : ''}`).join('\n') : '- Gate details not provided.',
     ``,
     `## Approvals`,
-    normalizedApprovals.length ? normalizedApprovals.map((approval) => `- ${approval.approval_id}${approval.approval_type ? ` (${approval.approval_type})` : ''}${approval.status ? ` — ${approval.status}` : ''}${approval.approved_by ? ` by ${approval.approved_by}` : ''}`).join('\n') : '- Approval records not provided in generator input.',
+    normalizedApprovals.length ? normalizedApprovals.map((approval) => `- ${approval.approval_id}${approval.approval_type ? ` (${approval.approval_type})` : ''}${approval.status ? ` — ${approval.status}` : ''}${approval.requested_action ? ` — action: ${approval.requested_action}` : ''}${approval.approved_by ? ` by ${approval.approved_by}` : ''}${approval.approved_at ? ` at ${approval.approved_at}` : ''}`).join('\n') : '- Approval records not provided in generator input.',
     ``,
     `## Safety checklist`,
     buildSafetyChecklist().join('\n')
   ].filter((line) => line !== null && line !== undefined);
 
+  const body = boundBody(lines.join('\n'));
   return {
     ok: true,
     stage: 'pr_body_generator',
     title,
-    body: lines.join('\n'),
+    body,
+    body_length: body.length,
+    bounded_output: true,
+    raw_logs_included: false,
+    secrets_included: false,
     plan_hash: resolvedPlanHash,
     diff_hash: resolvedDiffHash,
     changed_files: files,
@@ -153,6 +179,10 @@ function buildPrBody({ story = {}, ultraplan = {}, changed_files = [], gates = {
 }
 
 module.exports = {
+  DEFAULT_MAX_CHANGED_FILES,
+  DEFAULT_MAX_APPROVALS,
+  DEFAULT_MAX_GATES,
+  MAX_PR_BODY_CHARS,
   oneLine,
   redactText,
   normalizeChangedFiles,

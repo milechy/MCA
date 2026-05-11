@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createStory, readStory, updateStory, STORY_STATUSES } = require('../../src/ralph/story-queue');
-const { LOOP_PHASES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
+const { LOOP_PHASES, OPENCODE_RUNTIME_MODES, defaultApprovalId, defaultJobId, defaultSandboxRoot, phaseForUltraPlan, statusForPhase, nextActionForPhase, currentSafeProviderConfig, tickAutonomousLoop, pauseStory } = require('../../src/ralph/autonomous-loop');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-autonomous-loop-'));
@@ -23,6 +23,10 @@ function seedStory(rootDir, overrides = {}) {
   return created.story;
 }
 
+function fakeSecret() {
+  return ['sk', 'provider', 'abcdefghijklmnopqrstuvwxyz'].join('-');
+}
+
 test('phase helpers map control decisions to bounded next steps', () => {
   expect(defaultApprovalId({ story_id: 'STORY-LOOP' })).toBe('APR-OPENCODE-AUTO-LOOP');
   expect(defaultJobId({ story_id: 'STORY-LOOP' })).toBe('JOB-OPENCODE-AUTO-LOOP');
@@ -34,7 +38,20 @@ test('phase helpers map control decisions to bounded next steps', () => {
   expect(statusForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe(STORY_STATUSES.RUNNING);
   expect(statusForPhase(LOOP_PHASES.PLAN_APPROVAL_PENDING)).toBe(STORY_STATUSES.WAITING_APPROVAL);
   expect(statusForPhase(LOOP_PHASES.DONE)).toBe(STORY_STATUSES.COMPLETED);
-  expect(nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe('dispatch_opencode_candidate_patch');
+  expect(nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING)).toBe('dispatch_opencode_candidate_patch_via_nemoclaw');
+});
+
+test('currentSafeProviderConfig redacts Gemini and Kimi secrets while preserving roles', () => {
+  const geminiSecret = fakeSecret();
+  const kimiSecret = `${fakeSecret()}-kimi`;
+  const config = currentSafeProviderConfig({ RALPH_PLANNING_PROVIDER: 'gemini', GEMINI_API_KEY: geminiSecret, KIMI_API_KEY: kimiSecret });
+  expect(config).toMatchObject({
+    stage: 'provider_config_safe_summary',
+    planning: { provider: 'gemini', role: 'planning', api_key_present: true, api_key_value: '<set:redacted>' },
+    execution: { provider: 'kimi', mediated_by: 'nemoclaw', direct_policy_override_allowed: false, apply_allowed: false, commit_allowed: false, push_allowed: false, pr_allowed: false, deploy_allowed: false, migration_allowed: false, secret_access_allowed: false }
+  });
+  expect(JSON.stringify(config)).not.toContain(geminiSecret);
+  expect(JSON.stringify(config)).not.toContain(kimiSecret);
 });
 
 test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-ready phase without execution', () => {
@@ -50,6 +67,12 @@ test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-r
     story_id: 'STORY-LOOP',
     from_phase: 'PLAN',
     to_phase: 'OPENCODE_RUNNING',
+    provider_config: {
+      planning: { provider: 'deterministic', role: 'planning' },
+      execution: { provider: 'kimi', mediated_by: 'nemoclaw', direct_policy_override_allowed: false }
+    },
+    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    mediator: 'nemoclaw',
     execution_connected: false,
     commands_executed: [],
     files_modified: [],
@@ -61,14 +84,44 @@ test('tickAutonomousLoop advances queued story through UltraPlan into OpenCode-r
     merge_allowed: false,
     deploy_allowed: false,
     migration_allowed: false,
-    next_action: 'dispatch_opencode_candidate_patch'
+    next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw'
   });
   expect(result.ultraplan.plan_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({
     status: 'running',
     current_phase: 'OPENCODE_RUNNING',
-    current_plan_hash: result.ultraplan.plan_hash
+    current_plan_hash: result.ultraplan.plan_hash,
+    planning_provider: 'deterministic',
+    execution_provider: 'kimi',
+    execution_mediator: 'nemoclaw'
   });
+});
+
+test('tickAutonomousLoop stores redacted provider role metadata for Gemini planning mode', () => {
+  const rootDir = tmpRoot();
+  const geminiSecret = fakeSecret();
+  const kimiSecret = `${fakeSecret()}-kimi`;
+  seedStory(rootDir);
+
+  const result = tickAutonomousLoop({
+    rootDir,
+    story_id: 'STORY-LOOP',
+    now: new Date('2026-05-08T13:01:00.000Z'),
+    env: { RALPH_PLANNING_PROVIDER: 'gemini', GEMINI_API_KEY: geminiSecret, KIMI_API_KEY: kimiSecret }
+  });
+
+  expect(result).toMatchObject({
+    ok: true,
+    provider_config: {
+      planning: { provider: 'gemini', api_key_present: true, api_key_value: '<set:redacted>' },
+      execution: { provider: 'kimi', api_key_present: true, api_key_value: '<set:redacted>', mediated_by: 'nemoclaw' }
+    }
+  });
+  const story = readStory(rootDir, 'STORY-LOOP');
+  expect(story).toMatchObject({ planning_provider: 'gemini', execution_provider: 'kimi', execution_mediator: 'nemoclaw' });
+  const serialized = JSON.stringify({ result, story });
+  expect(serialized).not.toContain(geminiSecret);
+  expect(serialized).not.toContain(kimiSecret);
 });
 
 test('tickAutonomousLoop stops at plan approval boundary', () => {
@@ -92,7 +145,7 @@ test('tickAutonomousLoop waits at approval boundary until approval map says appr
   expect(waiting).toMatchObject({ ok: true, reason: 'waiting_for_approval', to_phase: LOOP_PHASES.PLAN_APPROVAL_PENDING, approval_id: 'APR-LOOP', next_action: 'approve_or_modify_story_before_resume' });
 
   const resumed = tickAutonomousLoop({ rootDir, story_id: 'STORY-LOOP', approvals: { 'APR-LOOP': 'approved' }, now: new Date('2026-05-08T13:02:00.000Z') });
-  expect(resumed).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.PLAN_APPROVAL_PENDING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, approval_id: 'APR-LOOP', next_action: 'dispatch_opencode_candidate_patch' });
+  expect(resumed).toMatchObject({ ok: true, reason: null, from_phase: LOOP_PHASES.PLAN_APPROVAL_PENDING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, approval_id: 'APR-LOOP', next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw' });
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING' });
 });
 
@@ -111,8 +164,10 @@ test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_R
       approval_id: input.approval_id,
       sandbox_root: input.sandbox_root,
       candidate_patch_path: `${input.sandbox_root}/candidate.patch`,
+      opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+      mediator: 'nemoclaw',
       execution_connected: true,
-      commands_executed: ['opencode run bounded task'],
+      commands_executed: ['nemoclaw opencode run-candidate-patch'],
       files_modified: [`${input.sandbox_root}/candidate.patch`],
       repository_files_modified: [],
       patch_preview: { ok: true, requires_approval: true }
@@ -129,8 +184,10 @@ test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_R
     approval_id: 'APR-OPENCODE-AUTO-LOOP',
     job_id: 'JOB-OPENCODE-AUTO-LOOP',
     candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch',
+    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    mediator: 'nemoclaw',
     execution_connected: true,
-    commands_executed: ['opencode run bounded task'],
+    commands_executed: ['nemoclaw opencode run-candidate-patch'],
     files_modified: ['.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch'],
     repository_files_modified: [],
     apply_allowed: false,
@@ -149,7 +206,9 @@ test('tickAutonomousLoop dispatches OpenCode candidate.patch job from OPENCODE_R
     current_phase: 'PATCH_PREVIEW',
     current_approval_id: 'APR-OPENCODE-AUTO-LOOP',
     current_job_id: 'JOB-OPENCODE-AUTO-LOOP',
-    current_candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch'
+    current_candidate_patch_path: '.ralph/tmp/opencode-sandbox/APR-OPENCODE-AUTO-LOOP/candidate.patch',
+    current_opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
+    current_opencode_mediator: 'nemoclaw'
   });
 });
 
@@ -159,7 +218,7 @@ test('tickAutonomousLoop keeps OPENCODE_RUNNING when OpenCode dispatch fails', (
   const result = tickAutonomousLoop({
     rootDir,
     story_id: 'STORY-LOOP',
-    opencode_dispatcher: (input) => ({ ok: false, reason: 'preflight_failed', job_id: input.job_id, approval_id: input.approval_id, sandbox_root: input.sandbox_root, execution_connected: false, commands_executed: [], files_modified: [] })
+    opencode_dispatcher: (input) => ({ ok: false, reason: 'preflight_failed', job_id: input.job_id, approval_id: input.approval_id, sandbox_root: input.sandbox_root, opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: 'nemoclaw', execution_connected: false, commands_executed: [], files_modified: [] })
   });
   expect(result).toMatchObject({ ok: false, reason: 'preflight_failed', from_phase: LOOP_PHASES.OPENCODE_RUNNING, to_phase: LOOP_PHASES.OPENCODE_RUNNING, next_action: 'fix_opencode_dispatch_failure' });
   expect(readStory(rootDir, 'STORY-LOOP')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING', blocked_reason: 'preflight_failed' });

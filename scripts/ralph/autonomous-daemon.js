@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 const { schedulerTick } = require('../../src/ralph/autonomous-scheduler');
 
+function parseBool(value) {
+  return value === true || value === 'true';
+}
+
 function parseArgs(argv = process.argv.slice(2), env = process.env) {
   const value = (name, fallback = undefined) => {
     const index = argv.indexOf(name);
@@ -12,13 +16,15 @@ function parseArgs(argv = process.argv.slice(2), env = process.env) {
   const maxCycles = Number.parseInt(value('--max-cycles', env.RALPH_DAEMON_MAX_CYCLES || (has('--once') ? '1' : '0')), 10);
   const limit = Number.parseInt(value('--limit', env.RALPH_DAEMON_LIMIT || '1'), 10);
   const ticksPerStory = Number.parseInt(value('--ticks-per-story', env.RALPH_DAEMON_TICKS_PER_STORY || '1'), 10);
+  const preSecretScanOk = has('--pre-secret-scan-ok') || parseBool(value('--pre-secret-scan-ok', env.RALPH_PRE_SECRET_SCAN_OK));
   return {
     once: has('--once'),
     interval_ms: Number.isFinite(intervalMs) && intervalMs >= 1000 ? Math.min(intervalMs, 3600000) : 60000,
     max_cycles: Number.isFinite(maxCycles) && maxCycles >= 0 ? Math.min(maxCycles, 1000000) : 0,
     limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 25) : 1,
     ticks_per_story: Number.isFinite(ticksPerStory) && ticksPerStory > 0 ? Math.min(ticksPerStory, 12) : 1,
-    rootDir: value('--root', process.cwd())
+    rootDir: value('--root', process.cwd()),
+    pre_secret_scan_ok: preSecretScanOk
   };
 }
 
@@ -34,6 +40,7 @@ function daemonStatus(cycle, result, options) {
     interval_ms: options.interval_ms,
     limit: options.limit,
     ticks_per_story: options.ticks_per_story,
+    pre_secret_scan_ok: options.pre_secret_scan_ok === true,
     scheduler: result,
     execution_connected: result.execution_connected === true,
     commands_executed: result.commands_executed || [],
@@ -56,7 +63,9 @@ async function runDaemon(options = parseArgs()) {
       rootDir: options.rootDir,
       now: new Date(),
       limit: options.limit,
-      ticks_per_story: options.ticks_per_story
+      ticks_per_story: options.ticks_per_story,
+      pre_secret_scan_ok: options.pre_secret_scan_ok === true,
+      env: process.env
     });
     const status = daemonStatus(cycle, result, options);
     outputs.push(status);
@@ -89,6 +98,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  parseBool,
   parseArgs,
   daemonStatus,
   runDaemon

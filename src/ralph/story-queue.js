@@ -28,6 +28,12 @@ function normalizePath(value) {
   return item;
 }
 
+function normalizeIsoTimestamp(value) {
+  if (!value) return null;
+  const timestamp = Date.parse(String(value));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
 function normalizeStringList(value, limit = 50, maxLength = 240) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.map((item) => oneLine(item, maxLength)).filter(Boolean))).slice(0, limit);
@@ -111,6 +117,7 @@ function buildStory(input = {}, { now = new Date() } = {}) {
       current_plan_hash: input.current_plan_hash || null,
       current_phase: input.current_phase || 'PLAN',
       blocked_reason: input.blocked_reason || null,
+      retry_after_at: normalizeIsoTimestamp(input.retry_after_at),
       created_at: input.created_at || now.toISOString(),
       updated_at: input.updated_at || now.toISOString(),
       audit: Array.isArray(input.audit) ? input.audit.slice(-50) : []
@@ -134,6 +141,7 @@ function summarizeStory(story) {
     current_job_id: story.current_job_id || null,
     current_plan_hash: story.current_plan_hash || null,
     requested_paths: story.requested_paths || [],
+    retry_after_at: story.retry_after_at || null,
     updated_at: story.updated_at,
     next_action: story.status === STORY_STATUSES.QUEUED ? 'run_ultraplan_for_story' : 'inspect_story_or_advance_loop'
   };
@@ -145,7 +153,7 @@ function writeStory(rootDir, story) {
   const status = normalizeStatus(story.status);
   if (!status) return { ok: false, stage: 'story_queue_write', reason: 'story_status_not_allowed' };
   fs.mkdirSync(storyDirectory(rootDir), { recursive: true });
-  const record = { ...story, story_queue_version: STORY_QUEUE_VERSION, status, updated_at: story.updated_at || new Date().toISOString() };
+  const record = { ...story, story_queue_version: STORY_QUEUE_VERSION, status, retry_after_at: normalizeIsoTimestamp(story.retry_after_at), updated_at: story.updated_at || new Date().toISOString() };
   fs.writeFileSync(storyPath(rootDir, id), `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   return { ok: true, stage: 'story_queue_write', reason: null, story: record, summary: summarizeStory(record) };
 }
@@ -217,6 +225,7 @@ function updateStory(storyId, patch = {}, { rootDir = process.cwd(), now = new D
     github_issue: patch.github_issue ? normalizeGitHubIssue(patch.github_issue) : current.github_issue,
     requested_paths: patch.requested_paths ? normalizeRequestedPaths(patch.requested_paths) : current.requested_paths,
     acceptance_criteria: patch.acceptance_criteria ? normalizeStringList(patch.acceptance_criteria, 25, 300) : current.acceptance_criteria,
+    retry_after_at: Object.prototype.hasOwnProperty.call(patch, 'retry_after_at') ? normalizeIsoTimestamp(patch.retry_after_at) : current.retry_after_at || null,
     updated_at: now.toISOString(),
     audit: [...(current.audit || []), { event, at: now.toISOString(), status }].slice(-50)
   };
@@ -234,6 +243,7 @@ function markStoryForReplanByApproval(approvalId, instruction, { rootDir = proce
     current_plan_hash: null,
     current_candidate_patch_path: null,
     blocked_reason: 'modify_requires_replan',
+    retry_after_at: null,
     modify_instruction: oneLine(instruction, 1000),
     requirement: instruction ? `${story.requirement} Modify: ${oneLine(instruction, 1000)}` : story.requirement
   }, { rootDir, now, event: 'story_replan_requested' });
@@ -256,5 +266,6 @@ module.exports = {
   markStoryForReplanByApproval,
   summarizeStory,
   normalizeLabels,
-  normalizeRequestedPaths
+  normalizeRequestedPaths,
+  normalizeIsoTimestamp
 };

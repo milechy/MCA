@@ -1,6 +1,8 @@
 const FAILURE_TYPES = Object.freeze({
   SECRET_SCAN: 'secret_scan',
   SECURITY_POLICY: 'security_policy',
+  PRODUCTION_DB: 'production_db',
+  RLS_DISABLE: 'rls_disable',
   TYPECHECK: 'typecheck',
   BUILD: 'build',
   MIGRATION: 'migration',
@@ -13,6 +15,8 @@ const FAILURE_TYPES = Object.freeze({
 const FAILURE_TYPE_ATTEMPT_CAPS = Object.freeze({
   [FAILURE_TYPES.SECRET_SCAN]: 0,
   [FAILURE_TYPES.SECURITY_POLICY]: 0,
+  [FAILURE_TYPES.PRODUCTION_DB]: 0,
+  [FAILURE_TYPES.RLS_DISABLE]: 0,
   [FAILURE_TYPES.MIGRATION]: 0,
   [FAILURE_TYPES.TIMEOUT]: 1,
   [FAILURE_TYPES.TYPECHECK]: 2,
@@ -33,6 +37,8 @@ function oneLine(value, maxLength = 600) {
 function redactText(value, maxLength = 1000) {
   return oneLine(value, maxLength)
     .replace(/gh[pousr]_[A-Za-z0-9_]{20,}/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/sk-[A-Za-z0-9_-]{16,}/g, '[REDACTED_SECRET]')
+    .replace(/\b[A-Za-z0-9+/]{32,}={0,2}\b/g, '[REDACTED_SECRET]')
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
     .replace(/(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s`'\"]+/gi, '$1=[REDACTED]');
 }
@@ -69,13 +75,32 @@ function joinedFailureText(failure = {}) {
   ].filter(Boolean).join(' ');
 }
 
+function textMatchesAny(text, patterns) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
 function classifyFailure(failure = {}) {
   const text = joinedFailureText(failure).toLowerCase();
   const gate = String(failure.failed_gate || failure.id || '').toLowerCase();
   const reason = String(failure.reason || '').toLowerCase();
   if (reason.includes('timeout') || text.includes('timed out') || text.includes('timeout')) return FAILURE_TYPES.TIMEOUT;
   if (gate.includes('secret') || text.includes('secret-scan') || text.includes('potential secret')) return FAILURE_TYPES.SECRET_SCAN;
-  if (text.includes('rls') || text.includes('security policy') || text.includes('forbidden') || text.includes('policy violation')) return FAILURE_TYPES.SECURITY_POLICY;
+  if (textMatchesAny(text, [
+    /disable\s+rls/,
+    /alter\s+table\s+[^;]+disable\s+row\s+level\s+security/,
+    /row\s+level\s+security\s+disabled/,
+    /rls\s+disable/
+  ])) return FAILURE_TYPES.RLS_DISABLE;
+  if (textMatchesAny(text, [
+    /production\s+db/,
+    /prod\s+db/,
+    /drop\s+table/,
+    /drop\s+database/,
+    /truncate\s+table/,
+    /delete\s+from\s+[^\s]+\s*(where\s+1\s*=\s*1)?/,
+    /destructive\s+(db|database|migration)/
+  ])) return FAILURE_TYPES.PRODUCTION_DB;
+  if (text.includes('security policy') || text.includes('forbidden') || text.includes('policy violation')) return FAILURE_TYPES.SECURITY_POLICY;
   if (gate.includes('type') || text.includes('typecheck') || text.includes('tsc') || text.includes('typescript')) return FAILURE_TYPES.TYPECHECK;
   if (gate.includes('build') || text.includes('npm run build') || text.includes('build failed')) return FAILURE_TYPES.BUILD;
   if (gate.includes('supabase') || gate.includes('migration') || text.includes('migration') || text.includes('supabase db')) return FAILURE_TYPES.MIGRATION;
@@ -90,7 +115,7 @@ function attemptCapForFailureType(failure_type, configuredCap = 3) {
 }
 
 function shouldEscalateImmediately(failure_type) {
-  return [FAILURE_TYPES.SECRET_SCAN, FAILURE_TYPES.SECURITY_POLICY, FAILURE_TYPES.MIGRATION].includes(failure_type);
+  return [FAILURE_TYPES.SECRET_SCAN, FAILURE_TYPES.SECURITY_POLICY, FAILURE_TYPES.PRODUCTION_DB, FAILURE_TYPES.RLS_DISABLE, FAILURE_TYPES.MIGRATION].includes(failure_type);
 }
 
 function summarizeFailureForRepair(failure = {}) {
@@ -154,7 +179,7 @@ function buildRepairDecision({ story = {}, failure = {}, attempts = 0, max_attem
     execution_connected: false,
     commands_executed: [],
     repository_files_modified: [],
-    next_action: escalation_required ? 'human_escalation_required' : 'dispatch_opencode_fix_candidate_patch'
+    next_action: escalation_required ? 'human_escalation_required' : 'dispatch_opencode_fix_candidate_patch_via_nemoclaw'
   };
 }
 

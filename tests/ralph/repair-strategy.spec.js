@@ -39,6 +39,10 @@ function createGateStory(rootDir, overrides = {}) {
   return created.story.story_id;
 }
 
+function fakeSecret() {
+  return ['sk', 'repair', 'abcdefghijklmnopqrstuvwxyz'].join('-');
+}
+
 test('classifyFailure detects supported gate failure types', () => {
   expect(classifyFailure({ failed_gate: 'ralph-tests', stderr_preview: 'test failed assertion' })).toBe(FAILURE_TYPES.TEST);
   expect(classifyFailure({ failed_gate: 'typecheck', stderr_preview: 'tsc TypeScript error' })).toBe(FAILURE_TYPES.TYPECHECK);
@@ -47,9 +51,12 @@ test('classifyFailure detects supported gate failure types', () => {
   expect(classifyFailure({ failed_gate: 'supabase-local', stderr_preview: 'migration failed' })).toBe(FAILURE_TYPES.MIGRATION);
   expect(classifyFailure({ failed_gate: 'playwright-regression', stderr_preview: 'browser page error' })).toBe(FAILURE_TYPES.E2E);
   expect(classifyFailure({ reason: 'gate_timeout', stderr_preview: 'process timed out' })).toBe(FAILURE_TYPES.TIMEOUT);
+  expect(classifyFailure({ failed_gate: 'db-policy', stderr_preview: 'production DB destructive migration requested DROP TABLE customers' })).toBe(FAILURE_TYPES.PRODUCTION_DB);
+  expect(classifyFailure({ failed_gate: 'rls-policy', stderr_preview: 'ALTER TABLE accounts DISABLE ROW LEVEL SECURITY' })).toBe(FAILURE_TYPES.RLS_DISABLE);
 });
 
 test('buildRepairDecision creates bounded repair instruction and target files', () => {
+  const secretFixture = fakeSecret();
   const decision = buildRepairDecision({
     story: {
       story_id: 'STORY-REPAIR',
@@ -62,7 +69,7 @@ test('buildRepairDecision creates bounded repair instruction and target files', 
       failed_gate: 'ralph-tests',
       reason: 'gate_failed',
       stdout_preview: '1 failed assertion',
-      stderr_preview: 'Contact root@example.com password: hunter2',
+      stderr_preview: `Contact root@example.com password: hunter2 ${secretFixture}`,
       repository_files_modified: ['src/ralph/repair-strategy.js']
     },
     attempts: 1,
@@ -73,24 +80,29 @@ test('buildRepairDecision creates bounded repair instruction and target files', 
     ok: true,
     failure_type: FAILURE_TYPES.TEST,
     escalation_required: false,
-    next_action: 'dispatch_opencode_fix_candidate_patch'
+    next_action: 'dispatch_opencode_fix_candidate_patch_via_nemoclaw'
   });
   expect(decision.target_files).toEqual(expect.arrayContaining(['src/ralph/repair-strategy.js', 'tests/ralph/repair-strategy.spec.js']));
   expect(decision.repair_instruction).toContain('Repair failure type: test_failure');
   expect(decision.repair_instruction).toContain('Do not expose raw logs or secrets');
   expect(decision.repair_instruction).not.toContain('root@example.com');
   expect(decision.repair_instruction).not.toContain('hunter2');
+  expect(decision.repair_instruction).not.toContain(secretFixture);
 });
 
 test('security sensitive failure types escalate immediately', () => {
-  for (const failure of [
-    { failed_gate: 'post-secret-scan', stdout_preview: 'potential secret detected' },
-    { failed_gate: 'policy', stderr_preview: 'security policy violation forbidden' },
-    { failed_gate: 'supabase-local', stderr_preview: 'migration failed' }
+  for (const [failure, expectedType] of [
+    [{ failed_gate: 'post-secret-scan', stdout_preview: 'potential secret detected' }, FAILURE_TYPES.SECRET_SCAN],
+    [{ failed_gate: 'policy', stderr_preview: 'security policy violation forbidden' }, FAILURE_TYPES.SECURITY_POLICY],
+    [{ failed_gate: 'supabase-local', stderr_preview: 'migration failed' }, FAILURE_TYPES.MIGRATION],
+    [{ failed_gate: 'db-policy', stderr_preview: 'production db destructive migration DROP TABLE customers' }, FAILURE_TYPES.PRODUCTION_DB],
+    [{ failed_gate: 'rls-policy', stderr_preview: 'disable RLS on public.accounts' }, FAILURE_TYPES.RLS_DISABLE]
   ]) {
     const decision = buildRepairDecision({ story: { story_id: 'STORY-SECURITY' }, failure, attempts: 1, max_attempts: 3 });
+    expect(decision.failure_type).toBe(expectedType);
     expect(decision.escalation_required).toBe(true);
     expect(decision.immediate_escalation).toBe(true);
+    expect(decision.effective_cap).toBe(0);
     expect(decision.next_action).toBe('human_escalation_required');
   }
 });
@@ -139,7 +151,7 @@ test('tickAutonomousLoop records repair history and moves test failures to FIX_L
   expect(result).toMatchObject({
     ok: false,
     to_phase: LOOP_PHASES.FIX_LOOP,
-    next_action: 'dispatch_opencode_fix_candidate_patch',
+    next_action: 'dispatch_opencode_fix_candidate_patch_via_nemoclaw',
     repair: {
       failure_type: FAILURE_TYPES.TEST,
       escalation_required: false
@@ -192,11 +204,14 @@ test('tickAutonomousLoop escalates secret scan failures without repair dispatch'
 
 test('redactText removes secret-shaped output from repair text', () => {
   const emailFixture = ['repair', 'example.com'].join('@');
-  const text = redactText(`token=abc123 password: hunter2 contact ${emailFixture}`);
+  const secretFixture = fakeSecret();
+  const longSecret = 'abcdefghijklmnopqrstuvwxyz1234567890ABCDEF';
+  const text = redactText(`token=abc123 password: hunter2 contact ${emailFixture} ${secretFixture} ${longSecret}`);
   expect(text).not.toContain('hunter2');
   expect(text).not.toContain(emailFixture);
+  expect(text).not.toContain(secretFixture);
+  expect(text).not.toContain(longSecret);
 });
-
 
 test('extractTargetFiles ignores unsafe paths', () => {
   const files = extractTargetFiles({ repository_files_modified: ['/tmp/nope', '../bad', 'src/ok.js'] }, { requested_paths: ['tests/ok.spec.js'] });

@@ -9,6 +9,9 @@ const { handleTelegramCommand } = require('../../src/telegram/handlers');
 const {
   OPENCODE_SANDBOX_ENV,
   opencodeSandboxEnabled,
+  parseGitStatusPorcelain,
+  isRalphRuntimeStatePath,
+  workingTreeClean,
   branchAllowed,
   isForbiddenRequestedPath,
   isAllowedRequestedPath,
@@ -71,6 +74,83 @@ test('branch and requested path classification are fail-closed', () => {
   const classified = classifyRequestedPaths(['src/foo.js', '.env', 'private/data.txt']);
   expect(classified.requested).toEqual(['src/foo.js', '.env', 'private/data.txt']);
   expect(classified.blocked).toEqual(['.env', 'private/data.txt']);
+});
+
+test('Ralph runtime state is ignored for preflight cleanliness but repository changes still block', () => {
+  const rootDir = makeGitRepo();
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'stories'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'stories', 'STORY-GH-27.json'), '{}\n');
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '{"event":"approval"}\n');
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'external-agent-jobs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'external-agent-jobs', 'JOB-OPENCODE-AUTO-GH-27.json'), '{}\n');
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'logs', 'audit.jsonl'), '{"event":"audit"}\n');
+
+  expect(parseGitStatusPorcelain('?? .ralph/stories/\n M README.md')).toEqual([
+    { status: '??', path: '.ralph/stories/' },
+    { status: ' M', path: 'README.md' }
+  ]);
+  expect(isRalphRuntimeStatePath('.ralph/stories/STORY-GH-27.json')).toBe(true);
+  expect(isRalphRuntimeStatePath('.ralph/approval-log.jsonl')).toBe(true);
+  expect(isRalphRuntimeStatePath('.ralph/external-agent-jobs/JOB-OPENCODE-AUTO-GH-27.json')).toBe(true);
+  expect(isRalphRuntimeStatePath('README.md')).toBe(false);
+  expect(workingTreeClean(rootDir)).toBe(true);
+
+  fs.writeFileSync(path.join(rootDir, 'README.md'), '# changed\n');
+  expect(workingTreeClean(rootDir)).toBe(false);
+});
+
+test('OpenCode sandbox runner preflight ignores Ralph runtime state entries', () => {
+  const rootDir = makeGitRepo();
+  const approvalId = 'APR-OPENCODE-SANDBOX-RUNTIME';
+  writeApproval(rootDir, approvalId);
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'stories'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'stories', 'STORY-GH-27.json'), '{}\n');
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'external-agent-jobs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'external-agent-jobs', 'JOB-OPENCODE-AUTO-GH-27.json'), '{}\n');
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'approval-log.jsonl'), '{"event":"approval"}\n');
+
+  const result = opencodeSandboxRunnerPreflight({
+    rootDir,
+    approval_id: approvalId,
+    sandbox_root: `.ralph/tmp/opencode-sandbox/${approvalId}`,
+    requested_paths: ['src/foo.js'],
+    pre_secret_scan_ok: true,
+    env: { [OPENCODE_SANDBOX_ENV]: 'true' },
+    now: new Date('2026-05-07T00:00:00.000Z')
+  });
+
+  expect(result).toMatchObject({
+    ok: true,
+    reason: null,
+    working_tree_clean: true,
+    dirty_entries: [],
+    ignored_runtime_state_entries: expect.arrayContaining(['.ralph/approval-log.jsonl', '.ralph/stories/STORY-GH-27.json', '.ralph/external-agent-jobs/JOB-OPENCODE-AUTO-GH-27.json'])
+  });
+});
+
+test('OpenCode sandbox runner preflight still blocks real repository changes', () => {
+  const rootDir = makeGitRepo();
+  const approvalId = 'APR-OPENCODE-SANDBOX-DIRTY';
+  writeApproval(rootDir, approvalId);
+  fs.writeFileSync(path.join(rootDir, 'README.md'), '# dirty\n');
+
+  const result = opencodeSandboxRunnerPreflight({
+    rootDir,
+    approval_id: approvalId,
+    sandbox_root: `.ralph/tmp/opencode-sandbox/${approvalId}`,
+    requested_paths: ['README.md'],
+    pre_secret_scan_ok: true,
+    env: { [OPENCODE_SANDBOX_ENV]: 'true' },
+    now: new Date('2026-05-07T00:00:00.000Z')
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'working_tree_dirty',
+    working_tree_clean: false,
+    dirty_entries: ['README.md']
+  });
 });
 
 test('OpenCode sandbox runner preflight passes only as metadata and does not execute', () => {

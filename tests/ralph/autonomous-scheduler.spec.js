@@ -6,7 +6,7 @@ const path = require('node:path');
 const { createStory, readStory } = require('../../src/ralph/story-queue');
 const { priorityScore, sortStoriesByPriority } = require('../../src/ralph/story-priority');
 const { importGitHubIssuesAsStories, storyIdForIssue } = require('../../src/ralph/github-issue-queue');
-const { isRunnableStory, selectRunnableStories, schedulerTick } = require('../../src/ralph/autonomous-scheduler');
+const { isRunnableStory, selectRunnableStories, schedulerTick, storyBackoffActive } = require('../../src/ralph/autonomous-scheduler');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-autonomous-scheduler-'));
@@ -49,7 +49,7 @@ test('GitHub issue queue imports issues as stories and skips duplicates', () => 
   expect(second.skipped).toEqual([{ story_id: 'STORY-GH-12', reason: 'story_already_exists', issue_number: 12 }]);
 });
 
-test('scheduler selects runnable stories by priority and ignores blocked terminal states', () => {
+test('scheduler selects runnable stories by priority and includes waiting approval resume work', () => {
   const rootDir = tmpRoot();
   seed(rootDir, { story_id: 'STORY-NORMAL', labels: [], created_at: '2026-05-08T17:00:00.000Z' });
   seed(rootDir, { story_id: 'STORY-URGENT', labels: ['urgent'], created_at: '2026-05-08T17:01:00.000Z' });
@@ -57,8 +57,25 @@ test('scheduler selects runnable stories by priority and ignores blocked termina
   seed(rootDir, { story_id: 'STORY-DONE', status: 'completed', current_phase: 'DONE' });
 
   expect(isRunnableStory(readStory(rootDir, 'STORY-NORMAL'))).toBe(true);
-  expect(isRunnableStory(readStory(rootDir, 'STORY-WAITING'))).toBe(false);
-  expect(selectRunnableStories({ rootDir, limit: 2 }).map((story) => story.story_id)).toEqual(['STORY-URGENT', 'STORY-NORMAL']);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-WAITING'))).toBe(true);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-DONE'))).toBe(false);
+  expect(selectRunnableStories({ rootDir, limit: 3 }).map((story) => story.story_id)).toEqual(['STORY-URGENT', 'STORY-NORMAL', 'STORY-WAITING']);
+});
+
+test('scheduler skips rate-limited stories until retry_after_at', () => {
+  const rootDir = tmpRoot();
+  const now = new Date('2026-05-08T17:00:00.000Z');
+  seed(rootDir, { story_id: 'STORY-BACKOFF', status: 'running', current_phase: 'OPENCODE_RUNNING', retry_after_at: '2026-05-08T17:10:00.000Z' });
+  seed(rootDir, { story_id: 'STORY-READY', status: 'running', current_phase: 'OPENCODE_RUNNING' });
+  seed(rootDir, { story_id: 'STORY-EXPIRED-BACKOFF', status: 'running', current_phase: 'OPENCODE_RUNNING', retry_after_at: '2026-05-08T16:59:00.000Z' });
+
+  expect(storyBackoffActive(readStory(rootDir, 'STORY-BACKOFF'), now)).toBe(true);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-BACKOFF'), { now })).toBe(false);
+  expect(isRunnableStory(readStory(rootDir, 'STORY-EXPIRED-BACKOFF'), { now })).toBe(true);
+  const selectedIds = selectRunnableStories({ rootDir, limit: 3, now }).map((story) => story.story_id);
+  expect(selectedIds).toEqual(expect.arrayContaining(['STORY-READY', 'STORY-EXPIRED-BACKOFF']));
+  expect(selectedIds).not.toContain('STORY-BACKOFF');
+  expect(selectedIds).toHaveLength(2);
 });
 
 test('schedulerTick advances selected stories without mutating repository directly', () => {
@@ -77,6 +94,6 @@ test('schedulerTick advances selected stories without mutating repository direct
     repository_files_modified: [],
     next_action: 'continue_scheduler_or_review_blocked_stories'
   });
-  expect(result.results[0].ticks[0]).toMatchObject({ story_id: 'STORY-SCHED', from_phase: 'PLAN', to_phase: 'OPENCODE_RUNNING', next_action: 'dispatch_opencode_candidate_patch' });
+  expect(result.results[0].ticks[0]).toMatchObject({ story_id: 'STORY-SCHED', from_phase: 'PLAN', to_phase: 'OPENCODE_RUNNING', next_action: 'dispatch_opencode_candidate_patch_via_nemoclaw' });
   expect(readStory(rootDir, 'STORY-SCHED')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING' });
 });
