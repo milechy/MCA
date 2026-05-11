@@ -19,6 +19,7 @@ const {
   runNemoClawOpenCodeCandidatePatch,
   extractUnifiedDiffFromText,
   validPatchText,
+  validateCandidatePatchAgainstRepository,
   UNSUPPORTED_CANDIDATE_PATCH_REASON
 } = require('../../src/ralph/nemoclaw-opencode-gateway');
 
@@ -30,6 +31,15 @@ const VALID_PATCH = [
   '+++ b/tests/generated.js',
   '@@ -0,0 +1 @@',
   '+test generated',
+  ''
+].join('\n');
+
+const README_NEW_FILE_PATCH = [
+  'diff --git a/README.md b/README.md',
+  '--- /dev/null',
+  '+++ README.md',
+  '@@ -0,0 +1 @@',
+  '+replacement',
   ''
 ].join('\n');
 
@@ -180,6 +190,7 @@ test('OpenShell adapter prompt and args are bounded and candidate.patch-only', (
   expect(prompt).toContain('Produce a candidate.patch for review only');
   expect(prompt).toContain('reply with a unified git diff only');
   expect(prompt).toContain('Prefer including a diff --git header');
+  expect(prompt).toContain('never use /dev/null as the old file');
   expect(prompt).toContain('Do not apply the patch');
   expect(prompt).toContain('Requested paths: README.md');
   const args = buildOpenShellAgentArgs({ sandbox_name: 'mca-ralph', task: 'Update README', requested_paths: ['README.md'], timeout_ms: 60000 });
@@ -246,7 +257,7 @@ test('runNemoClawOpenCodeCandidatePatch extracts candidate.patch from agent stdo
     approval_id: 'APR-NEMO-STDOUT',
     job_id: 'JOB-NEMO-STDOUT',
     sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-STDOUT',
-    requested_paths: ['README.md'],
+    requested_paths: ['tests/generated.js'],
     task: 'Generate candidate.patch only.',
     spawn: spawnRuntimeInstalledThenRun({ patch: '', stdout: JSON.stringify({ reply: VALID_PATCH }) }),
     record_job: false
@@ -271,6 +282,24 @@ test('runNemoClawOpenCodeCandidatePatch rejects invalid candidate.patch content'
 
   expect(result).toMatchObject({ ok: false, reason: 'candidate_patch_invalid', files_modified: [] });
   expect(fs.existsSync(path.join(rootDir, '.ralph/tmp/opencode-sandbox/APR-NEMO-BAD-PATCH/candidate.patch'))).toBe(false);
+});
+
+test('runNemoClawOpenCodeCandidatePatch rejects new-file patches for existing requested files', () => {
+  const rootDir = tmpRoot();
+  fs.writeFileSync(path.join(rootDir, 'README.md'), '# Existing README\n');
+  const result = runNemoClawOpenCodeCandidatePatch({
+    rootDir,
+    approval_id: 'APR-NEMO-EXISTING-NEW',
+    job_id: 'JOB-NEMO-EXISTING-NEW',
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-NEMO-EXISTING-NEW',
+    requested_paths: ['README.md'],
+    task: 'Generate candidate.patch only.',
+    spawn: spawnRuntimeInstalledThenRun({ patch: '', stdout: JSON.stringify({ reply: README_NEW_FILE_PATCH }) }),
+    record_job: false
+  });
+
+  expect(result).toMatchObject({ ok: false, reason: 'candidate_patch_existing_file_marked_new', files_modified: [] });
+  expect(validateCandidatePatchAgainstRepository({ rootDir, patchText: README_NEW_FILE_PATCH, requested_paths: ['README.md'] })).toMatchObject({ ok: false, reason: 'candidate_patch_existing_file_marked_new' });
 });
 
 test('runNemoClawOpenCodeCandidatePatch redacts bounded stdout and stderr previews', () => {
