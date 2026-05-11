@@ -70,6 +70,10 @@ function safeRequestedPath(filePath) {
   return normalized;
 }
 
+function escapeNewlinesForArg(value) {
+  return String(value || '').replace(/\r\n/g, '\\n').replace(/[\r\n]/g, '\\n');
+}
+
 function buildRequestedFileContext({ rootDir = process.cwd(), requested_paths = [] } = {}) {
   const chunks = [];
   let total = 0;
@@ -120,7 +124,7 @@ function buildOpenShellAgentArgs({ sandbox_name, task, requested_paths = [], tim
     '--no-tty',
     '--',
     'openclaw', 'agent',
-    '--message', buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context }),
+    '--message', escapeNewlinesForArg(buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context })),
     '--json',
     '--timeout', seconds
   ];
@@ -377,6 +381,7 @@ module.exports = {
   runtimeInstalled,
   candidatePatchCommandAvailable,
   sandboxNameFromEnv,
+  escapeNewlinesForArg,
   buildRequestedFileContext,
   buildOpenClawCandidatePatchPrompt,
   buildOpenShellAgentArgs,
