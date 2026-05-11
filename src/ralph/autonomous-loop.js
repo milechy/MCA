@@ -2,469 +2,59 @@ const { STORY_STATUSES, readStory, updateStory, summarizeStory } = require('./st
 const { runUltraPlan } = require('./ultraplan-runner');
 const { buildRepairDecision, appendRepairHistory } = require('./repair-strategy');
 const { buildProviderConfig, safeProviderConfig } = require('./provider-config');
-const { createApproval, approveApprovalRecordOnly } = require('./approval-manager');
-const { APPROVAL_TYPES } = require('./types');
+const { createApproval, approveApprovalRecordOnly, readApproval } = require('./approval-manager');
+const { APPROVAL_TYPES, APPROVAL_STATUSES } = require('./types');
 const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
 const { runNemoClawOpenCodeCandidatePatch } = require('./nemoclaw-opencode-gateway');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
 
 const AUTONOMOUS_LOOP_VERSION = 'autonomous_loop_v0_1';
-const OPENCODE_RUNTIME_MODES = Object.freeze({
-  NEMOCLAW: 'nemoclaw-mediated',
-  DIRECT_DEV_ONLY: 'direct-dev-only'
-});
-const LOOP_PHASES = Object.freeze({
-  PLAN: 'PLAN',
-  PLAN_APPROVAL_PENDING: 'PLAN_APPROVAL_PENDING',
-  OPENCODE_RUNNING: 'OPENCODE_RUNNING',
-  PATCH_PREVIEW: 'PATCH_PREVIEW',
-  DIFF_APPROVAL_PENDING: 'DIFF_APPROVAL_PENDING',
-  APPLY: 'APPLY',
-  GATES: 'GATES',
-  FIX_LOOP: 'FIX_LOOP',
-  COMMIT_APPROVAL_PENDING: 'COMMIT_APPROVAL_PENDING',
-  PUSH_APPROVAL_PENDING: 'PUSH_APPROVAL_PENDING',
-  PR_APPROVAL_PENDING: 'PR_APPROVAL_PENDING',
-  DONE: 'DONE',
-  STOPPED: 'STOPPED',
-  ESCALATED: 'ESCALATED'
-});
+const OPENCODE_RUNTIME_MODES = Object.freeze({ NEMOCLAW: 'nemoclaw-mediated', DIRECT_DEV_ONLY: 'direct-dev-only' });
+const LOOP_PHASES = Object.freeze({ PLAN: 'PLAN', PLAN_APPROVAL_PENDING: 'PLAN_APPROVAL_PENDING', OPENCODE_RUNNING: 'OPENCODE_RUNNING', PATCH_PREVIEW: 'PATCH_PREVIEW', DIFF_APPROVAL_PENDING: 'DIFF_APPROVAL_PENDING', APPLY: 'APPLY', GATES: 'GATES', FIX_LOOP: 'FIX_LOOP', COMMIT_APPROVAL_PENDING: 'COMMIT_APPROVAL_PENDING', PUSH_APPROVAL_PENDING: 'PUSH_APPROVAL_PENDING', PR_APPROVAL_PENDING: 'PR_APPROVAL_PENDING', DONE: 'DONE', STOPPED: 'STOPPED', ESCALATED: 'ESCALATED' });
 
-function baseResult(overrides = {}) {
-  return {
-    ok: false,
-    stage: 'autonomous_loop_tick',
-    reason: null,
-    version: AUTONOMOUS_LOOP_VERSION,
-    story_id: null,
-    from_phase: null,
-    to_phase: null,
-    story: null,
-    ultraplan: null,
-    provider_config: null,
-    opencode: null,
-    gates: null,
-    repair: null,
-    failure_summary: null,
-    approval_id: null,
-    job_id: null,
-    candidate_patch_path: null,
-    opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW,
-    mediator: 'nemoclaw',
-    execution_connected: false,
-    commands_executed: [],
-    files_modified: [],
-    repository_files_modified: [],
-    apply_allowed: false,
-    commit_allowed: false,
-    push_allowed: false,
-    pr_allowed: false,
-    merge_allowed: false,
-    deploy_allowed: false,
-    migration_allowed: false,
-    next_action: 'inspect_autonomous_loop_failure',
-    ...overrides
-  };
-}
+function baseResult(overrides = {}) { return { ok: false, stage: 'autonomous_loop_tick', reason: null, version: AUTONOMOUS_LOOP_VERSION, story_id: null, from_phase: null, to_phase: null, story: null, ultraplan: null, provider_config: null, opencode: null, gates: null, repair: null, failure_summary: null, approval_id: null, job_id: null, candidate_patch_path: null, opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: 'nemoclaw', execution_connected: false, commands_executed: [], files_modified: [], repository_files_modified: [], apply_allowed: false, commit_allowed: false, push_allowed: false, pr_allowed: false, merge_allowed: false, deploy_allowed: false, migration_allowed: false, next_action: 'inspect_autonomous_loop_failure', ...overrides }; }
 
-function oneLine(value, maxLength = 600) {
-  const normalized = String(value || '')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
-}
+function oneLine(value, maxLength = 600) { const normalized = String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim(); return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`; }
+function boundedFailureSummary(result = {}) { return { ok: result.ok === true, stage: result.stage || null, reason: result.reason || null, failed_gate: result.failed_gate || null, command: result.command || null, exit_code: typeof result.exit_code === 'number' ? result.exit_code : null, stdout_preview: oneLine(result.stdout_preview || result.stdout || ''), stderr_preview: oneLine(result.stderr_preview || result.stderr || ''), commands_executed: Array.isArray(result.commands_executed) ? result.commands_executed.map((item) => oneLine(item, 180)).slice(0, 10) : [], files_modified: Array.isArray(result.files_modified) ? result.files_modified.slice(0, 50) : [], repository_files_modified: Array.isArray(result.repository_files_modified) ? result.repository_files_modified.slice(0, 50) : [] }; }
+function defaultApprovalId(story) { return `APR-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`; }
+function defaultJobId(story) { return `JOB-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`; }
+function defaultSandboxRoot(story) { return `.ralph/tmp/opencode-sandbox/${defaultApprovalId(story)}`; }
+function taskForStory(story) { const plan = story.last_ultraplan || {}; const task = Array.isArray(plan.tasks) ? plan.tasks.find((item) => item.agent === 'opencode') : null; if (story.last_repair_instruction) return `${task?.objective || story.requirement}\n${story.last_repair_instruction}`; if (story.last_gate_failure_summary) return `${task?.objective || story.requirement}\nFix bounded gate failure: ${JSON.stringify(story.last_gate_failure_summary)}`; return task?.objective || story.requirement; }
+function phaseForUltraPlan(ultraplan) { const action = ultraplan?.control_decision?.action; if (action === 'stop' || action === 'escalate') return LOOP_PHASES.ESCALATED; if (action === 'require_plan_approval') return LOOP_PHASES.PLAN_APPROVAL_PENDING; if (action === 'require_diff_approval') return LOOP_PHASES.DIFF_APPROVAL_PENDING; return LOOP_PHASES.OPENCODE_RUNNING; }
+function statusForPhase(phase) { if ([LOOP_PHASES.PLAN_APPROVAL_PENDING, LOOP_PHASES.DIFF_APPROVAL_PENDING, LOOP_PHASES.COMMIT_APPROVAL_PENDING, LOOP_PHASES.PUSH_APPROVAL_PENDING, LOOP_PHASES.PR_APPROVAL_PENDING].includes(phase)) return STORY_STATUSES.WAITING_APPROVAL; if ([LOOP_PHASES.DONE].includes(phase)) return STORY_STATUSES.COMPLETED; if ([LOOP_PHASES.STOPPED].includes(phase)) return STORY_STATUSES.STOPPED; if ([LOOP_PHASES.ESCALATED].includes(phase)) return STORY_STATUSES.FAILED; return STORY_STATUSES.RUNNING; }
+function nextActionForPhase(phase) { switch (phase) { case LOOP_PHASES.PLAN_APPROVAL_PENDING: return 'request_plan_approval_then_resume'; case LOOP_PHASES.DIFF_APPROVAL_PENDING: return 'request_diff_approval_then_resume'; case LOOP_PHASES.OPENCODE_RUNNING: return 'dispatch_opencode_candidate_patch_via_nemoclaw'; case LOOP_PHASES.PATCH_PREVIEW: return 'preview_candidate_patch_and_decide_apply'; case LOOP_PHASES.APPLY: return 'apply_approved_candidate_patch'; case LOOP_PHASES.GATES: return 'run_gates_for_applied_patch'; case LOOP_PHASES.FIX_LOOP: return 'dispatch_opencode_fix_candidate_patch_via_nemoclaw'; case LOOP_PHASES.COMMIT_APPROVAL_PENDING: return 'request_commit_approval_then_resume'; case LOOP_PHASES.PUSH_APPROVAL_PENDING: return 'request_push_approval_then_resume'; case LOOP_PHASES.PR_APPROVAL_PENDING: return 'request_pr_approval_then_resume'; case LOOP_PHASES.DONE: return 'story_complete'; case LOOP_PHASES.ESCALATED: return 'human_escalation_required'; case LOOP_PHASES.STOPPED: return 'story_stopped'; default: return 'advance_autonomous_loop'; } }
+function updateStoryForPhase(story, phase, patch, options) { return updateStory(story.story_id, { status: statusForPhase(phase), current_phase: phase, ...patch }, options); }
+function currentSafeProviderConfig(env = process.env) { return safeProviderConfig(buildProviderConfig({ env })); }
 
-function boundedFailureSummary(result = {}) {
-  return {
-    ok: result.ok === true,
-    stage: result.stage || null,
-    reason: result.reason || null,
-    failed_gate: result.failed_gate || null,
-    command: result.command || null,
-    exit_code: typeof result.exit_code === 'number' ? result.exit_code : null,
-    stdout_preview: oneLine(result.stdout_preview || result.stdout || ''),
-    stderr_preview: oneLine(result.stderr_preview || result.stderr || ''),
-    commands_executed: Array.isArray(result.commands_executed) ? result.commands_executed.map((item) => oneLine(item, 180)).slice(0, 10) : [],
-    files_modified: Array.isArray(result.files_modified) ? result.files_modified.slice(0, 50) : [],
-    repository_files_modified: Array.isArray(result.repository_files_modified) ? result.repository_files_modified.slice(0, 50) : []
-  };
-}
-
-function defaultApprovalId(story) {
-  return `APR-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`;
-}
-
-function defaultJobId(story) {
-  return `JOB-OPENCODE-AUTO-${story.story_id.replace(/^STORY-/, '')}`;
-}
-
-function defaultSandboxRoot(story) {
-  return `.ralph/tmp/opencode-sandbox/${defaultApprovalId(story)}`;
-}
-
-function taskForStory(story) {
-  const plan = story.last_ultraplan || {};
-  const task = Array.isArray(plan.tasks) ? plan.tasks.find((item) => item.agent === 'opencode') : null;
-  if (story.last_repair_instruction) {
-    return `${task?.objective || story.requirement}\n${story.last_repair_instruction}`;
-  }
-  if (story.last_gate_failure_summary) {
-    return `${task?.objective || story.requirement}\nFix bounded gate failure: ${JSON.stringify(story.last_gate_failure_summary)}`;
-  }
-  return task?.objective || story.requirement;
-}
-
-function phaseForUltraPlan(ultraplan) {
-  const action = ultraplan?.control_decision?.action;
-  if (action === 'stop' || action === 'escalate') return LOOP_PHASES.ESCALATED;
-  if (action === 'require_plan_approval') return LOOP_PHASES.PLAN_APPROVAL_PENDING;
-  if (action === 'require_diff_approval') return LOOP_PHASES.DIFF_APPROVAL_PENDING;
-  return LOOP_PHASES.OPENCODE_RUNNING;
-}
-
-function statusForPhase(phase) {
-  if ([LOOP_PHASES.PLAN_APPROVAL_PENDING, LOOP_PHASES.DIFF_APPROVAL_PENDING, LOOP_PHASES.COMMIT_APPROVAL_PENDING, LOOP_PHASES.PUSH_APPROVAL_PENDING, LOOP_PHASES.PR_APPROVAL_PENDING].includes(phase)) return STORY_STATUSES.WAITING_APPROVAL;
-  if ([LOOP_PHASES.DONE].includes(phase)) return STORY_STATUSES.COMPLETED;
-  if ([LOOP_PHASES.STOPPED].includes(phase)) return STORY_STATUSES.STOPPED;
-  if ([LOOP_PHASES.ESCALATED].includes(phase)) return STORY_STATUSES.FAILED;
-  return STORY_STATUSES.RUNNING;
-}
-
-function nextActionForPhase(phase) {
-  switch (phase) {
-    case LOOP_PHASES.PLAN_APPROVAL_PENDING:
-      return 'request_plan_approval_then_resume';
-    case LOOP_PHASES.DIFF_APPROVAL_PENDING:
-      return 'request_diff_approval_then_resume';
-    case LOOP_PHASES.OPENCODE_RUNNING:
-      return 'dispatch_opencode_candidate_patch_via_nemoclaw';
-    case LOOP_PHASES.PATCH_PREVIEW:
-      return 'preview_candidate_patch_and_decide_apply';
-    case LOOP_PHASES.APPLY:
-      return 'apply_approved_candidate_patch';
-    case LOOP_PHASES.GATES:
-      return 'run_gates_for_applied_patch';
-    case LOOP_PHASES.FIX_LOOP:
-      return 'dispatch_opencode_fix_candidate_patch_via_nemoclaw';
-    case LOOP_PHASES.COMMIT_APPROVAL_PENDING:
-      return 'request_commit_approval_then_resume';
-    case LOOP_PHASES.PUSH_APPROVAL_PENDING:
-      return 'request_push_approval_then_resume';
-    case LOOP_PHASES.PR_APPROVAL_PENDING:
-      return 'request_pr_approval_then_resume';
-    case LOOP_PHASES.DONE:
-      return 'story_complete';
-    case LOOP_PHASES.ESCALATED:
-      return 'human_escalation_required';
-    case LOOP_PHASES.STOPPED:
-      return 'story_stopped';
-    default:
-      return 'advance_autonomous_loop';
-  }
-}
-
-function updateStoryForPhase(story, phase, patch, options) {
-  return updateStory(story.story_id, {
-    status: statusForPhase(phase),
-    current_phase: phase,
-    ...patch
-  }, options);
-}
-
-function currentSafeProviderConfig(env = process.env) {
-  return safeProviderConfig(buildProviderConfig({ env }));
-}
-
-function ensureOpenCodeApprovalRecord(story, { rootDir, approval_id, now }) {
-  const plan = story.last_ultraplan || { story_id: story.story_id, objective: story.requirement, requested_paths: story.requested_paths || [] };
-  const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+function persistedApprovalIsApproved({ rootDir, approval_id, now = new Date() } = {}) {
+  if (!approval_id) return false;
   try {
-    createApproval(plan, { score: 0, category: 'low', label: 'RISK_0_LOW', requires_approval: true }, {
-      rootDir,
-      approval_id,
-      approval_type: APPROVAL_TYPES.DIFF,
-      requested_action: 'opencode_candidate_patch',
-      allowed_user_ids: [],
-      expires_at: expiresAt
-    });
-    approveApprovalRecordOnly(approval_id, 'autonomous-loop', { rootDir, channel: 'ralph' });
-    return { ok: true, approval_id, created: true, approved_record_only: true };
-  } catch (error) {
-    return { ok: false, reason: 'approval_record_create_failed', approval_id, error_preview: oneLine(error && error.message ? error.message : String(error)) };
-  }
+    const approval = readApproval(rootDir, approval_id);
+    if (approval.status !== APPROVAL_STATUSES.APPROVED) return false;
+    if (new Date(approval.expires_at).getTime() < now.getTime()) return false;
+    return true;
+  } catch { return false; }
 }
 
-function advancePlanPhase(story, { rootDir, now, env = process.env }) {
-  const providerConfig = currentSafeProviderConfig(env);
-  const ultraplan = runUltraPlan(story);
-  if (!ultraplan.ok) {
-    const failed = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: ultraplan.reason, last_provider_config: providerConfig }, { rootDir, now, event: 'ultraplan_failed' });
-    return baseResult({ ok: false, reason: ultraplan.reason, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: failed.summary || summarizeStory(failed.story || story), ultraplan, provider_config: providerConfig, next_action: 'human_escalation_required' });
-  }
-  const nextPhase = phaseForUltraPlan(ultraplan);
-  const blockedReason = nextPhase === LOOP_PHASES.ESCALATED ? ultraplan.control_decision?.reason || 'control_decision_escalated' : null;
-  const updated = updateStoryForPhase(story, nextPhase, {
-    current_plan_hash: ultraplan.plan_hash,
-    blocked_reason: blockedReason,
-    last_ultraplan: ultraplan.plan,
-    last_provider_config: providerConfig,
-    planning_provider: providerConfig.planning.provider,
-    execution_provider: providerConfig.execution.provider,
-    execution_mediator: providerConfig.execution.mediated_by,
-    requested_paths: ultraplan.requested_paths
-  }, { rootDir, now, event: 'ultraplan_created' });
-  return baseResult({
-    ok: nextPhase !== LOOP_PHASES.ESCALATED,
-    reason: blockedReason,
-    story_id: story.story_id,
-    from_phase: story.current_phase,
-    to_phase: nextPhase,
-    story: updated.summary,
-    ultraplan,
-    provider_config: providerConfig,
-    next_action: nextActionForPhase(nextPhase)
-  });
-}
+function ensureOpenCodeApprovalRecord(story, { rootDir, approval_id, now }) { const plan = story.last_ultraplan || { story_id: story.story_id, objective: story.requirement, requested_paths: story.requested_paths || [] }; const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString(); try { createApproval(plan, { score: 0, category: 'low', label: 'RISK_0_LOW', requires_approval: true }, { rootDir, approval_id, approval_type: APPROVAL_TYPES.DIFF, requested_action: 'opencode_candidate_patch', allowed_user_ids: [], expires_at: expiresAt }); approveApprovalRecordOnly(approval_id, 'autonomous-loop', { rootDir, channel: 'ralph' }); return { ok: true, approval_id, created: true, approved_record_only: true }; } catch (error) { return { ok: false, reason: 'approval_record_create_failed', approval_id, error_preview: oneLine(error && error.message ? error.message : String(error)) }; } }
 
-function advanceWaitingApprovalPhase(story, { rootDir, now, approvals = {} }) {
-  const approvalId = story.current_approval_id;
-  const approved = approvalId && approvals[approvalId] === 'approved';
-  if (!approved) {
-    return baseResult({
-      ok: true,
-      reason: 'waiting_for_approval',
-      story_id: story.story_id,
-      from_phase: story.current_phase,
-      to_phase: story.current_phase,
-      story: summarizeStory(story),
-      approval_id: approvalId || null,
-      provider_config: story.last_provider_config || null,
-      next_action: 'approve_or_modify_story_before_resume'
-    });
-  }
-  const nextPhase = story.current_phase === LOOP_PHASES.PLAN_APPROVAL_PENDING ? LOOP_PHASES.OPENCODE_RUNNING : LOOP_PHASES.APPLY;
-  const updated = updateStoryForPhase(story, nextPhase, { blocked_reason: null }, { rootDir, now, event: 'approval_resumed' });
-  return baseResult({
-    ok: true,
-    story_id: story.story_id,
-    from_phase: story.current_phase,
-    to_phase: nextPhase,
-    story: updated.summary,
-    approval_id: approvalId,
-    provider_config: story.last_provider_config || null,
-    next_action: nextActionForPhase(nextPhase)
-  });
-}
+function advancePlanPhase(story, { rootDir, now, env = process.env }) { const providerConfig = currentSafeProviderConfig(env); const ultraplan = runUltraPlan(story); if (!ultraplan.ok) { const failed = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: ultraplan.reason, last_provider_config: providerConfig }, { rootDir, now, event: 'ultraplan_failed' }); return baseResult({ ok: false, reason: ultraplan.reason, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: failed.summary || summarizeStory(failed.story || story), ultraplan, provider_config: providerConfig, next_action: 'human_escalation_required' }); } const nextPhase = phaseForUltraPlan(ultraplan); const blockedReason = nextPhase === LOOP_PHASES.ESCALATED ? ultraplan.control_decision?.reason || 'control_decision_escalated' : null; const updated = updateStoryForPhase(story, nextPhase, { current_plan_hash: ultraplan.plan_hash, blocked_reason: blockedReason, last_ultraplan: ultraplan.plan, last_provider_config: providerConfig, planning_provider: providerConfig.planning.provider, execution_provider: providerConfig.execution.provider, execution_mediator: providerConfig.execution.mediated_by, requested_paths: ultraplan.requested_paths }, { rootDir, now, event: 'ultraplan_created' }); return baseResult({ ok: nextPhase !== LOOP_PHASES.ESCALATED, reason: blockedReason, story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, ultraplan, provider_config: providerConfig, next_action: nextActionForPhase(nextPhase) }); }
 
-function buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok }) {
-  const approvalId = story.current_approval_id || defaultApprovalId(story);
-  const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
-  const runEnv = { ...env, [OPENCODE_SANDBOX_ENV]: env?.[OPENCODE_SANDBOX_ENV] || 'true' };
-  return opencodeSandboxRunnerPreflight({
-    rootDir,
-    approval_id: approvalId,
-    sandbox_root: sandboxRoot,
-    requested_paths: story.requested_paths || [],
-    pre_secret_scan_ok: pre_secret_scan_ok === true,
-    env: runEnv,
-    now
-  });
-}
+function advanceWaitingApprovalPhase(story, { rootDir, now, approvals = {} }) { const approvalId = story.current_approval_id; const approved = approvalId && (approvals[approvalId] === 'approved' || persistedApprovalIsApproved({ rootDir, approval_id: approvalId, now })); if (!approved) { return baseResult({ ok: true, reason: 'waiting_for_approval', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), approval_id: approvalId || null, provider_config: story.last_provider_config || null, next_action: 'approve_or_modify_story_before_resume' }); } const nextPhase = story.current_phase === LOOP_PHASES.PLAN_APPROVAL_PENDING ? LOOP_PHASES.OPENCODE_RUNNING : LOOP_PHASES.APPLY; const updated = updateStoryForPhase(story, nextPhase, { blocked_reason: null }, { rootDir, now, event: 'approval_resumed' }); return baseResult({ ok: true, story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, approval_id: approvalId, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(nextPhase) }); }
 
-function directOpenCodeDevOnlyAllowed(env = process.env) {
-  return env.RALPH_OPENCODE_DIRECT_DEV_ONLY === 'true';
-}
+function buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok }) { const approvalId = story.current_approval_id || defaultApprovalId(story); const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story); const runEnv = { ...env, [OPENCODE_SANDBOX_ENV]: env?.[OPENCODE_SANDBOX_ENV] || 'true' }; return opencodeSandboxRunnerPreflight({ rootDir, approval_id: approvalId, sandbox_root: sandboxRoot, requested_paths: story.requested_paths || [], pre_secret_scan_ok: pre_secret_scan_ok === true, env: runEnv, now }); }
+function directOpenCodeDevOnlyAllowed(env = process.env) { return env.RALPH_OPENCODE_DIRECT_DEV_ONLY === 'true'; }
+function buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }) { return ({ approval_id, job_id, sandbox_root, task, requested_paths }) => { const preflight = buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok }); if (!preflight.ok) return { ...preflight, job_id, approval_id, sandbox_root, task_preview: task, candidate_patch_path: null, patch_preview: null, opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: 'nemoclaw' }; if (directOpenCodeDevOnlyAllowed(env)) return { ...runOpenCodeCandidatePatch(preflight, { rootDir, task, command: opencode_command, args: opencode_args, env: { ...env, [OPENCODE_SANDBOX_ENV]: 'true' }, timeout_ms, now: () => now }), opencode_runtime_mode: OPENCODE_RUNTIME_MODES.DIRECT_DEV_ONLY, mediator: 'none', direct_dev_only: true }; return runNemoClawOpenCodeCandidatePatch({ rootDir, approval_id, job_id, sandbox_root, requested_paths, task, env, timeout_ms, spawn: nemclaw_spawn, now: () => now }); }; }
+function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }) { const approvalId = story.current_approval_id || defaultApprovalId(story); const jobId = story.current_job_id || defaultJobId(story); const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story); const task = taskForStory(story); const approvalRecord = ensureOpenCodeApprovalRecord(story, { rootDir, approval_id: approvalId, now }); if (!approvalRecord.ok) { const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, { current_approval_id: approvalId, current_job_id: jobId, current_sandbox_root: sandboxRoot, blocked_reason: approvalRecord.reason }, { rootDir, now, event: 'opencode_approval_record_failed' }); return baseResult({ ok: false, reason: approvalRecord.reason, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, approval_id: approvalId, job_id: jobId, provider_config: story.last_provider_config || null, next_action: 'fix_opencode_approval_record_failure' }); } const dispatcher = opencode_dispatcher || buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }); const opencode = dispatcher({ rootDir, story, approval_id: approvalId, job_id: jobId, sandbox_root: sandboxRoot, task, requested_paths: story.requested_paths || [], now }); const ok = opencode.ok === true; const nextPhase = ok ? LOOP_PHASES.PATCH_PREVIEW : LOOP_PHASES.OPENCODE_RUNNING; const updated = updateStoryForPhase(story, nextPhase, { current_approval_id: approvalId, current_job_id: opencode.job_id || jobId, current_sandbox_root: sandboxRoot, current_candidate_patch_path: opencode.candidate_patch_path || null, current_opencode_runtime_mode: opencode.opencode_runtime_mode || OPENCODE_RUNTIME_MODES.NEMOCLAW, current_opencode_mediator: opencode.mediator || 'nemoclaw', blocked_reason: ok ? null : opencode.reason || 'opencode_dispatch_failed' }, { rootDir, now, event: ok ? 'opencode_candidate_patch_created' : 'opencode_dispatch_failed' }); return baseResult({ ok, reason: ok ? null : opencode.reason || 'opencode_dispatch_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, opencode, approval_id: approvalId, job_id: opencode.job_id || jobId, candidate_patch_path: opencode.candidate_patch_path || null, provider_config: story.last_provider_config || null, opencode_runtime_mode: opencode.opencode_runtime_mode || OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: opencode.mediator || 'nemoclaw', execution_connected: opencode.execution_connected === true, commands_executed: opencode.commands_executed || [], files_modified: opencode.files_modified || [], repository_files_modified: [], next_action: ok ? nextActionForPhase(LOOP_PHASES.PATCH_PREVIEW) : 'fix_opencode_dispatch_failure' }); }
+function advancePatchPreviewPhase(story, { rootDir, now }) { const updated = updateStoryForPhase(story, LOOP_PHASES.DIFF_APPROVAL_PENDING, { blocked_reason: 'diff_approval_required' }, { rootDir, now, event: 'diff_approval_required' }); return baseResult({ ok: true, reason: 'diff_approval_required', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.DIFF_APPROVAL_PENDING, story: updated.summary, approval_id: story.current_approval_id || null, job_id: story.current_job_id || null, candidate_patch_path: story.current_candidate_patch_path || null, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.DIFF_APPROVAL_PENDING) }); }
+function advanceApplyPhase(story, { rootDir, now, apply_result = null }) { if (apply_result && apply_result.ok === false) { const summary = boundedFailureSummary(apply_result); const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: apply_result.reason || 'apply_failed', last_gate_failure_summary: summary }, { rootDir, now, event: 'apply_failed' }); return baseResult({ ok: false, reason: apply_result.reason || 'apply_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, provider_config: story.last_provider_config || null, next_action: 'human_escalation_required' }); } const updated = updateStoryForPhase(story, LOOP_PHASES.GATES, { blocked_reason: null }, { rootDir, now, event: 'apply_completed_or_deferred' }); return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.GATES, story: updated.summary, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.GATES) }); }
+function gateFailureReason(gates, repair) { if (!repair.escalation_required) return gates.reason || 'gates_failed'; if (repair.immediate_escalation) return repair.repair_event.reason; return 'retry_exhausted'; }
+function gateBlockedReason(gates, repair) { if (!repair.escalation_required) return gates.reason || 'gates_failed'; if (repair.immediate_escalation) return repair.repair_event.reason; return gates.reason || 'gates_failed'; }
+function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) { const runner = gate_runner || (() => runOpenCodeAppliedPatchGates({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now })); const gates = runner({ rootDir, story, now }); if (gates.ok === true) { const updated = updateStoryForPhase(story, LOOP_PHASES.COMMIT_APPROVAL_PENDING, { blocked_reason: null, last_gate_failure_summary: null, last_repair_instruction: null }, { rootDir, now, event: 'gates_passed' }); return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.COMMIT_APPROVAL_PENDING, story: updated.summary, gates, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: nextActionForPhase(LOOP_PHASES.COMMIT_APPROVAL_PENDING) }); } const attempts = Number.isInteger(story.attempts) ? story.attempts + 1 : 1; const maxAttempts = Number.isInteger(story.max_attempts) ? story.max_attempts : 3; const summary = boundedFailureSummary(gates); const repair = buildRepairDecision({ story, failure: summary, attempts, max_attempts: maxAttempts, now }); const nextPhase = repair.escalation_required ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP; const repairHistory = appendRepairHistory(story, repair.repair_event); const updated = updateStoryForPhase(story, nextPhase, { attempts, blocked_reason: gateBlockedReason(gates, repair), last_gate_failure_summary: summary, last_repair_type: repair.failure_type, last_repair_instruction: repair.escalation_required ? null : repair.repair_instruction, repair_history: repairHistory }, { rootDir, now, event: repair.escalation_required ? 'gate_repair_escalated' : 'gate_failed_fix_required' }); return baseResult({ ok: false, reason: gateFailureReason(gates, repair), story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action }); }
+function advanceFixLoopPhase(story, { rootDir, now }) { const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, { blocked_reason: null, current_job_id: null, current_candidate_patch_path: null }, { rootDir, now, event: 'fix_loop_dispatch_ready' }); return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, failure_summary: story.last_gate_failure_summary || null, repair: { failure_type: story.last_repair_type || null, repair_instruction: story.last_repair_instruction || null }, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING) }); }
+function advanceTerminalPhase(story) { return baseResult({ ok: true, reason: 'story_terminal', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: nextActionForPhase(story.current_phase) }); }
+function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms, nemclaw_spawn } = {}) { if (!story_id) return baseResult({ reason: 'story_id_required' }); const story = readStory(rootDir, story_id); if (!story) return baseResult({ reason: 'story_not_found', story_id }); if (story.status === STORY_STATUSES.STOPPED || story.current_phase === LOOP_PHASES.STOPPED) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.COMPLETED || story.current_phase === LOOP_PHASES.DONE) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.FAILED || story.current_phase === LOOP_PHASES.ESCALATED) return advanceTerminalPhase(story); switch (story.current_phase || LOOP_PHASES.PLAN) { case LOOP_PHASES.PLAN: return advancePlanPhase(story, { rootDir, now, env }); case LOOP_PHASES.PLAN_APPROVAL_PENDING: case LOOP_PHASES.DIFF_APPROVAL_PENDING: case LOOP_PHASES.COMMIT_APPROVAL_PENDING: case LOOP_PHASES.PUSH_APPROVAL_PENDING: case LOOP_PHASES.PR_APPROVAL_PENDING: return advanceWaitingApprovalPhase(story, { rootDir, now, approvals }); case LOOP_PHASES.OPENCODE_RUNNING: return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }); case LOOP_PHASES.PATCH_PREVIEW: return advancePatchPreviewPhase(story, { rootDir, now }); case LOOP_PHASES.APPLY: return advanceApplyPhase(story, { rootDir, now, apply_result }); case LOOP_PHASES.GATES: return advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }); case LOOP_PHASES.FIX_LOOP: return advanceFixLoopPhase(story, { rootDir, now }); default: return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: 'implement_next_autonomous_loop_phase' }); } }
+function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reason = 'operator_pause' } = {}) { const updated = updateStory(story_id, { status: STORY_STATUSES.STOPPED, current_phase: LOOP_PHASES.STOPPED, blocked_reason: reason }, { rootDir, now, event: 'story_paused' }); if (!updated.ok) return baseResult({ reason: updated.reason, story_id }); return baseResult({ ok: true, story_id, from_phase: null, to_phase: LOOP_PHASES.STOPPED, story: updated.summary, provider_config: updated.story?.last_provider_config || null, reason: null, next_action: 'story_stopped' }); }
 
-function buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }) {
-  return ({ approval_id, job_id, sandbox_root, task, requested_paths }) => {
-    const preflight = buildOpenCodePreflight(story, { rootDir, now, env, pre_secret_scan_ok });
-    if (!preflight.ok) return { ...preflight, job_id, approval_id, sandbox_root, task_preview: task, candidate_patch_path: null, patch_preview: null, opencode_runtime_mode: OPENCODE_RUNTIME_MODES.NEMOCLAW, mediator: 'nemoclaw' };
-    if (directOpenCodeDevOnlyAllowed(env)) {
-      return { ...runOpenCodeCandidatePatch(preflight, { rootDir, task, command: opencode_command, args: opencode_args, env: { ...env, [OPENCODE_SANDBOX_ENV]: 'true' }, timeout_ms, now: () => now }), opencode_runtime_mode: OPENCODE_RUNTIME_MODES.DIRECT_DEV_ONLY, mediator: 'none', direct_dev_only: true };
-    }
-    return runNemoClawOpenCodeCandidatePatch({
-      rootDir,
-      approval_id,
-      job_id,
-      sandbox_root,
-      requested_paths,
-      task,
-      env,
-      timeout_ms,
-      spawn: nemclaw_spawn,
-      now: () => now
-    });
-  };
-}
-
-function advanceOpenCodeRunningPhase(story, { rootDir, now, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }) {
-  const approvalId = story.current_approval_id || defaultApprovalId(story);
-  const jobId = story.current_job_id || defaultJobId(story);
-  const sandboxRoot = story.current_sandbox_root || defaultSandboxRoot(story);
-  const task = taskForStory(story);
-  const approvalRecord = ensureOpenCodeApprovalRecord(story, { rootDir, approval_id: approvalId, now });
-  if (!approvalRecord.ok) {
-    const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, {
-      current_approval_id: approvalId,
-      current_job_id: jobId,
-      current_sandbox_root: sandboxRoot,
-      blocked_reason: approvalRecord.reason
-    }, { rootDir, now, event: 'opencode_approval_record_failed' });
-    return baseResult({ ok: false, reason: approvalRecord.reason, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, approval_id: approvalId, job_id: jobId, provider_config: story.last_provider_config || null, next_action: 'fix_opencode_approval_record_failure' });
-  }
-  const dispatcher = opencode_dispatcher || buildDefaultOpenCodeDispatcher(story, { rootDir, now, env, pre_secret_scan_ok, opencode_command, opencode_args, timeout_ms, nemclaw_spawn });
-  const opencode = dispatcher({ rootDir, story, approval_id: approvalId, job_id: jobId, sandbox_root: sandboxRoot, task, requested_paths: story.requested_paths || [], now });
-  const ok = opencode.ok === true;
-  const nextPhase = ok ? LOOP_PHASES.PATCH_PREVIEW : LOOP_PHASES.OPENCODE_RUNNING;
-  const updated = updateStoryForPhase(story, nextPhase, {
-    current_approval_id: approvalId,
-    current_job_id: opencode.job_id || jobId,
-    current_sandbox_root: sandboxRoot,
-    current_candidate_patch_path: opencode.candidate_patch_path || null,
-    current_opencode_runtime_mode: opencode.opencode_runtime_mode || OPENCODE_RUNTIME_MODES.NEMOCLAW,
-    current_opencode_mediator: opencode.mediator || 'nemoclaw',
-    blocked_reason: ok ? null : opencode.reason || 'opencode_dispatch_failed'
-  }, { rootDir, now, event: ok ? 'opencode_candidate_patch_created' : 'opencode_dispatch_failed' });
-
-  return baseResult({
-    ok,
-    reason: ok ? null : opencode.reason || 'opencode_dispatch_failed',
-    story_id: story.story_id,
-    from_phase: story.current_phase,
-    to_phase: nextPhase,
-    story: updated.summary,
-    opencode,
-    approval_id: approvalId,
-    job_id: opencode.job_id || jobId,
-    candidate_patch_path: opencode.candidate_patch_path || null,
-    provider_config: story.last_provider_config || null,
-    opencode_runtime_mode: opencode.opencode_runtime_mode || OPENCODE_RUNTIME_MODES.NEMOCLAW,
-    mediator: opencode.mediator || 'nemoclaw',
-    execution_connected: opencode.execution_connected === true,
-    commands_executed: opencode.commands_executed || [],
-    files_modified: opencode.files_modified || [],
-    repository_files_modified: [],
-    next_action: ok ? nextActionForPhase(LOOP_PHASES.PATCH_PREVIEW) : 'fix_opencode_dispatch_failure'
-  });
-}
-
-function advancePatchPreviewPhase(story, { rootDir, now }) {
-  const updated = updateStoryForPhase(story, LOOP_PHASES.DIFF_APPROVAL_PENDING, { blocked_reason: 'diff_approval_required' }, { rootDir, now, event: 'diff_approval_required' });
-  return baseResult({ ok: true, reason: 'diff_approval_required', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.DIFF_APPROVAL_PENDING, story: updated.summary, approval_id: story.current_approval_id || null, job_id: story.current_job_id || null, candidate_patch_path: story.current_candidate_patch_path || null, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.DIFF_APPROVAL_PENDING) });
-}
-
-function advanceApplyPhase(story, { rootDir, now, apply_result = null }) {
-  if (apply_result && apply_result.ok === false) {
-    const summary = boundedFailureSummary(apply_result);
-    const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: apply_result.reason || 'apply_failed', last_gate_failure_summary: summary }, { rootDir, now, event: 'apply_failed' });
-    return baseResult({ ok: false, reason: apply_result.reason || 'apply_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, provider_config: story.last_provider_config || null, next_action: 'human_escalation_required' });
-  }
-  const updated = updateStoryForPhase(story, LOOP_PHASES.GATES, { blocked_reason: null }, { rootDir, now, event: 'apply_completed_or_deferred' });
-  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.GATES, story: updated.summary, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.GATES) });
-}
-
-function gateFailureReason(gates, repair) {
-  if (!repair.escalation_required) return gates.reason || 'gates_failed';
-  if (repair.immediate_escalation) return repair.repair_event.reason;
-  return 'retry_exhausted';
-}
-
-function gateBlockedReason(gates, repair) {
-  if (!repair.escalation_required) return gates.reason || 'gates_failed';
-  if (repair.immediate_escalation) return repair.repair_event.reason;
-  return gates.reason || 'gates_failed';
-}
-
-function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
-  const runner = gate_runner || (() => runOpenCodeAppliedPatchGates({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now }));
-  const gates = runner({ rootDir, story, now });
-  if (gates.ok === true) {
-    const updated = updateStoryForPhase(story, LOOP_PHASES.COMMIT_APPROVAL_PENDING, { blocked_reason: null, last_gate_failure_summary: null, last_repair_instruction: null }, { rootDir, now, event: 'gates_passed' });
-    return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.COMMIT_APPROVAL_PENDING, story: updated.summary, gates, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: nextActionForPhase(LOOP_PHASES.COMMIT_APPROVAL_PENDING) });
-  }
-
-  const attempts = Number.isInteger(story.attempts) ? story.attempts + 1 : 1;
-  const maxAttempts = Number.isInteger(story.max_attempts) ? story.max_attempts : 3;
-  const summary = boundedFailureSummary(gates);
-  const repair = buildRepairDecision({ story, failure: summary, attempts, max_attempts: maxAttempts, now });
-  const nextPhase = repair.escalation_required ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP;
-  const repairHistory = appendRepairHistory(story, repair.repair_event);
-  const updated = updateStoryForPhase(story, nextPhase, {
-    attempts,
-    blocked_reason: gateBlockedReason(gates, repair),
-    last_gate_failure_summary: summary,
-    last_repair_type: repair.failure_type,
-    last_repair_instruction: repair.escalation_required ? null : repair.repair_instruction,
-    repair_history: repairHistory
-  }, { rootDir, now, event: repair.escalation_required ? 'gate_repair_escalated' : 'gate_failed_fix_required' });
-  return baseResult({ ok: false, reason: gateFailureReason(gates, repair), story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
-}
-
-function advanceFixLoopPhase(story, { rootDir, now }) {
-  const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, { blocked_reason: null, current_job_id: null, current_candidate_patch_path: null }, { rootDir, now, event: 'fix_loop_dispatch_ready' });
-  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, failure_summary: story.last_gate_failure_summary || null, repair: { failure_type: story.last_repair_type || null, repair_instruction: story.last_repair_instruction || null }, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING) });
-}
-
-function advanceTerminalPhase(story) {
-  return baseResult({ ok: true, reason: 'story_terminal', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: nextActionForPhase(story.current_phase) });
-}
-
-function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms, nemclaw_spawn } = {}) {
-  if (!story_id) return baseResult({ reason: 'story_id_required' });
-  const story = readStory(rootDir, story_id);
-  if (!story) return baseResult({ reason: 'story_not_found', story_id });
-  if (story.status === STORY_STATUSES.STOPPED || story.current_phase === LOOP_PHASES.STOPPED) return advanceTerminalPhase(story);
-  if (story.status === STORY_STATUSES.COMPLETED || story.current_phase === LOOP_PHASES.DONE) return advanceTerminalPhase(story);
-  if (story.status === STORY_STATUSES.FAILED || story.current_phase === LOOP_PHASES.ESCALATED) return advanceTerminalPhase(story);
-
-  switch (story.current_phase || LOOP_PHASES.PLAN) {
-    case LOOP_PHASES.PLAN:
-      return advancePlanPhase(story, { rootDir, now, env });
-    case LOOP_PHASES.PLAN_APPROVAL_PENDING:
-    case LOOP_PHASES.DIFF_APPROVAL_PENDING:
-    case LOOP_PHASES.COMMIT_APPROVAL_PENDING:
-    case LOOP_PHASES.PUSH_APPROVAL_PENDING:
-    case LOOP_PHASES.PR_APPROVAL_PENDING:
-      return advanceWaitingApprovalPhase(story, { rootDir, now, approvals });
-    case LOOP_PHASES.OPENCODE_RUNNING:
-      return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn });
-    case LOOP_PHASES.PATCH_PREVIEW:
-      return advancePatchPreviewPhase(story, { rootDir, now });
-    case LOOP_PHASES.APPLY:
-      return advanceApplyPhase(story, { rootDir, now, apply_result });
-    case LOOP_PHASES.GATES:
-      return advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms });
-    case LOOP_PHASES.FIX_LOOP:
-      return advanceFixLoopPhase(story, { rootDir, now });
-    default:
-      return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: 'implement_next_autonomous_loop_phase' });
-  }
-}
-
-function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reason = 'operator_pause' } = {}) {
-  const updated = updateStory(story_id, { status: STORY_STATUSES.STOPPED, current_phase: LOOP_PHASES.STOPPED, blocked_reason: reason }, { rootDir, now, event: 'story_paused' });
-  if (!updated.ok) return baseResult({ reason: updated.reason, story_id });
-  return baseResult({ ok: true, story_id, from_phase: null, to_phase: LOOP_PHASES.STOPPED, story: updated.summary, provider_config: updated.story?.last_provider_config || null, reason: null, next_action: 'story_stopped' });
-}
-
-module.exports = {
-  AUTONOMOUS_LOOP_VERSION,
-  OPENCODE_RUNTIME_MODES,
-  LOOP_PHASES,
-  boundedFailureSummary,
-  defaultApprovalId,
-  defaultJobId,
-  defaultSandboxRoot,
-  taskForStory,
-  phaseForUltraPlan,
-  statusForPhase,
-  nextActionForPhase,
-  currentSafeProviderConfig,
-  buildOpenCodePreflight,
-  directOpenCodeDevOnlyAllowed,
-  buildDefaultOpenCodeDispatcher,
-  tickAutonomousLoop,
-  pauseStory
-};
+module.exports = { AUTONOMOUS_LOOP_VERSION, OPENCODE_RUNTIME_MODES, LOOP_PHASES, boundedFailureSummary, defaultApprovalId, defaultJobId, defaultSandboxRoot, taskForStory, phaseForUltraPlan, statusForPhase, nextActionForPhase, currentSafeProviderConfig, persistedApprovalIsApproved, buildOpenCodePreflight, directOpenCodeDevOnlyAllowed, buildDefaultOpenCodeDispatcher, tickAutonomousLoop, pauseStory };
