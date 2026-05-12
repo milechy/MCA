@@ -91,7 +91,25 @@ working_tree_clean_after=true
 next_action=retry_level_1_after_provider_recovers_or_record_blocked_outcome
 ```
 
-If Level 1 returns a blocked provider outcome, do not proceed to Level 2. Record the blocker and retry later after provider quota or availability recovers.
+Blocked runtime evidence:
+
+```text
+reason=nemoclaw_runtime_timeout
+blocked=true
+runtime_blocked=true
+runtime_blocker_reason=nemoclaw_runtime_timeout
+execution_connected=true
+real_gateway_process_started=true
+candidate_patch_path=null
+apply_allowed=false
+commit_created=false
+push_performed=false
+pr_created=false
+working_tree_clean_after=true
+next_action=retry_level_1_after_runtime_or_provider_recovers_or_record_blocked_outcome
+```
+
+If Level 1 returns a blocked provider or runtime outcome, do not proceed to Level 2. Record the blocker and retry later after provider quota, gateway, or sandbox availability recovers.
 
 The real external agent smoke now cleans its own `.ralph/external-agent-jobs/...` and `.ralph/tmp/external-agent-smoke/...` artifacts unless `RALPH_EXTERNAL_AGENT_KEEP_RUNTIME_ARTIFACTS=true` is set.
 
@@ -115,6 +133,17 @@ candidate_patch_available=false
 safe_side_effects=true
 decision=hold_before_level_2_provider_blocked
 next_action=retry_level_1_after_provider_recovers
+```
+
+For a blocked runtime result it records:
+
+```text
+runtime_blocked=true
+runtime_blocker_reason=nemoclaw_runtime_timeout
+candidate_patch_available=false
+safe_side_effects=true
+decision=hold_before_level_2_runtime_blocked
+next_action=retry_level_1_after_runtime_recovers
 ```
 
 Reports must be written under `.ralph/live-validation/`.
