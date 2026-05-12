@@ -12,6 +12,7 @@ const { runShellDryRunWithPreflight } = require('./shell-preflight-wrapper');
 const { runAllApprovedSmoke } = require('./run-all-smoke-helper');
 const { describeGateSequence, runGateSequence } = require('./gate-runner');
 const { createPlanningGraph } = require('./langgraph-planning-layer');
+const { storyStatus, explainRunnable, resumeWithCandidatePatch, cleanupStoryRuntime, resetStoryRuntime } = require('./runtime-operator');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -21,6 +22,16 @@ function optionValue(args, name) {
   const index = args.indexOf(name);
   if (index === -1) return undefined;
   return args[index + 1];
+}
+
+function optionFlag(args, name) {
+  return args.includes(name);
+}
+
+function printJson(result) {
+  console.log(JSON.stringify(result, null, 2));
+  if (result && result.ok === false) process.exitCode = 1;
+  return result;
 }
 
 function usage() {
@@ -38,6 +49,11 @@ Commands:
   node src/ralph/cli.js shell-dry-run <command>
   node src/ralph/cli.js shell-dry-run-approved <approval_id> <plan.json> <command> [--current-diff-hash sha256:...]
   node src/ralph/cli.js smoke-run-all-approved <approval_id> <plan.json> [--current-diff-hash sha256:...]
+  node src/ralph/cli.js story-status <story_id>
+  node src/ralph/cli.js explain-runnable <story_id>
+  node src/ralph/cli.js resume-with-candidate-patch <story_id> <candidate.patch>
+  node src/ralph/cli.js cleanup-story-runtime <story_id> [--include-approval] [--include-story]
+  node src/ralph/cli.js reset-story-runtime <story_id> [--no-cleanup]
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -134,6 +150,8 @@ function handlePlanCommand(args) {
 
 function main(argv = process.argv.slice(2), options = {}) {
   const [command, ...args] = argv;
+  const rootDir = options.rootDir || process.cwd();
+  const now = options.now || new Date();
 
   if (!command || command === '--help' || command === '-h') {
     usage();
@@ -143,6 +161,26 @@ function main(argv = process.argv.slice(2), options = {}) {
   if (command === 'state') {
     console.log(JSON.stringify(loadState(), null, 2));
     return;
+  }
+
+  if (command === 'story-status') {
+    return printJson(storyStatus({ rootDir, story_id: args[0] }));
+  }
+
+  if (command === 'explain-runnable') {
+    return printJson(explainRunnable({ rootDir, story_id: args[0], now }));
+  }
+
+  if (command === 'resume-with-candidate-patch') {
+    return printJson(resumeWithCandidatePatch({ rootDir, story_id: args[0], candidate_patch_path: args[1], now }));
+  }
+
+  if (command === 'cleanup-story-runtime') {
+    return printJson(cleanupStoryRuntime({ rootDir, story_id: args[0], now, include_approval: optionFlag(args, '--include-approval'), include_story: optionFlag(args, '--include-story') }));
+  }
+
+  if (command === 'reset-story-runtime') {
+    return printJson(resetStoryRuntime({ rootDir, story_id: args[0], now, cleanup: !optionFlag(args, '--no-cleanup') }));
   }
 
   if (command === 'mode') {
@@ -188,9 +226,7 @@ function main(argv = process.argv.slice(2), options = {}) {
     const nextPhase = phaseForControlDecision(decision);
     try {
       transitionState(nextPhase, { current_approval_id: approval.approval_id, reason: decision.reason });
-    } catch (error) {
-      // The CLI may be used before the state machine is in RISK_ASSESSMENT. Approval creation should still be testable.
-    }
+    } catch (error) {}
 
     console.log(JSON.stringify({ approval, decision }, null, 2));
     return;
@@ -279,4 +315,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { main, optionValue, handleGateRunnerCommand, handlePlanCommand };
+module.exports = { main, optionValue, optionFlag, printJson, handleGateRunnerCommand, handlePlanCommand };
