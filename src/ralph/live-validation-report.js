@@ -4,6 +4,8 @@ const path = require('node:path');
 const LIVE_VALIDATION_REPORT_VERSION = 'live_validation_report_v0_1';
 const SAFE_LEVELS = new Set([0, 1, 2, 3, 4, 5]);
 const PROVIDER_BLOCKERS = new Set(['provider_rate_limited', 'candidate_patch_missing', 'agent_output_contract_violation']);
+const RUNTIME_BLOCKERS = new Set(['nemoclaw_runtime_timeout', 'external_agent_timeout', 'gateway_runtime_timeout']);
+const TRANSIENT_BLOCKERS = new Set([...PROVIDER_BLOCKERS, ...RUNTIME_BLOCKERS]);
 
 function safeLevel(value) {
   const level = Number(value);
@@ -32,9 +34,9 @@ function boundedSmokeResult(result = {}) {
   return {
     ok: result.ok === true,
     skipped: result.skipped === true,
-    blocked: result.blocked === true,
+    blocked: result.blocked === true || TRANSIENT_BLOCKERS.has(result.reason || run.reason),
     stage: result.stage || null,
-    reason: result.reason || null,
+    reason: result.reason || run.reason || null,
     gateway_type: result.gateway_type || null,
     gateway_name: result.gateway_name || null,
     opencode_runtime_mode: result.opencode_runtime_mode || null,
@@ -65,10 +67,17 @@ function boundedSmokeResult(result = {}) {
   };
 }
 
+function blockerKind(reason) {
+  if (PROVIDER_BLOCKERS.has(reason)) return 'provider';
+  if (RUNTIME_BLOCKERS.has(reason)) return 'runtime';
+  return null;
+}
+
 function summarizeDecision(level, smoke) {
   if (level === 0 && smoke.ok) return 'level_0_passed';
   if (level === 1 && smoke.ok && smoke.candidate_patch_path && smoke.working_tree_clean_after) return 'level_1_passed_continue_to_level_2';
   if (level === 1 && PROVIDER_BLOCKERS.has(smoke.reason)) return 'hold_before_level_2_provider_blocked';
+  if (level === 1 && RUNTIME_BLOCKERS.has(smoke.reason)) return 'hold_before_level_2_runtime_blocked';
   if (smoke.ok) return `level_${level}_passed`;
   return `level_${level}_failed_review_required`;
 }
@@ -79,7 +88,8 @@ function createLiveValidationReport({ level, smoke_result, now = new Date() } = 
     return { ok: false, stage: 'ralph_live_validation_report', version: LIVE_VALIDATION_REPORT_VERSION, reason: 'level_not_allowed', next_action: 'choose_level_0_to_5' };
   }
   const smoke = boundedSmokeResult(smoke_result || {});
-  const providerBlocked = PROVIDER_BLOCKERS.has(smoke.reason) || smoke.blocked === true;
+  const kind = blockerKind(smoke.reason);
+  const transientBlocked = Boolean(kind || smoke.blocked === true);
   const unsafeSideEffects = Boolean(
     smoke.apply_allowed ||
     smoke.commit_created ||
@@ -95,14 +105,22 @@ function createLiveValidationReport({ level, smoke_result, now = new Date() } = 
     version: LIVE_VALIDATION_REPORT_VERSION,
     level: safe,
     generated_at: now.toISOString(),
-    provider_blocked: providerBlocked,
-    provider_blocker_reason: providerBlocked ? smoke.reason : null,
+    provider_blocked: kind === 'provider' || smoke.blocked === true && PROVIDER_BLOCKERS.has(smoke.reason),
+    provider_blocker_reason: kind === 'provider' ? smoke.reason : null,
+    runtime_blocked: kind === 'runtime',
+    runtime_blocker_reason: kind === 'runtime' ? smoke.reason : null,
+    transient_blocked: transientBlocked,
+    transient_blocker_kind: kind,
     candidate_patch_available: Boolean(smoke.candidate_patch_path),
     safe_side_effects: !unsafeSideEffects,
     working_tree_clean_after: smoke.working_tree_clean_after === true,
     decision: summarizeDecision(safe, smoke),
     smoke,
-    next_action: providerBlocked ? 'retry_level_1_after_provider_recovers' : smoke.ok ? 'continue_validation_ladder' : 'inspect_live_validation_failure'
+    next_action: kind === 'provider'
+      ? 'retry_level_1_after_provider_recovers'
+      : kind === 'runtime'
+        ? 'retry_level_1_after_runtime_recovers'
+        : smoke.ok ? 'continue_validation_ladder' : 'inspect_live_validation_failure'
   };
   return report;
 }
@@ -143,10 +161,13 @@ function readJson(filePath) {
 module.exports = {
   LIVE_VALIDATION_REPORT_VERSION,
   PROVIDER_BLOCKERS,
+  RUNTIME_BLOCKERS,
+  TRANSIENT_BLOCKERS,
   safeLevel,
   safeRelativePath,
   oneLine,
   boundedSmokeResult,
+  blockerKind,
   createLiveValidationReport,
   defaultReportPath,
   writeLiveValidationReport,
