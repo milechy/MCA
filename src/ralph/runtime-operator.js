@@ -210,7 +210,11 @@ function cleanupStoryRuntime({ rootDir = process.cwd(), story_id, now = new Date
   const skipped = [];
   const candidates = [];
   const jobs = storyRelatedJobs(rootDir, story);
-  for (const job of jobs) candidates.push(path.join('.ralph', 'external-agent-jobs', `${job.job_id}.json`).replace(/\\/g, '/'));
+  for (const job of jobs) {
+    candidates.push(path.join('.ralph', 'external-agent-jobs', `${job.job_id}.json`).replace(/\\/g, '/'));
+    if (job.sandbox_root) candidates.push(job.sandbox_root);
+    if (job.candidate_patch_path) candidates.push(path.dirname(job.candidate_patch_path).replace(/\\/g, '/'));
+  }
   if (story.current_sandbox_root) candidates.push(story.current_sandbox_root);
   else if (story.current_candidate_patch_path) candidates.push(path.dirname(story.current_candidate_patch_path).replace(/\\/g, '/'));
   if (include_approval && story.current_approval_id) {
