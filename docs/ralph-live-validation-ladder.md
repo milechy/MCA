@@ -39,6 +39,14 @@ Suggested command:
 RALPH_LIVE_VALIDATION_LEVEL=1 RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED=true npm run ralph:real-external-agent-smoke
 ```
 
+To write a bounded report at the same time:
+
+```bash
+RALPH_LIVE_VALIDATION_LEVEL=1 \
+RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED=true \
+npm run ralph:real-external-agent-smoke -- --record-level 1 --json-out .ralph/live-validation/level-1-latest.json
+```
+
 Allowed side effects:
 
 ```text
@@ -86,6 +94,30 @@ next_action=retry_level_1_after_provider_recovers_or_record_blocked_outcome
 If Level 1 returns a blocked provider outcome, do not proceed to Level 2. Record the blocker and retry later after provider quota or availability recovers.
 
 The real external agent smoke now cleans its own `.ralph/external-agent-jobs/...` and `.ralph/tmp/external-agent-smoke/...` artifacts unless `RALPH_EXTERNAL_AGENT_KEEP_RUNTIME_ARTIFACTS=true` is set.
+
+## Recording validation results
+
+Record an existing smoke JSON output:
+
+```bash
+node src/ralph/cli.js record-live-validation-result \
+  --level 1 \
+  --input /path/to/smoke.json \
+  --output .ralph/live-validation/level-1-report.json
+```
+
+The saved report is bounded and redacted. For a blocked provider result it records:
+
+```text
+provider_blocked=true
+provider_blocker_reason=provider_rate_limited
+candidate_patch_available=false
+safe_side_effects=true
+decision=hold_before_level_2_provider_blocked
+next_action=retry_level_1_after_provider_recovers
+```
+
+Reports must be written under `.ralph/live-validation/`.
 
 ## Level 2: live provider + apply/gates/commit, no push
 
