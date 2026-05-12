@@ -13,7 +13,7 @@ const { runAllApprovedSmoke } = require('./run-all-smoke-helper');
 const { describeGateSequence, runGateSequence } = require('./gate-runner');
 const { createPlanningGraph } = require('./langgraph-planning-layer');
 const { storyStatus, explainRunnable, resumeWithCandidatePatch, cleanupStoryRuntime, resetStoryRuntime } = require('./runtime-operator');
-const { recordLiveValidationResult } = require('./live-validation-report');
+const { recordLiveValidationResult, liveValidationStatus } = require('./live-validation-report');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -56,6 +56,7 @@ Commands:
   node src/ralph/cli.js cleanup-story-runtime <story_id> [--include-approval] [--include-story]
   node src/ralph/cli.js reset-story-runtime <story_id> [--no-cleanup]
   node src/ralph/cli.js record-live-validation-result --level <0-5> --input <smoke.json> [--output .ralph/live-validation/report.json]
+  node src/ralph/cli.js live-validation-status [--level 1] [--backoff-ms 1800000]
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -192,6 +193,12 @@ function main(argv = process.argv.slice(2), options = {}) {
     if (!input) return printJson({ ok: false, stage: 'ralph_live_validation_report_cli', reason: 'input_required', next_action: 'provide_smoke_json_input' });
     const smoke = readJson(input);
     return printJson(recordLiveValidationResult({ rootDir, level, smoke_result: smoke, output_path: output, now }));
+  }
+
+  if (command === 'live-validation-status') {
+    const level = optionValue(args, '--level') || 1;
+    const backoffMs = optionValue(args, '--backoff-ms');
+    return printJson(liveValidationStatus({ rootDir, level, now, backoff_ms: backoffMs === undefined ? undefined : Number(backoffMs) }));
   }
 
   if (command === 'mode') {
