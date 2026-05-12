@@ -7,7 +7,8 @@ const {
   createLiveValidationReport,
   recordLiveValidationResult,
   writeLiveValidationReport,
-  defaultReportPath
+  defaultReportPath,
+  blockerKind
 } = require('../../src/ralph/live-validation-report');
 const { maybeRecord, parseArgs } = require('../../scripts/ralph/real-external-agent-smoke');
 const { main } = require('../../src/ralph/cli');
@@ -16,13 +17,14 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-live-validation-report-'));
 }
 
-function blockedSmoke() {
+function blockedSmoke(overrides = {}) {
+  const reason = overrides.reason || 'provider_rate_limited';
   return {
     ok: false,
     skipped: false,
-    blocked: true,
+    blocked: overrides.blocked !== undefined ? overrides.blocked : true,
     stage: 'real_external_agent_smoke',
-    reason: 'provider_rate_limited',
+    reason,
     gateway_type: 'nemoclaw',
     gateway_name: 'nemoclaw',
     opencode_runtime_mode: 'nemoclaw-mediated',
@@ -57,8 +59,10 @@ function blockedSmoke() {
       stderr_preview: 'provider limited with token FAKE_GITHUB_TOKEN_FOR_REDACTION_TEST',
       stdout_preview: '',
       commands_executed: ['openshell sandbox exec --message very long command'],
-      opencode_execution_started: true
-    }
+      opencode_execution_started: true,
+      reason
+    },
+    ...overrides
   };
 }
 
@@ -92,12 +96,44 @@ test('createLiveValidationReport records provider blocker as hold before level 2
     level: 1,
     provider_blocked: true,
     provider_blocker_reason: 'provider_rate_limited',
+    runtime_blocked: false,
+    transient_blocked: true,
+    transient_blocker_kind: 'provider',
     candidate_patch_available: false,
     safe_side_effects: true,
     working_tree_clean_after: true,
     decision: 'hold_before_level_2_provider_blocked',
     next_action: 'retry_level_1_after_provider_recovers'
   });
+});
+
+test('createLiveValidationReport records runtime timeout as hold before level 2', () => {
+  const report = createLiveValidationReport({
+    level: 1,
+    smoke_result: blockedSmoke({ reason: 'nemoclaw_runtime_timeout', blocked: false }),
+    now: new Date('2026-05-12T05:25:00.000Z')
+  });
+
+  expect(report).toMatchObject({
+    ok: true,
+    level: 1,
+    provider_blocked: false,
+    provider_blocker_reason: null,
+    runtime_blocked: true,
+    runtime_blocker_reason: 'nemoclaw_runtime_timeout',
+    transient_blocked: true,
+    transient_blocker_kind: 'runtime',
+    candidate_patch_available: false,
+    safe_side_effects: true,
+    decision: 'hold_before_level_2_runtime_blocked',
+    next_action: 'retry_level_1_after_runtime_recovers'
+  });
+});
+
+test('blockerKind distinguishes provider runtime and non transient reasons', () => {
+  expect(blockerKind('provider_rate_limited')).toBe('provider');
+  expect(blockerKind('nemoclaw_runtime_timeout')).toBe('runtime');
+  expect(blockerKind('unexpected_failure')).toBe(null);
 });
 
 test('recordLiveValidationResult writes report under .ralph/live-validation', () => {
