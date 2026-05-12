@@ -14,6 +14,7 @@ const { describeGateSequence, runGateSequence } = require('./gate-runner');
 const { createPlanningGraph } = require('./langgraph-planning-layer');
 const { storyStatus, explainRunnable, resumeWithCandidatePatch, cleanupStoryRuntime, resetStoryRuntime } = require('./runtime-operator');
 const { recordLiveValidationResult, liveValidationStatus } = require('./live-validation-report');
+const { createCanaryBatchReportFromFile } = require('./canary-batch-report');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -57,6 +58,7 @@ Commands:
   node src/ralph/cli.js reset-story-runtime <story_id> [--no-cleanup]
   node src/ralph/cli.js record-live-validation-result --level <0-5> --input <smoke.json> [--output .ralph/live-validation/report.json]
   node src/ralph/cli.js live-validation-status [--level 1] [--backoff-ms 1800000]
+  node src/ralph/cli.js canary-batch-report --input <issues.json> [--output .ralph/canary-batches/report.json]
   node src/ralph/cli.js deny <approval_id> <user_id>
   node src/ralph/cli.js modify <approval_id> <instruction>
   node src/ralph/cli.js expire
@@ -199,6 +201,12 @@ function main(argv = process.argv.slice(2), options = {}) {
     const level = optionValue(args, '--level') || 1;
     const backoffMs = optionValue(args, '--backoff-ms');
     return printJson(liveValidationStatus({ rootDir, level, now, backoff_ms: backoffMs === undefined ? undefined : Number(backoffMs) }));
+  }
+
+  if (command === 'canary-batch-report') {
+    const input = optionValue(args, '--input');
+    const output = optionValue(args, '--output');
+    return printJson(createCanaryBatchReportFromFile({ rootDir, input_path: input, output_path: output, now }));
   }
 
   if (command === 'mode') {
