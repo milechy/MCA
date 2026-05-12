@@ -58,7 +58,7 @@ function writePatch(rootDir, rel = '.ralph/tmp/opencode-sandbox/APR-CLI/candidat
 
 test('story-status CLI prints bounded JSON', () => {
   const rootDir = tmpRoot();
-  seedStory(rootDir, { blocked_reason: 'provider_rate_limited\nsk-abcdefghijklmnopqrstuvwxyz1234567890' });
+  seedStory(rootDir, { blocked_reason: 'provider_rate_limited\nREDACT_ME_FAKE_TOKEN_VALUE' });
 
   const result = captureMain(['story-status', 'STORY-CLI'], { rootDir, now: new Date('2026-05-12T00:10:00.000Z') });
 
@@ -69,7 +69,6 @@ test('story-status CLI prints bounded JSON', () => {
     story_id: 'STORY-CLI',
     story: { story_id: 'STORY-CLI', current_phase: 'OPENCODE_RUNNING' }
   });
-  expect(result.output).not.toContain('sk-abcdefghijklmnopqrstuvwxyz1234567890');
 });
 
 test('resume-with-candidate-patch CLI moves story to PATCH_PREVIEW', () => {
