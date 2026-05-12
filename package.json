@@ -20,6 +20,7 @@
     "telegram:real-run-all-smoke": "bash scripts/telegram/real-run-all-smoke.sh",
     "telegram:real-opencode-smoke": "node scripts/telegram/real-opencode-operational-smoke.js",
     "ralph:issue-to-pr-smoke": "node scripts/ralph/autonomous-issue-to-pr-smoke.js --fixture",
+    "ralph:live-validation-ladder": "node scripts/ralph/live-validation-ladder.js --json",
     "ralph:real-external-agent-smoke": "node scripts/ralph/real-external-agent-smoke.js",
     "ralph:autonomous-daemon": "node scripts/ralph/autonomous-daemon.js",
     "telegram:real-transport-guard": "node scripts/telegram/real-transport-guard.js",
