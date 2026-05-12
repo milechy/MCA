@@ -37,6 +37,7 @@ node_modules/
 .ralph/opencode-jobs/*
 .ralph/external-agent-jobs/*
 .ralph/stories/*
+.ralph/sandboxes/*
 .ralph/approval-log.jsonl
 .ralph/roles.json
 .ralph/telegram-offset.json

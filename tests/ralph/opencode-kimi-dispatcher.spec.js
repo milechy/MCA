@@ -1,0 +1,279 @@
+const { test, expect } = require('@playwright/test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const {
+  DEFAULT_MODEL,
+  PATCH_SOURCE,
+  MEDIATOR,
+  RUNTIME_MODE,
+  resolveModel,
+  safeEnv,
+  buildPrompt,
+  classifyFailure,
+  dispatchOpenCodeKimi
+} = require('../../src/ralph/opencode-kimi-dispatcher');
+
+function tmpRoot() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-dispatcher-'));
+}
+
+function fakeSpawn(plan) {
+  const calls = [];
+  const versionPlan = plan.version || { status: 0, stdout: 'opencode 1.14.39\n', stderr: '' };
+  const runPlan = plan.run || { status: 0, stdout: '', stderr: '' };
+  return function spawn(command, args, opts) {
+    calls.push({ command, args, opts });
+    if (Array.isArray(args) && args[0] === '--version') return { ...versionPlan, calls };
+    if (Array.isArray(args) && args[0] === 'run') return { ...runPlan, calls };
+    return { status: 0, stdout: '', stderr: '', calls };
+  };
+}
+
+function story() {
+  return {
+    story_id: 'STORY-KIMI',
+    title: 'Kimi dispatcher smoke',
+    requirement: 'Generate a tiny markdown note via OpenCode + Kimi K2.',
+    requested_paths: ['docs/kimi-smoke.md'],
+    risk: { score: 0, category: 'low', label: 'RISK_0_LOW' }
+  };
+}
+
+const SAMPLE_DIFF = `diff --git a/docs/kimi-smoke.md b/docs/kimi-smoke.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/docs/kimi-smoke.md
+@@ -0,0 +1,2 @@
++# Kimi smoke
++Body line.
+`;
+
+test('safeEnv drops everything except PATH/HOME/CI/TMPDIR and routes Kimi API key through OPENROUTER_API_KEY', () => {
+  const env = safeEnv({
+    PATH: '/bin',
+    HOME: '/home/u',
+    TMPDIR: '/tmp',
+    CI: '',
+    OPENROUTER_API_KEY: 'or-redacted-key',
+    KIMI_API_KEY: 'unused-when-openrouter-set',
+    DATABASE_PASSWORD: 'leaked-secret',
+    SUPABASE_SERVICE_ROLE: 'leaked-secret'
+  });
+  expect(env).toEqual({
+    PATH: '/bin',
+    HOME: '/home/u',
+    TMPDIR: '/tmp',
+    CI: '',
+    OPENROUTER_API_KEY: 'or-redacted-key',
+    OPENCODE_DISABLE_TELEMETRY: '1'
+  });
+});
+
+test('safeEnv falls back to KIMI_API_KEY when OPENROUTER_API_KEY is absent', () => {
+  const env = safeEnv({ PATH: '/bin', HOME: '/u', KIMI_API_KEY: 'kimi-key' });
+  expect(env.OPENROUTER_API_KEY).toBe('kimi-key');
+});
+
+test('resolveModel sanitizes input and falls back to default Kimi K2 model', () => {
+  expect(resolveModel({})).toBe(DEFAULT_MODEL);
+  expect(resolveModel({ OPENCODE_MODEL: 'openrouter/moonshotai/kimi-k2' })).toBe('openrouter/moonshotai/kimi-k2');
+  expect(resolveModel({ OPENCODE_MODEL: 'bad model with spaces' })).toBe(DEFAULT_MODEL);
+  expect(resolveModel({ OPENCODE_MODEL: 'evil; rm -rf /' })).toBe(DEFAULT_MODEL);
+});
+
+test('buildPrompt includes Ralph identity, requested paths, and Kimi role', () => {
+  const prompt = buildPrompt({ task: 'do the thing', requested_paths: ['docs/x.md'], rootDir: tmpRoot() });
+  expect(prompt).toContain('Ralph execution provider');
+  expect(prompt).toContain('Kimi K2');
+  expect(prompt).toContain('docs/x.md');
+  expect(prompt).toContain('do the thing');
+  expect(prompt).toContain('Return ONLY a unified git diff');
+});
+
+test('classifyFailure produces the expected reasons', () => {
+  expect(classifyFailure({ missingKey: true })).toBe('opencode_kimi_api_key_missing');
+  expect(classifyFailure({ timedOut: true })).toBe('opencode_kimi_runtime_timeout');
+  expect(classifyFailure({ output: 'HTTP 429 too many requests' })).toBe('provider_rate_limited');
+  expect(classifyFailure({ patchLooksValid: false })).toBe('candidate_patch_missing');
+  expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: false, reason: 'candidate_patch_path_forbidden' } })).toBe('candidate_patch_path_forbidden');
+  expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: true }, exitCode: 1 })).toBe('opencode_kimi_runtime_failed');
+  expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: true }, exitCode: 0 })).toBeNull();
+});
+
+test('dispatchOpenCodeKimi refuses non-allowed sandbox roots', () => {
+  const rootDir = tmpRoot();
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    sandbox_root: 'tmp/outside-sandbox-root',
+    task: 'task',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn: fakeSpawn({}),
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'opencode_kimi_sandbox_root_not_allowed',
+    execution_connected: false
+  });
+});
+
+test('dispatchOpenCodeKimi reports api key missing without invoking opencode', () => {
+  const rootDir = tmpRoot();
+  const spawn = fakeSpawn({});
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-KIMI',
+    task: 'task',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u' }
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'opencode_kimi_api_key_missing',
+    runtime_installed: true,
+    execution_connected: false,
+    next_action: 'set_openrouter_api_key_or_kimi_api_key_env'
+  });
+});
+
+test('dispatchOpenCodeKimi writes candidate.patch when opencode emits a valid unified diff', () => {
+  const rootDir = tmpRoot();
+  const spawn = fakeSpawn({ run: { status: 0, stdout: SAMPLE_DIFF, stderr: '' } });
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    approval_id: 'APR-KIMI',
+    job_id: 'JOB-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'create docs/kimi-smoke.md',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    reason: null,
+    mediator: MEDIATOR,
+    opencode_runtime_mode: RUNTIME_MODE,
+    patch_source: PATCH_SOURCE,
+    execution_connected: true,
+    apply_allowed: false,
+    commit_allowed: false,
+    push_allowed: false,
+    pr_allowed: false,
+    candidate_patch_path: '.ralph/sandboxes/STORY-KIMI/candidate.patch',
+    next_action: 'preview_candidate_patch_before_apply'
+  });
+  const patchPath = path.join(rootDir, result.candidate_patch_path);
+  expect(fs.existsSync(patchPath)).toBe(true);
+  const patch = fs.readFileSync(patchPath, 'utf8');
+  expect(patch).toContain('diff --git a/docs/kimi-smoke.md b/docs/kimi-smoke.md');
+});
+
+test('dispatchOpenCodeKimi classifies provider rate limit even when stdout is empty', () => {
+  const rootDir = tmpRoot();
+  const spawn = fakeSpawn({ run: { status: 1, stdout: '', stderr: 'HTTP 429 rate limit reached' } });
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    approval_id: 'APR-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'create docs/kimi-smoke.md',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'provider_rate_limited',
+    execution_connected: true,
+    next_action: 'retry_after_provider_rate_limit'
+  });
+});
+
+test('dispatchOpenCodeKimi rejects patches that touch paths outside requested_paths', () => {
+  const rootDir = tmpRoot();
+  const forbiddenDiff = `diff --git a/src/forbidden.js b/src/forbidden.js
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/forbidden.js
+@@ -0,0 +1,1 @@
++evil
+`;
+  const spawn = fakeSpawn({ run: { status: 0, stdout: forbiddenDiff, stderr: '' } });
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    approval_id: 'APR-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'create docs/kimi-smoke.md',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'candidate_patch_unrequested_path',
+    execution_connected: true
+  });
+  expect(fs.existsSync(path.join(rootDir, '.ralph/sandboxes/STORY-KIMI/candidate.patch'))).toBe(false);
+});
+
+test('dispatchOpenCodeKimi reports runtime not installed when opencode version probe ENOENTs', () => {
+  const rootDir = tmpRoot();
+  function spawn(command, args) {
+    if (args[0] === '--version') return { error: { code: 'ENOENT', message: 'not found' }, status: null, stdout: '', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  }
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'task',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'opencode_runtime_not_installed',
+    execution_connected: false
+  });
+});
+
+test('dispatchOpenCodeKimi never injects unrelated secrets into spawned env', () => {
+  const rootDir = tmpRoot();
+  const observed = [];
+  function spawn(command, args, opts) {
+    observed.push({ command, args, env: opts && opts.env });
+    if (args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n' };
+    return { status: 0, stdout: SAMPLE_DIFF };
+  }
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'task',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: {
+      PATH: '/bin',
+      HOME: '/u',
+      OPENROUTER_API_KEY: 'or-key',
+      SUPABASE_SERVICE_ROLE: 'must-not-leak',
+      GITHUB_TOKEN: 'must-not-leak'
+    }
+  });
+  expect(result.ok).toBe(true);
+  const runCall = observed.find((entry) => entry.args[0] === 'run');
+  expect(runCall.env).not.toHaveProperty('SUPABASE_SERVICE_ROLE');
+  expect(runCall.env).not.toHaveProperty('GITHUB_TOKEN');
+  expect(runCall.env.OPENROUTER_API_KEY).toBe('or-key');
+});
