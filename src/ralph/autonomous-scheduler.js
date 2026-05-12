@@ -1,5 +1,5 @@
 const { listStories, summarizeStory } = require('./story-queue');
-const { tickAutonomousLoop } = require('./autonomous-loop');
+const { tickAutonomousLoopWired } = require('./autonomous-loop-wired');
 const { sortStoriesByPriority } = require('./story-priority');
 
 const SCHEDULER_VERSION = 'autonomous_scheduler_v0_1';
@@ -35,7 +35,7 @@ function schedulerTick({ rootDir = process.cwd(), now = new Date(), limit = 1, t
     let current = null;
     const storyTicks = [];
     for (let index = 0; index < Math.max(1, Math.min(12, ticks_per_story)); index += 1) {
-      current = tickAutonomousLoop({ rootDir, story_id: story.story_id, now, ...tickOptions });
+      current = tickAutonomousLoopWired({ rootDir, story_id: story.story_id, now, ...tickOptions });
       storyTicks.push({
         ok: current.ok,
         reason: current.reason || null,
