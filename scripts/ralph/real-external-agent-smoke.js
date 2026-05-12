@@ -5,16 +5,12 @@ const { execFileSync } = require('node:child_process');
 const { runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
 const { runNemoClawOpenCodeCandidatePatch } = require('../../src/ralph/nemoclaw-opencode-gateway');
 const { GATEWAY_TYPES, gatewayIsDevOnly, devOnlyGatewayAllowed } = require('../../src/ralph/external-agent-gateway');
-const { recordLiveValidationResult } = require('../../src/ralph/live-validation-report');
+const { recordLiveValidationResult, TRANSIENT_BLOCKERS } = require('../../src/ralph/live-validation-report');
 
 const DEFAULT_SMOKE_PATH = 'tests/external-agent-generated.spec.js';
 const DEFAULT_SMOKE_TASK = `Create a minimal candidate patch that adds only ${DEFAULT_SMOKE_PATH}. The unified diff must touch exactly ${DEFAULT_SMOKE_PATH}. Do not apply, commit, push, create pull requests, deploy, migrate, or modify the repository working tree.`;
 const SUPPORTED_GATEWAYS = Object.freeze(['nemoclaw', 'openclaw']);
-const BLOCKED_PROVIDER_REASONS = new Set([
-  'provider_rate_limited',
-  'candidate_patch_missing',
-  'agent_output_contract_violation'
-]);
+const BLOCKED_PROVIDER_REASONS = TRANSIENT_BLOCKERS;
 
 function runtimeModeForGateway(gateway) {
   return gateway === GATEWAY_TYPES.NEMOCLAW ? 'nemoclaw-mediated' : 'dev-only-non-nemoclaw';
@@ -130,7 +126,7 @@ function blocked(reason, extra = {}) {
   return {
     ok: false,
     skipped: false,
-    blocked: BLOCKED_PROVIDER_REASONS.has(reason),
+    blocked: TRANSIENT_BLOCKERS.has(reason),
     stage: 'real_external_agent_smoke',
     reason,
     gateway_type: extra.gateway_type || null,
@@ -157,8 +153,8 @@ function blocked(reason, extra = {}) {
     migration_performed: false,
     next_action: reason === 'dev_only_gateway_requires_explicit_opt_in'
       ? 'rerun_with_explicit_dev_only_gateway_opt_in_or_use_nemoclaw'
-      : BLOCKED_PROVIDER_REASONS.has(reason)
-        ? 'retry_level_1_after_provider_recovers_or_record_blocked_outcome'
+      : TRANSIENT_BLOCKERS.has(reason)
+        ? 'retry_level_1_after_runtime_or_provider_recovers_or_record_blocked_outcome'
         : 'fix_real_external_agent_smoke_failure'
   };
 }
@@ -249,7 +245,7 @@ function runRealExternalAgentSmoke({
   return {
     ok,
     skipped: false,
-    blocked: BLOCKED_PROVIDER_REASONS.has(reason),
+    blocked: TRANSIENT_BLOCKERS.has(reason),
     stage: 'real_external_agent_smoke',
     reason,
     gateway_type: gateway,
@@ -277,8 +273,8 @@ function runRealExternalAgentSmoke({
     migration_performed: false,
     next_action: ok
       ? 'review_candidate_patch_then_continue_approval_chain'
-      : BLOCKED_PROVIDER_REASONS.has(reason)
-        ? 'retry_level_1_after_provider_recovers_or_record_blocked_outcome'
+      : TRANSIENT_BLOCKERS.has(reason)
+        ? 'retry_level_1_after_runtime_or_provider_recovers_or_record_blocked_outcome'
         : 'fix_real_external_agent_smoke_failure'
   };
 }
