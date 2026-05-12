@@ -8,7 +8,9 @@ const {
   recordLiveValidationResult,
   writeLiveValidationReport,
   defaultReportPath,
-  blockerKind
+  blockerKind,
+  liveValidationStatus,
+  liveValidationBackoffGuard
 } = require('../../src/ralph/live-validation-report');
 const { maybeRecord, parseArgs } = require('../../scripts/ralph/real-external-agent-smoke');
 const { main } = require('../../src/ralph/cli');
@@ -158,6 +160,98 @@ test('recordLiveValidationResult writes report under .ralph/live-validation', ()
   expect(saved).toMatchObject({ level: 1, provider_blocked: true });
 });
 
+test('liveValidationStatus reports active backoff from latest transient blocker report', () => {
+  const rootDir = tmpRoot();
+  recordLiveValidationResult({
+    rootDir,
+    level: 1,
+    smoke_result: blockedSmoke(),
+    output_path: '.ralph/live-validation/level-1-report.json',
+    now: new Date('2026-05-12T03:00:00.000Z')
+  });
+
+  const status = liveValidationStatus({
+    rootDir,
+    level: 1,
+    now: new Date('2026-05-12T03:10:00.000Z'),
+    backoff_ms: 30 * 60 * 1000
+  });
+
+  expect(status).toMatchObject({
+    ok: true,
+    stage: 'ralph_live_validation_status',
+    level: 1,
+    report_path: '.ralph/live-validation/level-1-report.json',
+    transient_blocked: true,
+    transient_blocker_kind: 'provider',
+    provider_blocker_reason: 'provider_rate_limited',
+    backoff_active: true,
+    next_retry_after: '2026-05-12T03:30:00.000Z',
+    next_action: 'wait_until_next_retry_after'
+  });
+});
+
+test('liveValidationBackoffGuard blocks retry while backoff is active', () => {
+  const rootDir = tmpRoot();
+  recordLiveValidationResult({
+    rootDir,
+    level: 1,
+    smoke_result: blockedSmoke({ reason: 'nemoclaw_runtime_timeout', blocked: false }),
+    output_path: '.ralph/live-validation/level-1-runtime.json',
+    now: new Date('2026-05-12T05:00:00.000Z')
+  });
+
+  const guard = liveValidationBackoffGuard({
+    rootDir,
+    level: 1,
+    now: new Date('2026-05-12T05:05:00.000Z'),
+    backoff_ms: 30 * 60 * 1000
+  });
+
+  expect(guard).toMatchObject({
+    ok: false,
+    reason: 'recent_transient_blocker_backoff_active',
+    transient_blocker_kind: 'runtime',
+    runtime_blocker_reason: 'nemoclaw_runtime_timeout',
+    next_retry_after: '2026-05-12T05:30:00.000Z',
+    execution_connected: false,
+    real_gateway_process_started: false,
+    apply_allowed: false,
+    commit_created: false,
+    push_performed: false,
+    pr_created: false,
+    merge_performed: false,
+    deploy_performed: false,
+    migration_performed: false
+  });
+});
+
+test('CLI live-validation-status prints bounded status', () => {
+  const rootDir = tmpRoot();
+  recordLiveValidationResult({
+    rootDir,
+    level: 1,
+    smoke_result: blockedSmoke(),
+    output_path: '.ralph/live-validation/level-1-cli.json',
+    now: new Date('2026-05-12T06:00:00.000Z')
+  });
+
+  const result = captureMain([
+    'live-validation-status',
+    '--level', '1',
+    '--backoff-ms', String(30 * 60 * 1000)
+  ], { rootDir, now: new Date('2026-05-12T06:10:00.000Z') });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.json).toMatchObject({
+    ok: true,
+    stage: 'ralph_live_validation_status',
+    report_path: '.ralph/live-validation/level-1-cli.json',
+    backoff_active: true,
+    next_action: 'wait_until_next_retry_after'
+  });
+});
+
 test('writeLiveValidationReport refuses paths outside live validation directory', () => {
   const result = writeLiveValidationReport({
     rootDir: tmpRoot(),
@@ -184,10 +278,12 @@ test('maybeRecord attaches validation report output metadata', () => {
   expect(fs.existsSync(path.join(rootDir, '.ralph/live-validation/smoke-report.json'))).toBe(true);
 });
 
-test('parseArgs supports json-out and record-level', () => {
-  expect(parseArgs(['--json-out', '.ralph/live-validation/out.json', '--record-level', '1'])).toEqual({
+test('parseArgs supports json-out record-level and respect-last-report', () => {
+  expect(parseArgs(['--json-out', '.ralph/live-validation/out.json', '--record-level', '1', '--respect-last-report', '--backoff-ms', '60000'])).toEqual({
     json_out: '.ralph/live-validation/out.json',
-    record_level: '1'
+    record_level: '1',
+    respect_last_report: true,
+    backoff_ms: '60000'
   });
 });
 

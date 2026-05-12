@@ -47,6 +47,22 @@ RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED=true \
 npm run ralph:real-external-agent-smoke -- --record-level 1 --json-out .ralph/live-validation/level-1-latest.json
 ```
 
+To avoid hammering provider/gateway while a recent transient blocker is still in backoff:
+
+```bash
+npm run ralph:real-external-agent-smoke -- \
+  --respect-last-report \
+  --record-level 1 \
+  --backoff-ms 1800000 \
+  --json-out .ralph/live-validation/level-1-latest.json
+```
+
+Inspect the latest report without running provider/gateway:
+
+```bash
+node src/ralph/cli.js live-validation-status --level 1 --backoff-ms 1800000
+```
+
 Allowed side effects:
 
 ```text
@@ -107,6 +123,16 @@ push_performed=false
 pr_created=false
 working_tree_clean_after=true
 next_action=retry_level_1_after_runtime_or_provider_recovers_or_record_blocked_outcome
+```
+
+Backoff guard evidence:
+
+```text
+reason=recent_transient_blocker_backoff_active
+execution_connected=false
+real_gateway_process_started=false
+next_retry_after=<timestamp>
+next_action=wait_until_next_retry_after_or_override_backoff
 ```
 
 If Level 1 returns a blocked provider or runtime outcome, do not proceed to Level 2. Record the blocker and retry later after provider quota, gateway, or sandbox availability recovers.

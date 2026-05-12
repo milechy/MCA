@@ -5,7 +5,7 @@ const { execFileSync } = require('node:child_process');
 const { runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
 const { runNemoClawOpenCodeCandidatePatch } = require('../../src/ralph/nemoclaw-opencode-gateway');
 const { GATEWAY_TYPES, gatewayIsDevOnly, devOnlyGatewayAllowed } = require('../../src/ralph/external-agent-gateway');
-const { recordLiveValidationResult, TRANSIENT_BLOCKERS } = require('../../src/ralph/live-validation-report');
+const { recordLiveValidationResult, TRANSIENT_BLOCKERS, liveValidationBackoffGuard } = require('../../src/ralph/live-validation-report');
 
 const DEFAULT_SMOKE_PATH = 'tests/external-agent-generated.spec.js';
 const DEFAULT_SMOKE_TASK = `Create a minimal candidate patch that adds only ${DEFAULT_SMOKE_PATH}. The unified diff must touch exactly ${DEFAULT_SMOKE_PATH}. Do not apply, commit, push, create pull requests, deploy, migrate, or modify the repository working tree.`;
@@ -26,11 +26,18 @@ function timestampId(prefix, date = new Date()) {
 }
 
 function parseArgs(argv = process.argv.slice(2)) {
-  const options = { json_out: process.env.RALPH_EXTERNAL_AGENT_SMOKE_JSON_OUT || null, record_level: process.env.RALPH_EXTERNAL_AGENT_SMOKE_RECORD_LEVEL || null };
+  const options = {
+    json_out: process.env.RALPH_EXTERNAL_AGENT_SMOKE_JSON_OUT || null,
+    record_level: process.env.RALPH_EXTERNAL_AGENT_SMOKE_RECORD_LEVEL || null,
+    respect_last_report: process.env.RALPH_EXTERNAL_AGENT_SMOKE_RESPECT_LAST_REPORT === 'true',
+    backoff_ms: process.env.RALPH_EXTERNAL_AGENT_SMOKE_BACKOFF_MS || null
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json-out') options.json_out = argv[index += 1] || null;
     else if (arg === '--record-level') options.record_level = argv[index += 1] || null;
+    else if (arg === '--respect-last-report') options.respect_last_report = true;
+    else if (arg === '--backoff-ms') options.backoff_ms = argv[index += 1] || null;
   }
   return options;
 }
@@ -289,6 +296,13 @@ function maybeRecord(result, { rootDir, json_out, record_level }) {
 function main() {
   const rootDir = path.resolve(__dirname, '..', '..');
   const options = parseArgs();
+  if (options.respect_last_report) {
+    const guard = liveValidationBackoffGuard({ rootDir, level: Number(options.record_level || 1), backoff_ms: options.backoff_ms === null ? undefined : Number(options.backoff_ms) });
+    if (!guard.ok) {
+      process.stdout.write(`${JSON.stringify(guard, null, 2)}\n`);
+      process.exit(1);
+    }
+  }
   const result = runRealExternalAgentSmoke({ rootDir });
   const recorded = maybeRecord(result, { rootDir, json_out: options.json_out, record_level: options.record_level });
   process.stdout.write(`${JSON.stringify(recorded.result, null, 2)}\n`);
