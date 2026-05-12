@@ -540,7 +540,7 @@ function tickAutonomousLoopWired(options = {}) {
 
   const result = tickAutonomousLoop(options);
   const afterFallback = maybeFallbackAfterOpenCodeFailure(result, { rootDir, now, allow_runtime_code_fallback });
-  if (afterFallback !== result) return afterFallback;
+  if (afterFallback.ok === true && afterFallback.to_phase === LOOP_PHASES.PATCH_PREVIEW) return afterFallback;
   const afterEscalation = escalateStuckOpenCodeRunning(afterFallback, { rootDir, now });
   if (afterEscalation !== afterFallback) return afterEscalation;
   return ensurePushApprovalAfterCommit(afterFallback, options);
