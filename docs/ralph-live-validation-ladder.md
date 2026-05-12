@@ -30,12 +30,13 @@ Required gate:
 
 ```bash
 export RALPH_LIVE_VALIDATION_LEVEL=1
+export RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED=true
 ```
 
 Suggested command:
 
 ```bash
-RALPH_LIVE_VALIDATION_LEVEL=1 npm run ralph:real-external-agent-smoke
+RALPH_LIVE_VALIDATION_LEVEL=1 RALPH_EXTERNAL_AGENT_RUNTIME_APPROVED=true npm run ralph:real-external-agent-smoke
 ```
 
 Allowed side effects:
@@ -65,6 +66,26 @@ candidate_patch_path=.ralph/tmp/.../candidate.patch
 working_tree_clean_after=true
 apply_allowed=false
 ```
+
+Blocked provider evidence:
+
+```text
+reason=provider_rate_limited
+blocked=true
+execution_connected=true
+real_gateway_process_started=true
+candidate_patch_path=null
+apply_allowed=false
+commit_created=false
+push_performed=false
+pr_created=false
+working_tree_clean_after=true
+next_action=retry_level_1_after_provider_recovers_or_record_blocked_outcome
+```
+
+If Level 1 returns a blocked provider outcome, do not proceed to Level 2. Record the blocker and retry later after provider quota or availability recovers.
+
+The real external agent smoke now cleans its own `.ralph/external-agent-jobs/...` and `.ralph/tmp/external-agent-smoke/...` artifacts unless `RALPH_EXTERNAL_AGENT_KEEP_RUNTIME_ARTIFACTS=true` is set.
 
 ## Level 2: live provider + apply/gates/commit, no push
 
