@@ -5,6 +5,7 @@ const { execFileSync } = require('node:child_process');
 const { runExternalAgentCandidatePatch } = require('../../src/ralph/external-agent-adapter');
 const { runNemoClawOpenCodeCandidatePatch } = require('../../src/ralph/nemoclaw-opencode-gateway');
 const { GATEWAY_TYPES, gatewayIsDevOnly, devOnlyGatewayAllowed } = require('../../src/ralph/external-agent-gateway');
+const { recordLiveValidationResult } = require('../../src/ralph/live-validation-report');
 
 const DEFAULT_SMOKE_PATH = 'tests/external-agent-generated.spec.js';
 const DEFAULT_SMOKE_TASK = `Create a minimal candidate patch that adds only ${DEFAULT_SMOKE_PATH}. The unified diff must touch exactly ${DEFAULT_SMOKE_PATH}. Do not apply, commit, push, create pull requests, deploy, migrate, or modify the repository working tree.`;
@@ -26,6 +27,16 @@ function mediatorForGateway(gateway) {
 function timestampId(prefix, date = new Date()) {
   const stamp = date.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   return `${prefix}-${stamp}`;
+}
+
+function parseArgs(argv = process.argv.slice(2)) {
+  const options = { json_out: process.env.RALPH_EXTERNAL_AGENT_SMOKE_JSON_OUT || null, record_level: process.env.RALPH_EXTERNAL_AGENT_SMOKE_RECORD_LEVEL || null };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--json-out') options.json_out = argv[index += 1] || null;
+    else if (arg === '--record-level') options.record_level = argv[index += 1] || null;
+  }
+  return options;
 }
 
 function gitStatusShort(rootDir) {
@@ -272,9 +283,19 @@ function runRealExternalAgentSmoke({
   };
 }
 
+function maybeRecord(result, { rootDir, json_out, record_level }) {
+  if (!json_out && record_level === null) return { result, record: null };
+  const level = record_level === null || record_level === undefined || record_level === '' ? 1 : Number(record_level);
+  const record = recordLiveValidationResult({ rootDir, level, smoke_result: result, output_path: json_out || undefined });
+  return { result: { ...result, validation_report: record.output || null }, record };
+}
+
 function main() {
-  const result = runRealExternalAgentSmoke({ rootDir: path.resolve(__dirname, '..', '..') });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  const rootDir = path.resolve(__dirname, '..', '..');
+  const options = parseArgs();
+  const result = runRealExternalAgentSmoke({ rootDir });
+  const recorded = maybeRecord(result, { rootDir, json_out: options.json_out, record_level: options.record_level });
+  process.stdout.write(`${JSON.stringify(recorded.result, null, 2)}\n`);
   process.exit(result.ok ? 0 : 1);
 }
 
@@ -285,6 +306,7 @@ module.exports = {
   DEFAULT_SMOKE_TASK,
   SUPPORTED_GATEWAYS,
   BLOCKED_PROVIDER_REASONS,
+  parseArgs,
   runtimeModeForGateway,
   mediatorForGateway,
   timestampId,
@@ -293,5 +315,6 @@ module.exports = {
   safeRemoveRuntimePath,
   cleanupSmokeRuntime,
   runGatewayCandidatePatch,
-  runRealExternalAgentSmoke
+  runRealExternalAgentSmoke,
+  maybeRecord
 };
