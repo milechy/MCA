@@ -74,7 +74,7 @@ function baseResult(overrides = {}) {
 }
 
 function fail(reason, context = {}) {
-  return baseResult({ ok: false, reason, ...context, next_action: 'fix_regression_and_rerun_smoke' });
+  return baseResult({ ok: false, reason, next_action: 'fix_regression_and_rerun_smoke', ...context });
 }
 
 function tmpRoot() {
@@ -271,8 +271,8 @@ function runFixtureSmoke(options = {}) {
       head_branch: 'ralph/smoke-fixture',
       base_branch: 'main',
       title: 'Fixture issue-to-PR smoke',
-      pr_url: 'https://github.com/milechy/MCA/pull/0',
-      pr_number: 0,
+      pr_url: 'https://github.com/milechy/MCA/pull/99',
+      pr_number: 99,
       execution_connected: false,
       pr_allowed: true,
       commands_executed: ['simulated github.createPullRequest'],

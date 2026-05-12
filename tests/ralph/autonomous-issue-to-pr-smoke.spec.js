@@ -30,8 +30,8 @@ test('fixture smoke reaches DONE without live push or PR side effects', () => {
       story_id: 'STORY-SMOKE-ISSUE-PR',
       status: 'completed',
       current_phase: 'DONE',
-      pr_url: 'https://github.com/milechy/MCA/pull/0',
-      pr_number: 0
+      pr_url: 'https://github.com/milechy/MCA/pull/99',
+      pr_number: 99
     },
     next_action: 'smoke_passed'
   });
