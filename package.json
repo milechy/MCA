@@ -9,6 +9,7 @@
   "scripts": {
     "test:e2e": "playwright test tests/e2e",
     "test:ralph": "playwright test --config=playwright.ralph.config.js",
+    "test:ralph:lifecycle": "playwright test --config=playwright.ralph.config.js tests/ralph/deterministic-candidate-patch-fallback.spec.js tests/ralph/autonomous-loop-wired.spec.js",
     "test:telegram": "playwright test --config=playwright.telegram.config.js",
     "telegram:check-env": "node scripts/telegram/check-env.js",
     "telegram:inspect-logs": "node scripts/telegram/inspect-logs.js",
