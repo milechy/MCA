@@ -17,7 +17,7 @@ const {
 } = require('./story-worktree');
 
 const OPENCODE_COMMAND = 'opencode';
-const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k2';
+const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k2.6';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const PATCH_SOURCE = 'opencode_kimi_via_openrouter';
 const MEDIATOR = 'opencode-direct';
