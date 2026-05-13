@@ -75,11 +75,26 @@ function buildPrompt({ task, requested_paths, rootDir }) {
 
 function buildWorktreePrompt({ task, requested_paths, rootDir }) {
   const file_context = buildRequestedFileContext({ rootDir, requested_paths });
-  const lines = buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context }).split('\n');
-  lines.splice(1, 0, 'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).');
-  lines.splice(2, 0, 'You are running inside an isolated git worktree. You may write or modify the requested files directly; Ralph will diff the worktree and treat the result as the candidate patch.');
-  lines.push('Do NOT touch any path outside the explicit requested_paths. Do NOT run git, commit, push, deploy, or migration commands. Do NOT print secrets or raw environment.');
-  return lines.join('\n');
+  const paths = requested_paths.length ? requested_paths.join(', ') : '(no requested paths supplied)';
+  return [
+    'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).',
+    'You are running inside an isolated git worktree owned by Ralph. Ralph will run `git diff` over the worktree after you finish, and the resulting unified diff IS the candidate patch.',
+    'How to deliver your work:',
+    '  - Modify or create files at the paths listed under "Requested paths" using normal write/edit tools.',
+    '  - Do NOT write a file literally named "candidate.patch" or "candidate.diff" anywhere — that file would itself appear in the diff and be rejected.',
+    '  - Do NOT print the diff to stdout; just leave the worktree in the desired final state.',
+    '  - It is acceptable to create only a subset of the requested paths if the task does not need all of them.',
+    'Hard constraints:',
+    '  - Do NOT touch any path outside the explicit requested_paths.',
+    '  - Do NOT run git, gh, npm publish, deploy, migration, or any push/merge/release command.',
+    '  - Do NOT print secrets or raw environment values.',
+    '  - Do NOT delete .git, .ralph, or anything under those directories.',
+    '  - If the requested paths reference an existing file, treat the bounded file context below as the source of truth; do not invent contents you did not read.',
+    `Requested paths: ${paths}`,
+    `Task: ${String(task || '').slice(0, 4000)}`,
+    file_context ? `Bounded file context:\n${file_context}` : 'Bounded file context: (none supplied)',
+    'When you are done, simply end the session. Ralph will capture the diff.'
+  ].join('\n');
 }
 
 function commandPreview(command, args) {
@@ -135,9 +150,12 @@ function makeBase(overrides = {}) {
 function classifyFailure({ timedOut, exitCode, patchLooksValid, patchValidation, output, missingKey }) {
   if (missingKey) return 'opencode_kimi_api_key_missing';
   if (timedOut) return 'opencode_kimi_runtime_timeout';
+  // Content checks come before transient-pattern matching so that a real path /
+  // validation failure is not masked by an unrelated 429-looking substring that
+  // happens to appear elsewhere in the bounded output preview.
+  if (patchLooksValid && patchValidation && patchValidation.ok === false) return patchValidation.reason || 'candidate_patch_invalid';
   if (output && TRANSIENT_PROVIDER_PATTERNS.test(output)) return 'provider_rate_limited';
   if (!patchLooksValid) return 'candidate_patch_missing';
-  if (patchValidation && patchValidation.ok === false) return patchValidation.reason || 'candidate_patch_invalid';
   if (exitCode !== 0) return 'opencode_kimi_runtime_failed';
   return null;
 }
@@ -345,6 +363,7 @@ module.exports = {
   resolveModel,
   safeEnv,
   buildPrompt,
+  buildWorktreePrompt,
   classifyFailure,
   nextActionForFailure,
   runtimeInstalled,

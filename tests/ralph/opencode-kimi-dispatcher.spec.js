@@ -11,6 +11,7 @@ const {
   resolveModel,
   safeEnv,
   buildPrompt,
+  buildWorktreePrompt,
   classifyFailure,
   dispatchOpenCodeKimi
 } = require('../../src/ralph/opencode-kimi-dispatcher');
@@ -93,6 +94,24 @@ test('buildPrompt includes Ralph identity, requested paths, and Kimi role', () =
   expect(prompt).toContain('Return ONLY a unified git diff');
 });
 
+test('buildWorktreePrompt forbids writing literal candidate.patch and explains the worktree contract', () => {
+  const prompt = buildWorktreePrompt({
+    task: 'create docs/x.md',
+    requested_paths: ['docs/x.md'],
+    rootDir: tmpRoot()
+  });
+  // Worktree contract: edit files in place, do NOT write candidate.patch as a file.
+  expect(prompt).toContain('isolated git worktree');
+  expect(prompt).toContain('Do NOT write a file literally named "candidate.patch"');
+  expect(prompt).toContain('docs/x.md');
+  expect(prompt).toContain('create docs/x.md');
+  // Must not still tell the agent to create a candidate.patch file.
+  expect(prompt).not.toContain('Preferred: create exactly one file named candidate.patch');
+  // Should not double up the legacy diff-only "Return ONLY a unified git diff" instruction either,
+  // because in worktree mode the diff is captured by Ralph, not produced on stdout.
+  expect(prompt).not.toContain('Return ONLY a unified git diff');
+});
+
 test('classifyFailure produces the expected reasons', () => {
   expect(classifyFailure({ missingKey: true })).toBe('opencode_kimi_api_key_missing');
   expect(classifyFailure({ timedOut: true })).toBe('opencode_kimi_runtime_timeout');
@@ -101,6 +120,29 @@ test('classifyFailure produces the expected reasons', () => {
   expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: false, reason: 'candidate_patch_path_forbidden' } })).toBe('candidate_patch_path_forbidden');
   expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: true }, exitCode: 1 })).toBe('opencode_kimi_runtime_failed');
   expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: true }, exitCode: 0 })).toBeNull();
+});
+
+test('classifyFailure prefers patch validation reason over transient pattern noise in output', () => {
+  // Regression: if the bounded stdout/stderr happens to contain a 429-like substring
+  // (e.g. an unrelated upstream service mentioned in a chat log preview) AND the
+  // patch was actually produced but rejected by validation, we must report the
+  // real validation reason, not a misleading provider_rate_limited.
+  const reason = classifyFailure({
+    output: '... some agent log mentioning "rate limit" elsewhere ...',
+    patchLooksValid: true,
+    patchValidation: { ok: false, reason: 'candidate_patch_unrequested_path', path: 'candidate.patch' },
+    exitCode: 0
+  });
+  expect(reason).toBe('candidate_patch_unrequested_path');
+});
+
+test('classifyFailure still surfaces provider_rate_limited when no valid patch was produced', () => {
+  const reason = classifyFailure({
+    output: 'HTTP 429 too many requests',
+    patchLooksValid: false,
+    exitCode: 0
+  });
+  expect(reason).toBe('provider_rate_limited');
 });
 
 test('dispatchOpenCodeKimi refuses non-allowed sandbox roots', () => {
