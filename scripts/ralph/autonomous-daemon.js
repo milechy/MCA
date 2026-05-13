@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { schedulerTick } = require('../../src/ralph/autonomous-scheduler');
+const { tickIssueSupplier, supplierOptionsFromEnv } = require('../../src/ralph/github-issue-supplier');
 
 function parseBool(value) {
   return value === true || value === 'true';
@@ -17,6 +18,8 @@ function parseArgs(argv = process.argv.slice(2), env = process.env) {
   const limit = Number.parseInt(value('--limit', env.RALPH_DAEMON_LIMIT || '1'), 10);
   const ticksPerStory = Number.parseInt(value('--ticks-per-story', env.RALPH_DAEMON_TICKS_PER_STORY || '1'), 10);
   const preSecretScanOk = has('--pre-secret-scan-ok') || parseBool(value('--pre-secret-scan-ok', env.RALPH_PRE_SECRET_SCAN_OK));
+  const supplierFromEnv = supplierOptionsFromEnv(env);
+  const issuePullEvery = Number.parseInt(value('--issue-pull-every-cycles', `${supplierFromEnv.pull_every_cycles}`), 10);
   return {
     once: has('--once'),
     interval_ms: Number.isFinite(intervalMs) && intervalMs >= 1000 ? Math.min(intervalMs, 3600000) : 60000,
@@ -24,7 +27,11 @@ function parseArgs(argv = process.argv.slice(2), env = process.env) {
     limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 25) : 1,
     ticks_per_story: Number.isFinite(ticksPerStory) && ticksPerStory > 0 ? Math.min(ticksPerStory, 12) : 1,
     rootDir: value('--root', process.cwd()),
-    pre_secret_scan_ok: preSecretScanOk
+    pre_secret_scan_ok: preSecretScanOk,
+    issue_pull_every_cycles: Number.isFinite(issuePullEvery) && issuePullEvery >= 0 ? issuePullEvery : 0,
+    issue_repo: value('--issue-repo', supplierFromEnv.repo),
+    issue_ready_labels: supplierFromEnv.ready_labels,
+    issue_max: supplierFromEnv.max_issues
   };
 }
 
@@ -32,15 +39,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function daemonStatus(cycle, result, options) {
+function daemonStatus(cycle, result, options, supplier = null) {
   return {
-    ok: result.ok === true,
+    ok: result.ok === true && (supplier === null || supplier.ok === true),
     stage: 'ralph_autonomous_daemon_cycle',
     cycle,
     interval_ms: options.interval_ms,
     limit: options.limit,
     ticks_per_story: options.ticks_per_story,
     pre_secret_scan_ok: options.pre_secret_scan_ok === true,
+    issue_pull_every_cycles: options.issue_pull_every_cycles || 0,
+    issue_supplier: supplier,
     scheduler: result,
     execution_connected: result.execution_connected === true,
     commands_executed: result.commands_executed || [],
@@ -59,15 +68,31 @@ async function runDaemon(options = parseArgs()) {
   let cycle = 0;
   while (!stopped) {
     cycle += 1;
+    const now = new Date();
+    let supplier = null;
+    if (options.issue_pull_every_cycles && options.issue_pull_every_cycles > 0) {
+      supplier = await tickIssueSupplier({
+        cycle,
+        env: process.env,
+        rootDir: options.rootDir,
+        now,
+        options: {
+          pull_every_cycles: options.issue_pull_every_cycles,
+          repo: options.issue_repo || null,
+          ready_labels: options.issue_ready_labels,
+          max_issues: options.issue_max
+        }
+      });
+    }
     const result = schedulerTick({
       rootDir: options.rootDir,
-      now: new Date(),
+      now,
       limit: options.limit,
       ticks_per_story: options.ticks_per_story,
       pre_secret_scan_ok: options.pre_secret_scan_ok === true,
       env: process.env
     });
-    const status = daemonStatus(cycle, result, options);
+    const status = daemonStatus(cycle, result, options, supplier);
     outputs.push(status);
     console.log(JSON.stringify(status, null, 2));
 

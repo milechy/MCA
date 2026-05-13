@@ -5,7 +5,11 @@ const PATCH_SOURCE = 'deterministic_fallback';
 const ELIGIBLE_FAILURE_REASONS = new Set([
   'provider_rate_limited',
   'candidate_patch_missing',
-  'agent_output_contract_violation'
+  'agent_output_contract_violation',
+  'nemoclaw_runtime_timeout',
+  'nemoclaw_runtime_not_installed',
+  'openshell_runtime_not_installed',
+  'gateway_runtime_timeout'
 ]);
 const DEFAULT_ALLOWED_PREFIXES = [
   'README',

@@ -121,6 +121,26 @@ test('fallback validates explicit requested path cardinality and failure reason'
   })).toMatchObject({ ok: false, reason: 'fallback_failure_reason_not_allowed' });
 });
 
+test('fallback covers runtime infrastructure failures (nemoclaw/openshell timeout and not-installed)', () => {
+  const rootDir = tmpRoot();
+  for (const reason of [
+    'nemoclaw_runtime_timeout',
+    'nemoclaw_runtime_not_installed',
+    'openshell_runtime_not_installed',
+    'gateway_runtime_timeout'
+  ]) {
+    expect(eligibleForDeterministicFallback({
+      rootDir,
+      story: story(),
+      failure_reason: reason
+    })).toMatchObject({
+      ok: true,
+      reason: null,
+      path: 'docs/fallback-smoke.md'
+    });
+  }
+});
+
 test('fallback refuses to synthesize existing files without provider context', () => {
   const rootDir = tmpRoot();
   fs.mkdirSync(path.join(rootDir, 'docs'), { recursive: true });

@@ -80,3 +80,39 @@ test('runDaemon one-shot advances scheduler without repository mutation claims',
   expect(result.outputs[0]).toMatchObject({ stage: 'ralph_autonomous_daemon_cycle', cycle: 1, pre_secret_scan_ok: true });
   expect(readStory(rootDir, 'STORY-DAEMON')).toMatchObject({ status: 'running', current_phase: 'OPENCODE_RUNNING' });
 });
+
+test('parseArgs picks up issue supplier options from env and flags', () => {
+  const options = parseArgs(['--once', '--issue-pull-every-cycles', '15', '--issue-repo', 'owner/repo'], {
+    RALPH_GITHUB_READY_LABELS: 'ralph-ready,autonomous',
+    RALPH_ISSUE_PULL_MAX: '10'
+  });
+  expect(options).toMatchObject({
+    issue_pull_every_cycles: 15,
+    issue_repo: 'owner/repo',
+    issue_ready_labels: ['ralph-ready', 'autonomous'],
+    issue_max: 10
+  });
+});
+
+test('parseArgs defaults issue_pull_every_cycles to 0 (off) when nothing configured', () => {
+  expect(parseArgs(['--once'], {}).issue_pull_every_cycles).toBe(0);
+});
+
+test('daemonStatus surfaces a supplier summary when one is provided', () => {
+  const status = daemonStatus(3, {
+    ok: true,
+    execution_connected: false,
+    commands_executed: [],
+    repository_files_modified: [],
+    next_action: 'wait_for_runnable_story'
+  }, { interval_ms: 1000, limit: 1, ticks_per_story: 1, pre_secret_scan_ok: true, issue_pull_every_cycles: 5 }, {
+    ok: true,
+    pulled: true,
+    repo: 'owner/repo',
+    summary: { imported_count: 2, skipped_count: 0 }
+  });
+  expect(status).toMatchObject({
+    issue_pull_every_cycles: 5,
+    issue_supplier: { ok: true, pulled: true, repo: 'owner/repo' }
+  });
+});

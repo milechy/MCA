@@ -18,7 +18,11 @@ const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
 const FALLBACK_FAILURE_REASONS = new Set([
   'provider_rate_limited',
   'candidate_patch_missing',
-  'agent_output_contract_violation'
+  'agent_output_contract_violation',
+  'nemoclaw_runtime_timeout',
+  'nemoclaw_runtime_not_installed',
+  'openshell_runtime_not_installed',
+  'gateway_runtime_timeout'
 ]);
 
 function oneLine(value, maxLength = 600) {
@@ -212,6 +216,64 @@ function maybeFallbackAfterOpenCodeFailure(result, options) {
     files_modified: fallback.files_modified || [],
     repository_files_modified: [],
     next_action: 'preview_candidate_patch_and_decide_apply'
+  });
+}
+
+function escalateStuckOpenCodeRunning(result, { rootDir, now } = {}) {
+  if (!result || result.ok === true) return result;
+  if (result.from_phase !== LOOP_PHASES.OPENCODE_RUNNING || result.to_phase !== LOOP_PHASES.OPENCODE_RUNNING) return result;
+
+  const story = readStory(rootDir, result.story_id);
+  if (!story) return result;
+
+  const previousAttempts = Number.isInteger(story.attempts) ? story.attempts : 0;
+  const maxAttempts = Number.isInteger(story.max_attempts) && story.max_attempts > 0 ? story.max_attempts : 3;
+  const nextAttempts = previousAttempts + 1;
+
+  if (nextAttempts < maxAttempts) {
+    const updated = updateStory(story.story_id, {
+      attempts: nextAttempts
+    }, { rootDir, now, event: 'opencode_attempts_incremented' });
+    return {
+      ...result,
+      story: updated.summary || result.story,
+      attempts: nextAttempts,
+      max_attempts: maxAttempts
+    };
+  }
+
+  const failureSummary = {
+    ok: false,
+    stage: 'autonomous_loop_wired_max_attempts',
+    reason: result.reason || 'opencode_dispatch_failed',
+    attempts: nextAttempts,
+    max_attempts: maxAttempts,
+    last_blocked_reason: story.blocked_reason || result.reason || null
+  };
+  const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, {
+    attempts: nextAttempts,
+    blocked_reason: result.reason || 'opencode_dispatch_failed_max_attempts',
+    last_gate_failure_summary: failureSummary,
+    retry_after_at: null
+  }, { rootDir, now, event: 'opencode_max_attempts_exceeded_escalated' });
+
+  return baseResult({
+    ok: false,
+    reason: result.reason || 'opencode_dispatch_failed_max_attempts',
+    story_id: story.story_id,
+    from_phase: LOOP_PHASES.OPENCODE_RUNNING,
+    to_phase: LOOP_PHASES.ESCALATED,
+    story: updated.summary,
+    approval_id: result.approval_id || null,
+    job_id: result.job_id || null,
+    opencode: result.opencode || null,
+    fallback: result.fallback || null,
+    failure_summary: failureSummary,
+    execution_connected: result.execution_connected === true,
+    commands_executed: result.commands_executed || [],
+    files_modified: result.files_modified || [],
+    repository_files_modified: [],
+    next_action: 'human_escalation_required'
   });
 }
 
@@ -478,7 +540,9 @@ function tickAutonomousLoopWired(options = {}) {
 
   const result = tickAutonomousLoop(options);
   const afterFallback = maybeFallbackAfterOpenCodeFailure(result, { rootDir, now, allow_runtime_code_fallback });
-  if (afterFallback !== result) return afterFallback;
+  if (afterFallback.ok === true && afterFallback.to_phase === LOOP_PHASES.PATCH_PREVIEW) return afterFallback;
+  const afterEscalation = escalateStuckOpenCodeRunning(afterFallback, { rootDir, now });
+  if (afterEscalation !== afterFallback) return afterEscalation;
   return ensurePushApprovalAfterCommit(afterFallback, options);
 }
 
@@ -486,6 +550,7 @@ module.exports = {
   WIRED_LOOP_VERSION,
   tickAutonomousLoopWired,
   maybeFallbackAfterOpenCodeFailure,
+  escalateStuckOpenCodeRunning,
   ensurePushApprovalAfterCommit,
   resumeApprovalToExecutionPhase,
   advancePushPhase,

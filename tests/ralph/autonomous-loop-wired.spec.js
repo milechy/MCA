@@ -8,6 +8,7 @@ const { LOOP_PHASES } = require('../../src/ralph/autonomous-loop');
 const {
   tickAutonomousLoopWired,
   maybeFallbackAfterOpenCodeFailure,
+  escalateStuckOpenCodeRunning,
   ensurePushApprovalAfterCommit,
   resumeApprovalToExecutionPhase,
   advancePushPhase,
@@ -106,6 +107,60 @@ test('maybeFallbackAfterOpenCodeFailure leaves ineligible failures on original r
     fallback: { ok: false, reason: 'fallback_requested_path_not_policy_allowed' }
   });
   expect(readStory(rootDir, 'STORY-WIRED')).toMatchObject({ current_phase: LOOP_PHASES.OPENCODE_RUNNING });
+});
+
+test('escalateStuckOpenCodeRunning increments attempts then escalates at max_attempts', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: LOOP_PHASES.OPENCODE_RUNNING,
+    requested_paths: ['src/runtime-change.js'],
+    max_attempts: 2
+  });
+
+  const stuck = {
+    ok: false,
+    reason: 'nemoclaw_runtime_timeout',
+    story_id: 'STORY-WIRED',
+    from_phase: LOOP_PHASES.OPENCODE_RUNNING,
+    to_phase: LOOP_PHASES.OPENCODE_RUNNING,
+    next_action: 'fix_nemoclaw_gateway_failure'
+  };
+
+  const firstAttempt = escalateStuckOpenCodeRunning(stuck, { rootDir, now: new Date('2026-05-12T12:02:00.000Z') });
+  expect(firstAttempt.attempts).toBe(1);
+  expect(firstAttempt.to_phase).toBe(LOOP_PHASES.OPENCODE_RUNNING);
+  expect(readStory(rootDir, 'STORY-WIRED')).toMatchObject({ attempts: 1, current_phase: LOOP_PHASES.OPENCODE_RUNNING });
+
+  const secondAttempt = escalateStuckOpenCodeRunning(stuck, { rootDir, now: new Date('2026-05-12T12:03:00.000Z') });
+  expect(secondAttempt).toMatchObject({
+    ok: false,
+    reason: 'nemoclaw_runtime_timeout',
+    from_phase: LOOP_PHASES.OPENCODE_RUNNING,
+    to_phase: LOOP_PHASES.ESCALATED,
+    next_action: 'human_escalation_required'
+  });
+  expect(readStory(rootDir, 'STORY-WIRED')).toMatchObject({
+    attempts: 2,
+    current_phase: LOOP_PHASES.ESCALATED,
+    status: STORY_STATUSES.FAILED
+  });
+});
+
+test('escalateStuckOpenCodeRunning ignores non-stuck or successful results', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: LOOP_PHASES.OPENCODE_RUNNING
+  });
+
+  const success = { ok: true, story_id: 'STORY-WIRED', from_phase: LOOP_PHASES.OPENCODE_RUNNING, to_phase: LOOP_PHASES.PATCH_PREVIEW };
+  expect(escalateStuckOpenCodeRunning(success, { rootDir, now: new Date() })).toBe(success);
+
+  const progressed = { ok: false, story_id: 'STORY-WIRED', from_phase: LOOP_PHASES.PLAN, to_phase: LOOP_PHASES.OPENCODE_RUNNING, reason: 'plan_decision' };
+  expect(escalateStuckOpenCodeRunning(progressed, { rootDir, now: new Date() })).toBe(progressed);
+
+  expect(readStory(rootDir, 'STORY-WIRED').attempts).toBe(0);
 });
 
 test('ensurePushApprovalAfterCommit replaces commit completion with push approval metadata', () => {
@@ -328,6 +383,64 @@ test('advancePrPhase marks story DONE after approved PR creation succeeds', () =
     current_phase: LOOP_PHASES.DONE,
     pr_url: 'https://github.com/milechy/MCA/pull/99',
     pr_number: 99
+  });
+});
+
+test('tickAutonomousLoopWired escalates ineligible-fallback OPENCODE_RUNNING stuck story after max_attempts', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: LOOP_PHASES.OPENCODE_RUNNING,
+    current_approval_id: 'APR-STUCK',
+    current_job_id: 'JOB-STUCK',
+    current_sandbox_root: '.ralph/tmp/opencode-sandbox/APR-STUCK',
+    requested_paths: ['src/runtime-change-soak.js'],
+    max_attempts: 2
+  });
+
+  const stuckDispatcher = () => ({
+    ok: false,
+    stage: 'nemoclaw_opencode_gateway',
+    reason: 'nemoclaw_runtime_timeout',
+    job_id: 'JOB-STUCK',
+    approval_id: 'APR-STUCK',
+    sandbox_root: '.ralph/tmp/opencode-sandbox/APR-STUCK',
+    candidate_patch_path: null,
+    execution_connected: true,
+    commands_executed: [],
+    files_modified: [],
+    repository_files_modified: [],
+    opencode_runtime_mode: 'nemoclaw-mediated',
+    mediator: 'nemoclaw'
+  });
+
+  const firstTick = tickAutonomousLoopWired({
+    rootDir,
+    story_id: 'STORY-WIRED',
+    now: new Date('2026-05-12T12:08:00.000Z'),
+    opencode_dispatcher: stuckDispatcher,
+    pre_secret_scan_ok: true
+  });
+  expect(firstTick.to_phase).toBe(LOOP_PHASES.OPENCODE_RUNNING);
+  expect(firstTick.attempts).toBe(1);
+  expect(readStory(rootDir, 'STORY-WIRED')).toMatchObject({ attempts: 1, current_phase: LOOP_PHASES.OPENCODE_RUNNING });
+
+  const secondTick = tickAutonomousLoopWired({
+    rootDir,
+    story_id: 'STORY-WIRED',
+    now: new Date('2026-05-12T12:09:00.000Z'),
+    opencode_dispatcher: stuckDispatcher,
+    pre_secret_scan_ok: true
+  });
+  expect(secondTick).toMatchObject({
+    ok: false,
+    to_phase: LOOP_PHASES.ESCALATED,
+    next_action: 'human_escalation_required'
+  });
+  expect(readStory(rootDir, 'STORY-WIRED')).toMatchObject({
+    attempts: 2,
+    current_phase: LOOP_PHASES.ESCALATED,
+    status: STORY_STATUSES.FAILED
   });
 });
 
