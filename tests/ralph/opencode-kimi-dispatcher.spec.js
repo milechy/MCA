@@ -112,7 +112,8 @@ test('dispatchOpenCodeKimi refuses non-allowed sandbox roots', () => {
     task: 'task',
     requested_paths: ['docs/kimi-smoke.md'],
     spawn: fakeSpawn({}),
-    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' },
+    use_worktree: false
   });
   expect(result).toMatchObject({
     ok: false,
@@ -131,7 +132,8 @@ test('dispatchOpenCodeKimi reports api key missing without invoking opencode', (
     task: 'task',
     requested_paths: ['docs/kimi-smoke.md'],
     spawn,
-    env: { PATH: '/bin', HOME: '/u' }
+    env: { PATH: '/bin', HOME: '/u' },
+    use_worktree: false
   });
   expect(result).toMatchObject({
     ok: false,
@@ -154,7 +156,8 @@ test('dispatchOpenCodeKimi writes candidate.patch when opencode emits a valid un
     task: 'create docs/kimi-smoke.md',
     requested_paths: ['docs/kimi-smoke.md'],
     spawn,
-    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' },
+    use_worktree: false
   });
   expect(result).toMatchObject({
     ok: true,
@@ -187,7 +190,8 @@ test('dispatchOpenCodeKimi classifies provider rate limit even when stdout is em
     task: 'create docs/kimi-smoke.md',
     requested_paths: ['docs/kimi-smoke.md'],
     spawn,
-    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' },
+    use_worktree: false
   });
   expect(result).toMatchObject({
     ok: false,
@@ -216,7 +220,8 @@ index 0000000..0000000
     task: 'create docs/kimi-smoke.md',
     requested_paths: ['docs/kimi-smoke.md'],
     spawn,
-    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' },
+    use_worktree: false
   });
   expect(result).toMatchObject({
     ok: false,
@@ -239,13 +244,133 @@ test('dispatchOpenCodeKimi reports runtime not installed when opencode version p
     task: 'task',
     requested_paths: ['docs/kimi-smoke.md'],
     spawn,
-    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' }
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' },
+    use_worktree: false
   });
   expect(result).toMatchObject({
     ok: false,
     reason: 'opencode_runtime_not_installed',
     execution_connected: false
   });
+});
+
+test('dispatchOpenCodeKimi (worktree mode) captures real git diff when fake opencode modifies a file in the worktree', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-wt-e2e-'));
+  const realSpawnSync = require('node:child_process').spawnSync;
+  function git(args) {
+    return realSpawnSync('git', args, {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GIT_AUTHOR_NAME: 't',
+        GIT_AUTHOR_EMAIL: 't@example.com',
+        GIT_COMMITTER_NAME: 't',
+        GIT_COMMITTER_EMAIL: 't@example.com'
+      }
+    });
+  }
+  expect(git(['init', '-q', '-b', 'main']).status).toBe(0);
+  fs.writeFileSync(path.join(repo, 'README.md'), '# repo\n');
+  expect(git(['add', '.']).status).toBe(0);
+  expect(git(['commit', '-q', '-m', 'initial']).status).toBe(0);
+
+  function spawn(command, args, opts) {
+    if (command === 'git') return realSpawnSync(command, args, opts);
+    if (command === 'opencode' && args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n', stderr: '' };
+    if (command === 'opencode' && args[0] === 'run') {
+      const dirIndex = args.indexOf('--dir');
+      const cwd = dirIndex !== -1 ? args[dirIndex + 1] : opts && opts.cwd;
+      fs.mkdirSync(path.join(cwd, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(cwd, 'docs', 'kimi-e2e.md'), '# Kimi e2e\nbody\n');
+      return { status: 0, stdout: '{"message":"ok"}', stderr: '' };
+    }
+    return realSpawnSync(command, args, opts);
+  }
+
+  const result = dispatchOpenCodeKimi({
+    rootDir: repo,
+    story: { story_id: 'STORY-KIMI-E2E', requested_paths: ['docs/kimi-e2e.md'] },
+    approval_id: 'APR-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI-E2E',
+    task: 'create docs/kimi-e2e.md',
+    requested_paths: ['docs/kimi-e2e.md'],
+    spawn,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, OPENROUTER_API_KEY: 'or-key' }
+  });
+
+  expect(result).toMatchObject({
+    ok: true,
+    reason: null,
+    worktree_used: true,
+    patch_extraction_mode: 'worktree',
+    patch_source: PATCH_SOURCE,
+    candidate_patch_path: '.ralph/sandboxes/STORY-KIMI-E2E/candidate.patch'
+  });
+
+  const patch = fs.readFileSync(path.join(repo, result.candidate_patch_path), 'utf8');
+  expect(patch).toContain('diff --git a/docs/kimi-e2e.md b/docs/kimi-e2e.md');
+  expect(patch).toContain('+# Kimi e2e');
+
+  expect(fs.existsSync(path.join(repo, 'docs', 'kimi-e2e.md'))).toBe(false);
+  expect(fs.existsSync(path.join(repo, '.ralph/sandboxes/STORY-KIMI-E2E/worktree'))).toBe(false);
+});
+
+test('dispatchOpenCodeKimi (worktree mode) rejects patches that escape requested_paths even when opencode wrote them in the worktree', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-wt-forbidden-'));
+  const realSpawnSync = require('node:child_process').spawnSync;
+  function git(args) {
+    return realSpawnSync('git', args, {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GIT_AUTHOR_NAME: 't',
+        GIT_AUTHOR_EMAIL: 't@example.com',
+        GIT_COMMITTER_NAME: 't',
+        GIT_COMMITTER_EMAIL: 't@example.com'
+      }
+    });
+  }
+  expect(git(['init', '-q', '-b', 'main']).status).toBe(0);
+  fs.writeFileSync(path.join(repo, 'README.md'), '# repo\n');
+  expect(git(['add', '.']).status).toBe(0);
+  expect(git(['commit', '-q', '-m', 'initial']).status).toBe(0);
+
+  function spawn(command, args, opts) {
+    if (command === 'git') return realSpawnSync(command, args, opts);
+    if (command === 'opencode' && args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n' };
+    if (command === 'opencode' && args[0] === 'run') {
+      const dirIndex = args.indexOf('--dir');
+      const cwd = dirIndex !== -1 ? args[dirIndex + 1] : opts && opts.cwd;
+      fs.mkdirSync(path.join(cwd, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(cwd, 'src', 'forbidden.js'), 'console.log("evil")\n');
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    return realSpawnSync(command, args, opts);
+  }
+
+  const result = dispatchOpenCodeKimi({
+    rootDir: repo,
+    story: { story_id: 'STORY-KIMI-FORBID', requested_paths: ['docs/expected.md'] },
+    approval_id: 'APR-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI-FORBID',
+    task: 'expected to touch docs/expected.md only',
+    requested_paths: ['docs/expected.md'],
+    spawn,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, OPENROUTER_API_KEY: 'or-key' }
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'candidate_patch_unrequested_path',
+    worktree_used: true,
+    patch_extraction_mode: 'worktree'
+  });
+  expect(fs.existsSync(path.join(repo, '.ralph/sandboxes/STORY-KIMI-FORBID/candidate.patch'))).toBe(false);
+  expect(fs.existsSync(path.join(repo, 'src/forbidden.js'))).toBe(false);
 });
 
 test('dispatchOpenCodeKimi never injects unrelated secrets into spawned env', () => {

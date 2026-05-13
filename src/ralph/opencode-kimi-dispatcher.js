@@ -5,10 +5,16 @@ const { spawnSync } = require('node:child_process');
 const {
   buildRequestedFileContext,
   buildOpenClawDiffOnlyPrompt,
+  buildOpenClawCandidatePatchPrompt,
   extractUnifiedDiffFromText,
   validPatchText,
   validateCandidatePatchAgainstRepository
 } = require('./nemoclaw-opencode-gateway');
+const {
+  createStoryWorktree,
+  destroyStoryWorktree,
+  diffStoryWorktree
+} = require('./story-worktree');
 
 const OPENCODE_COMMAND = 'opencode';
 const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k2';
@@ -64,6 +70,15 @@ function buildPrompt({ task, requested_paths, rootDir }) {
   const file_context = buildRequestedFileContext({ rootDir, requested_paths });
   const lines = buildOpenClawDiffOnlyPrompt({ task, requested_paths, file_context }).split('\n');
   lines.splice(1, 0, 'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).');
+  return lines.join('\n');
+}
+
+function buildWorktreePrompt({ task, requested_paths, rootDir }) {
+  const file_context = buildRequestedFileContext({ rootDir, requested_paths });
+  const lines = buildOpenClawCandidatePatchPrompt({ task, requested_paths, file_context }).split('\n');
+  lines.splice(1, 0, 'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).');
+  lines.splice(2, 0, 'You are running inside an isolated git worktree. You may write or modify the requested files directly; Ralph will diff the worktree and treat the result as the candidate patch.');
+  lines.push('Do NOT touch any path outside the explicit requested_paths. Do NOT run git, commit, push, deploy, or migration commands. Do NOT print secrets or raw environment.');
   return lines.join('\n');
 }
 
@@ -149,6 +164,22 @@ function runtimeInstalled(command = OPENCODE_COMMAND, { spawn = spawnSync, env =
   return result.status === 0;
 }
 
+function worktreeDisabled(env = process.env) {
+  return env.RALPH_OPENCODE_KIMI_DISABLE_WORKTREE === 'true' || env.RALPH_OPENCODE_KIMI_DISABLE_WORKTREE === '1';
+}
+
+function patchFromWorktree({ rootDir, sandbox_root, base_sha, spawn, env }) {
+  const diff = diffStoryWorktree({ rootDir, sandbox_root, base_sha, spawn, env });
+  if (!diff.ok) return { patchText: '', extractionMode: 'worktree', diff };
+  const stripped = diff.patch_text.trim().length === 0 ? '' : diff.patch_text;
+  return { patchText: stripped, extractionMode: 'worktree', diff };
+}
+
+function patchFromStdout({ stdout }) {
+  const text = extractUnifiedDiffFromText(stdout);
+  return { patchText: text, extractionMode: 'stdout' };
+}
+
 function dispatchOpenCodeKimi({
   rootDir = process.cwd(),
   story = {},
@@ -161,7 +192,8 @@ function dispatchOpenCodeKimi({
   env = process.env,
   timeout_ms = DEFAULT_TIMEOUT_MS,
   spawn = spawnSync,
-  now = () => new Date()
+  now = () => new Date(),
+  use_worktree
 } = {}) {
   const started = now();
   const policy = ensureSandboxRoot(rootDir, sandbox_root);
@@ -182,27 +214,80 @@ function dispatchOpenCodeKimi({
     return makeBase({ ok: false, reason: 'opencode_kimi_api_key_missing', job_id, approval_id, sandbox_root: policy.sandbox_root, candidate_patch_path: candidate_patch_path_relative, runtime_installed: true, timeout_ms, next_action: nextActionForFailure('opencode_kimi_api_key_missing') });
   }
 
+  const useWorktree = use_worktree === true || (use_worktree === undefined && !worktreeDisabled(env));
+  let worktreePath = null;
+  let baseSha = null;
+  const commands = [];
+
+  if (useWorktree) {
+    const worktreeResult = createStoryWorktree({ rootDir, sandbox_root: policy.sandbox_root, spawn, env });
+    if (!worktreeResult.ok) {
+      return makeBase({
+        ok: false,
+        reason: 'opencode_kimi_worktree_create_failed',
+        job_id,
+        approval_id,
+        sandbox_root: policy.sandbox_root,
+        candidate_patch_path: candidate_patch_path_relative,
+        runtime_installed: true,
+        timeout_ms,
+        stderr_preview: oneLine(worktreeResult.stderr_preview || worktreeResult.reason || '', 600),
+        commands_executed: worktreeResult.command_preview ? [worktreeResult.command_preview] : [],
+        next_action: 'inspect_worktree_create_failure'
+      });
+    }
+    worktreePath = worktreeResult.worktree_absolute;
+    baseSha = worktreeResult.base_sha;
+    if (worktreeResult.command_preview) commands.push(worktreeResult.command_preview);
+  }
+
   const model = resolveModel(env);
-  const prompt = buildPrompt({ task, requested_paths, rootDir });
-  const args = ['run', '--model', model, '--format', 'json', '--dir', rootDir, prompt];
-  const commands = [commandPreview(command, args)];
+  const promptCwd = worktreePath || rootDir;
+  const prompt = useWorktree
+    ? buildWorktreePrompt({ task, requested_paths, rootDir })
+    : buildPrompt({ task, requested_paths, rootDir });
+  const args = ['run', '--model', model, '--format', 'json', '--dir', promptCwd, prompt];
+  commands.push(commandPreview(command, args));
 
-  const result = spawn(command, args, {
-    cwd: rootDir,
-    env: scrubbedEnv,
-    encoding: 'utf8',
-    timeout: timeout_ms,
-    maxBuffer: 1024 * 1024
-  });
+  let opencodeResult;
+  try {
+    opencodeResult = spawn(command, args, {
+      cwd: promptCwd,
+      env: scrubbedEnv,
+      encoding: 'utf8',
+      timeout: timeout_ms,
+      maxBuffer: 1024 * 1024
+    });
+  } finally {
+    // intentional: ensure cleanup attempted on next branch
+  }
+
   const finished = now();
-
-  const timedOut = Boolean(result.error && result.error.code === 'ETIMEDOUT');
-  const exitCode = typeof result.status === 'number' ? result.status : null;
-  const stdout = String(result.stdout || '');
-  const stderr = String(result.stderr || (result.error && result.error.message) || '');
+  const timedOut = Boolean(opencodeResult && opencodeResult.error && opencodeResult.error.code === 'ETIMEDOUT');
+  const exitCode = opencodeResult && typeof opencodeResult.status === 'number' ? opencodeResult.status : null;
+  const stdout = String(opencodeResult && opencodeResult.stdout || '');
+  const stderr = String((opencodeResult && opencodeResult.stderr) || (opencodeResult && opencodeResult.error && opencodeResult.error.message) || '');
   const output = `${stdout}\n${stderr}`;
 
-  const patchText = extractUnifiedDiffFromText(stdout);
+  let patchText = '';
+  let extractionMode = 'stdout';
+  let worktreeDiffDetail = null;
+  if (useWorktree) {
+    const extracted = patchFromWorktree({ rootDir, sandbox_root: policy.sandbox_root, base_sha: baseSha, spawn, env });
+    patchText = extracted.patchText;
+    extractionMode = extracted.extractionMode;
+    worktreeDiffDetail = extracted.diff || null;
+    if (worktreeDiffDetail && worktreeDiffDetail.ok === false) {
+      const fallback = patchFromStdout({ stdout });
+      patchText = fallback.patchText;
+      extractionMode = fallback.extractionMode;
+    }
+  } else {
+    const extracted = patchFromStdout({ stdout });
+    patchText = extracted.patchText;
+    extractionMode = extracted.extractionMode;
+  }
+
   const patchLooksValid = validPatchText(patchText);
   const patchValidation = patchLooksValid
     ? validateCandidatePatchAgainstRepository({ rootDir, patchText, requested_paths })
@@ -210,6 +295,11 @@ function dispatchOpenCodeKimi({
 
   if (patchLooksValid && patchValidation.ok) {
     fs.writeFileSync(candidate_patch_abs, patchText, 'utf8');
+  }
+
+  if (useWorktree) {
+    const removal = destroyStoryWorktree({ rootDir, sandbox_root: policy.sandbox_root, spawn, env });
+    if (!removal.ok) commands.push(`worktree_remove_failed: ${oneLine(removal.stderr_preview || '', 120)}`);
   }
 
   const ok = !timedOut && exitCode === 0 && patchLooksValid && patchValidation.ok;
@@ -223,7 +313,7 @@ function dispatchOpenCodeKimi({
     approval_id,
     sandbox_root: policy.sandbox_root,
     candidate_patch_path: candidate_patch_path_relative,
-    command_preview: commands[0],
+    command_preview: commands[commands.length - 1] || null,
     exit_code: exitCode,
     stdout_preview: oneLine(stdout, 600),
     stderr_preview: oneLine(stderr, 600),
@@ -236,9 +326,11 @@ function dispatchOpenCodeKimi({
     opencode_execution_started: true,
     patch_source: patchSource,
     patch_validation: patchValidation,
-    commands_executed: commands,
+    commands_executed: commands.slice(-10),
     files_modified: ok ? [candidate_patch_path_relative] : [],
     repository_files_modified: [],
+    worktree_used: useWorktree,
+    patch_extraction_mode: extractionMode,
     next_action: ok ? 'preview_candidate_patch_before_apply' : nextActionForFailure(reason)
   });
 }
