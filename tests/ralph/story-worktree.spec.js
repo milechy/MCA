@@ -86,6 +86,29 @@ test('diffStoryWorktree captures new files via intent-to-add and modifications v
   expect(diff.patch_text).toMatch(/\+updated/);
 });
 
+test('diffStoryWorktree excludes candidate.patch / candidate.diff / .opencode written by agents', () => {
+  const repo = initRepo();
+  const created = createStoryWorktree({ rootDir: repo, sandbox_root: '.ralph/sandboxes/STORY-EXCLUDE' });
+  expect(created.ok).toBe(true);
+
+  const worktreeAbs = path.join(repo, created.worktree_path);
+  // Real edit the agent should produce
+  fs.mkdirSync(path.join(worktreeAbs, 'src', 'ralph'), { recursive: true });
+  fs.writeFileSync(path.join(worktreeAbs, 'src', 'ralph', 'clamp.js'), 'module.exports = {};\n');
+  // Spurious files the agent might also leave behind
+  fs.writeFileSync(path.join(worktreeAbs, 'candidate.patch'), 'diff --git a/x b/x\n');
+  fs.writeFileSync(path.join(worktreeAbs, 'candidate.diff'), 'spurious\n');
+  fs.mkdirSync(path.join(worktreeAbs, '.opencode'), { recursive: true });
+  fs.writeFileSync(path.join(worktreeAbs, '.opencode', 'session.json'), '{}\n');
+
+  const diff = diffStoryWorktree({ rootDir: repo, sandbox_root: '.ralph/sandboxes/STORY-EXCLUDE' });
+  expect(diff.ok).toBe(true);
+  expect(diff.patch_text).toContain('diff --git a/src/ralph/clamp.js b/src/ralph/clamp.js');
+  expect(diff.patch_text).not.toContain('candidate.patch');
+  expect(diff.patch_text).not.toContain('candidate.diff');
+  expect(diff.patch_text).not.toContain('.opencode/session.json');
+});
+
 test('destroyStoryWorktree cleans both git worktree metadata and the directory', () => {
   const repo = initRepo();
   const created = createStoryWorktree({ rootDir: repo, sandbox_root: '.ralph/sandboxes/STORY-DESTROY' });

@@ -123,7 +123,23 @@ function diffStoryWorktree({ rootDir, sandbox_root, base_sha, spawn = spawnSync,
   }
 
   const baseArg = base_sha && /^[A-Fa-f0-9]{4,64}$/.test(String(base_sha).trim()) ? String(base_sha).trim() : 'HEAD';
-  const diff = git(['diff', '--no-color', '--no-ext-diff', baseArg, '--'], { rootDir: paths.absolute, spawn, env, timeout });
+  // Exclude Ralph's own delivery artifacts from the captured diff. Agents
+  // sometimes write a literal `candidate.patch` or `candidate.diff` file when
+  // they misinterpret legacy NemoClaw-era output contract instructions; without
+  // these excludes the diff would include that file and trip the requested-paths
+  // validator. Also exclude OpenCode's session metadata directory so an agent
+  // run that happens to bump it does not leak into the patch.
+  const diff = git([
+    'diff',
+    '--no-color',
+    '--no-ext-diff',
+    baseArg,
+    '--',
+    ':(exclude)candidate.patch',
+    ':(exclude)candidate.diff',
+    ':(exclude).opencode',
+    ':(exclude).opencode/**'
+  ], { rootDir: paths.absolute, spawn, env, timeout });
   if (diff.status !== 0 && diff.status !== 1) {
     return {
       ok: false,

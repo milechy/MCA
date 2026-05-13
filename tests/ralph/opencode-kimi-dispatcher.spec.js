@@ -11,6 +11,7 @@ const {
   resolveModel,
   safeEnv,
   buildPrompt,
+  buildWorktreePrompt,
   classifyFailure,
   dispatchOpenCodeKimi
 } = require('../../src/ralph/opencode-kimi-dispatcher');
@@ -93,6 +94,24 @@ test('buildPrompt includes Ralph identity, requested paths, and Kimi role', () =
   expect(prompt).toContain('Return ONLY a unified git diff');
 });
 
+test('buildWorktreePrompt forbids writing literal candidate.patch and explains the worktree contract', () => {
+  const prompt = buildWorktreePrompt({
+    task: 'create docs/x.md',
+    requested_paths: ['docs/x.md'],
+    rootDir: tmpRoot()
+  });
+  // Worktree contract: edit files in place, do NOT write candidate.patch as a file.
+  expect(prompt).toContain('isolated git worktree');
+  expect(prompt).toContain('Do NOT write a file literally named "candidate.patch"');
+  expect(prompt).toContain('docs/x.md');
+  expect(prompt).toContain('create docs/x.md');
+  // Must not still tell the agent to create a candidate.patch file.
+  expect(prompt).not.toContain('Preferred: create exactly one file named candidate.patch');
+  // Should not double up the legacy diff-only "Return ONLY a unified git diff" instruction either,
+  // because in worktree mode the diff is captured by Ralph, not produced on stdout.
+  expect(prompt).not.toContain('Return ONLY a unified git diff');
+});
+
 test('classifyFailure produces the expected reasons', () => {
   expect(classifyFailure({ missingKey: true })).toBe('opencode_kimi_api_key_missing');
   expect(classifyFailure({ timedOut: true })).toBe('opencode_kimi_runtime_timeout');
@@ -101,6 +120,121 @@ test('classifyFailure produces the expected reasons', () => {
   expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: false, reason: 'candidate_patch_path_forbidden' } })).toBe('candidate_patch_path_forbidden');
   expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: true }, exitCode: 1 })).toBe('opencode_kimi_runtime_failed');
   expect(classifyFailure({ patchLooksValid: true, patchValidation: { ok: true }, exitCode: 0 })).toBeNull();
+});
+
+test('classifyFailure prefers patch validation reason over transient pattern noise in output', () => {
+  // Regression: if the bounded stdout/stderr happens to contain a 429-like substring
+  // (e.g. an unrelated upstream service mentioned in a chat log preview) AND the
+  // patch was actually produced but rejected by validation, we must report the
+  // real validation reason, not a misleading provider_rate_limited.
+  const reason = classifyFailure({
+    output: '... some agent log mentioning "rate limit" elsewhere ...',
+    patchLooksValid: true,
+    patchValidation: { ok: false, reason: 'candidate_patch_unrequested_path', path: 'candidate.patch' },
+    exitCode: 0
+  });
+  expect(reason).toBe('candidate_patch_unrequested_path');
+});
+
+test('classifyFailure still surfaces provider_rate_limited when no valid patch was produced', () => {
+  const reason = classifyFailure({
+    output: 'HTTP 429 too many requests',
+    patchLooksValid: false,
+    exitCode: 0
+  });
+  expect(reason).toBe('provider_rate_limited');
+});
+
+test('dispatchOpenCodeKimi (worktree mode) accepts soft-timeout when a valid candidate patch was produced anyway', () => {
+  const rootDir = tmpRoot();
+  // Initialize a real git repo so the worktree create / diff path works.
+  const { spawnSync } = require('node:child_process');
+  spawnSync('git', ['init', '-q'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: rootDir });
+  spawnSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: rootDir });
+
+  // Fake spawn: opencode finishes writing the requested file inside the worktree
+  // (we mutate filesystem from inside the fake), then returns an ETIMEDOUT error
+  // as if the session never cleanly exited.
+  function spawn(command, args, opts) {
+    if (Array.isArray(args) && args[0] === '--version') {
+      return { status: 0, stdout: 'opencode 1.14.39\n', stderr: '' };
+    }
+    if (Array.isArray(args) && args[0] === 'run') {
+      // Find the --dir target so we can write directly into the worktree.
+      const dirIdx = args.indexOf('--dir');
+      const workDir = dirIdx >= 0 ? args[dirIdx + 1] : opts.cwd;
+      const targetDir = path.join(workDir, 'docs');
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(path.join(targetDir, 'soft-timeout-note.md'), '# soft timeout\n');
+      return {
+        error: { code: 'ETIMEDOUT', message: 'session did not exit' },
+        status: null,
+        stdout: 'partial agent log...',
+        stderr: ''
+      };
+    }
+    // pass through to real spawn for git operations (worktree create/diff/remove)
+    return spawnSync(command, args, opts);
+  }
+
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: { story_id: 'STORY-SOFT', title: 'soft', requirement: 'soft', requested_paths: ['docs/soft-timeout-note.md'] },
+    approval_id: 'APR-SOFT',
+    job_id: 'JOB-SOFT',
+    sandbox_root: '.ralph/sandboxes/STORY-SOFT',
+    task: 'create docs/soft-timeout-note.md',
+    requested_paths: ['docs/soft-timeout-note.md'],
+    timeout_ms: 5000,
+    use_worktree: true,
+    spawn,
+    env: { PATH: process.env.PATH, HOME: '/tmp', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    reason: null,
+    candidate_patch_path: '.ralph/sandboxes/STORY-SOFT/candidate.patch',
+    next_action: 'preview_candidate_patch_before_apply'
+  });
+  expect(fs.existsSync(path.join(rootDir, result.candidate_patch_path))).toBe(true);
+});
+
+test('dispatchOpenCodeKimi keeps timeout failure when no valid patch was produced', () => {
+  const rootDir = tmpRoot();
+  const { spawnSync } = require('node:child_process');
+  spawnSync('git', ['init', '-q'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: rootDir });
+  spawnSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: rootDir });
+
+  function spawn(command, args, opts) {
+    if (Array.isArray(args) && args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n' };
+    if (Array.isArray(args) && args[0] === 'run') {
+      // No files written. Just timeout.
+      return { error: { code: 'ETIMEDOUT', message: 'no work done' }, status: null, stdout: '', stderr: '' };
+    }
+    return spawnSync(command, args, opts);
+  }
+
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: { story_id: 'STORY-HARD-TO', title: 'hard timeout', requirement: 'hard', requested_paths: ['docs/x.md'] },
+    approval_id: 'APR-HARD-TO',
+    sandbox_root: '.ralph/sandboxes/STORY-HARD-TO',
+    task: 'create docs/x.md',
+    requested_paths: ['docs/x.md'],
+    timeout_ms: 5000,
+    use_worktree: true,
+    spawn,
+    env: { PATH: process.env.PATH, HOME: '/tmp', OPENROUTER_API_KEY: 'or-key' }
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'opencode_kimi_runtime_timeout',
+    next_action: 'retry_or_increase_opencode_kimi_timeout'
+  });
 });
 
 test('dispatchOpenCodeKimi refuses non-allowed sandbox roots', () => {
