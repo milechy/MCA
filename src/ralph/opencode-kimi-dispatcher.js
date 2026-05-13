@@ -320,7 +320,14 @@ function dispatchOpenCodeKimi({
     if (!removal.ok) commands.push(`worktree_remove_failed: ${oneLine(removal.stderr_preview || '', 120)}`);
   }
 
-  const ok = !timedOut && exitCode === 0 && patchLooksValid && patchValidation.ok;
+  // Soft-timeout downgrade: when the OpenCode subprocess overran the wall clock
+  // but the agent had already produced a fully valid candidate patch (worktree
+  // diff captured, validation passed), treat the dispatch as successful. The
+  // subprocess timeout in this case is just session-shutdown overhead, not a
+  // failure of the agent's work. Without this, the autonomous loop would
+  // re-dispatch and burn provider tokens to recompute a result we already have.
+  const softTimeoutWithValidPatch = timedOut && patchLooksValid && patchValidation.ok;
+  const ok = (softTimeoutWithValidPatch || (!timedOut && exitCode === 0)) && patchLooksValid && patchValidation.ok;
   const reason = ok ? null : classifyFailure({ timedOut, exitCode, patchLooksValid, patchValidation, output, missingKey: false });
   const patchSource = ok ? PATCH_SOURCE : null;
 
