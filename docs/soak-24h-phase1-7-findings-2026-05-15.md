@@ -128,3 +128,54 @@ The soak's daemon logs, supplier logs, story state files, and applied-patch arte
 - `tmp/opencode-sandbox/APR-OPENCODE-AUTO-SOAK-...-000000/candidate.patch` — the one real Kimi K2.6 output that made it through dispatch (well-formed, single-file, references real `mode-manager.js` constants).
 
 These are intentionally left **out** of git for operator privacy and disk reasons.
+
+---
+
+## Addendum (2026-05-14T22:00 — same day re-run after bug fixes)
+
+After landing Bug A / B / C fixes on this same branch, a **15 min compressed re-run** (`--supplier-max-stories 12 --rate-per-hour 90 --mode fullauto`) was driven to validate them. Numbers below are from `.ralph/soak/daemon.log` and `.ralph/soak/supplier.log` of the second run.
+
+### Validation of A / B / C
+
+| Bug | Validation | Result |
+|---|---|---|
+| **A: secret-scan false positives** | `pre-secret-scan` no longer flags the supplier template slug or the redactor test fixture on a clean tree | **PASS**. Re-run cycle 1 had `pre-secret-scan: passed`. A `gates_passed` event fired for the first patch within 4 minutes of soak start. |
+| **B: APPLY rollback on GATES → ESCALATED** | When `gates → ESCALATED` fires, `last_apply_rollback` is recorded on the story and the working tree returns to clean | **PASS for the gates path**. Across the 11 stories that eventually escalated, no `working_tree_dirty` event surfaced **from the gates escalation path**. (See Bug D below for the path that did surface working_tree_dirty events.) |
+| **C: `failed_gate` name** | `story.last_gate_failure_summary.failed_gate` is populated with the kebab-case sub-gate name on every gate failure | **PASS**. The first iteration of the re-run (before the NOSCAN-FIXTURE self-annotation follow-up commit) reported `failed_gate: pre-secret-scan` on every ESCALATED story, exactly as designed. After the follow-up commit, gates pass and the field is `null` on success — the field is now meaningful, not always-null. |
+
+### Bug D — newly surfaced under parallel load
+
+The re-run reached the post-`APPLY` half of the pipeline for the first time, which exposed a new failure path the original 14 h soak never reached:
+
+- `--supplier-max-stories 12 --rate-per-hour 90` floods the daemon with 12 ready stories within 8 minutes.
+- The daemon's `--limit 25` (the harness default) makes the scheduler dispatch all of them within a single cycle.
+- Each story's `APPLY` writes its `docs/soak/<slug>.md` straight into the **real repository working tree** (the dispatcher's worktree isolation only protects the LLM run, not `APPLY`).
+- When story A's auto-approved `COMMIT_APPROVAL_PENDING` advances to `COMMIT`, the working tree already contains the as-yet-uncommitted files from stories B–L. `git commit -- <A's path>` then fails with `git_commit_failed` because git refuses the commit (or commits the wrong file set, depending on the wrapper).
+- The story escalates with `blocked_reason: git_commit_failed`. Crucially this is **not** the `repair.escalation_required` path that Bug B's rollback hooks into, so the applied file stays in the working tree.
+- 11 of 12 stories cascaded through this failure. 9 candidate patches were generated, 8 files remained `??` untracked in the working tree at stop time.
+
+`failed_gate` stayed `null` for these (commit is not a gate), `last_apply_rollback` is absent (rollback is gates-escalation-only), and the leftover untracked files would have tripped the next batch's preflight if the supplier had continued.
+
+### Recommended fix for Bug D (separate PR)
+
+Either:
+
+1. **Per-story APPLY worktree.** Promote the dispatcher's git-worktree-per-story isolation up the pipeline so that `APPLY` also writes into a per-story worktree, not the real repo. `COMMIT` would then run inside that worktree, and the merge back into trunk is a separate explicit step. This is the clean architectural fix.
+2. **Serialize APPLY → COMMIT.** Force the daemon to dispatch only one story past `APPLY` at a time (a mutex on the real working tree). Simple, but caps throughput.
+3. **Extend Bug B's rollback hook.** Add the same rollback step to `advanceCommitPhase`'s failure paths. Cheap, but only recovers — does not prevent the collision.
+
+This PR (Phase 1 #7) intentionally **does not include Bug D's fix**. The three bugs that were diagnosed from the original 14 h log are scoped, fixed, and tested. Bug D requires architectural choice (between options 1 / 2 / 3) and is best handled in its own PR with its own ADR.
+
+### Updated recommendation
+
+Open Phase 1 #7 PR with the **three fixes already on this branch** plus this addendum. Schedule **Bug D as Phase 1 #8**, choose the per-story APPLY worktree route (option 1), and run a second 6 h compressed re-run after merging Phase 1 #8. Only after that re-run is clean should the **actual 24 h saturated run** be scheduled.
+
+Status of the current branch:
+
+```
+fa7de92  Phase 1 #7: 3 bug fixes + 23 unit tests + findings from 14h soak run
+089f76a  Phase 1 #7 follow-up: annotate synthetic sk-* string literals inside the secret-scan test itself
+```
+
+Suites: 356 ralph + 271 telegram = 627 passed.
+
