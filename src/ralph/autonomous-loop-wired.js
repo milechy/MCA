@@ -175,8 +175,43 @@ function baseBranchForStory(story, env = process.env, options = {}) {
   return 'main';
 }
 
-function repositoryForStory(story, env = process.env, repository_full_name = null) {
-  return repository_full_name || story.repository_full_name || story.github_issue?.repository_full_name || env.GITHUB_REPOSITORY || null;
+const SAFE_REPO_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+let cachedDetectedRepo = null;
+
+function detectRepositoryFromGitRemote(rootDir, { spawn = require('node:child_process').spawnSync, env = process.env, timeout = 5000 } = {}) {
+  if (cachedDetectedRepo !== null) return cachedDetectedRepo;
+  if (!rootDir) return null;
+  try {
+    const result = spawn('git', ['config', '--get', 'remote.origin.url'], {
+      cwd: rootDir,
+      env: { PATH: env.PATH, HOME: env.HOME, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+      timeout
+    });
+    if (result.status !== 0) { cachedDetectedRepo = null; return null; }
+    const url = String(result.stdout || '').trim();
+    // Match https://github.com/owner/repo(.git)? or git@github.com:owner/repo(.git)?
+    const m = url.match(/^(?:https?:\/\/[^/]+\/|git@[^:]+:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
+    if (!m || !SAFE_REPO_FULL_NAME.test(m[1])) { cachedDetectedRepo = null; return null; }
+    cachedDetectedRepo = m[1];
+    return cachedDetectedRepo;
+  } catch {
+    return null;
+  }
+}
+
+function resetRepositoryDetectionCacheForTests() {
+  cachedDetectedRepo = null;
+}
+
+function repositoryForStory(story, env = process.env, repository_full_name = null, options = {}) {
+  const candidate = repository_full_name
+    || (story && story.repository_full_name)
+    || (story && story.github_issue && story.github_issue.repository_full_name)
+    || env.GITHUB_REPOSITORY
+    || (options.rootDir ? detectRepositoryFromGitRemote(options.rootDir, options) : null);
+  if (!candidate) return null;
+  return SAFE_REPO_FULL_NAME.test(String(candidate)) ? candidate : null;
 }
 
 function taskForFallback(story) {
@@ -495,7 +530,7 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
 }
 
 function advancePrPhase(story, { rootDir, now, env = process.env, githubClient, repository_full_name, pr_runner }) {
-  const repository = repositoryForStory(story, env, repository_full_name);
+  const repository = repositoryForStory(story, env, repository_full_name, { rootDir });
   const runner = pr_runner || createOpenCodePullRequest;
   // If the caller did not inject a github client, build the default one from
   // `gh` CLI. The default client is policy-bounded (validates repo / branch
@@ -599,6 +634,9 @@ module.exports = {
   baseBranchForStory,
   resolveRemoteHeadDefaultBranch,
   resetBaseBranchCacheForTests,
+  repositoryForStory,
+  detectRepositoryFromGitRemote,
+  resetRepositoryDetectionCacheForTests,
   approvalIsApproved,
   boundedSummary
 };

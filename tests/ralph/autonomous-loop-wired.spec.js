@@ -495,3 +495,53 @@ test('baseBranchForStory rejects unsafe ref shapes returned by git', () => {
   // Falls back to 'main' since the detected ref name is not a safe branch shape.
   expect(baseBranchForStory({}, {}, { rootDir: '/tmp', spawn: evilSpawn })).toBe('main');
 });
+
+const {
+  repositoryForStory,
+  detectRepositoryFromGitRemote,
+  resetRepositoryDetectionCacheForTests
+} = require('../../src/ralph/autonomous-loop-wired');
+
+test('detectRepositoryFromGitRemote parses https + ssh git remote urls', () => {
+  resetRepositoryDetectionCacheForTests();
+  const https = () => ({ status: 0, stdout: 'https://github.com/milechy/MCA.git\n', stderr: '' });
+  expect(detectRepositoryFromGitRemote('/tmp', { spawn: https })).toBe('milechy/MCA');
+
+  resetRepositoryDetectionCacheForTests();
+  const ssh = () => ({ status: 0, stdout: 'git@github.com:milechy/MCA.git\n', stderr: '' });
+  expect(detectRepositoryFromGitRemote('/tmp', { spawn: ssh })).toBe('milechy/MCA');
+
+  resetRepositoryDetectionCacheForTests();
+  const noGit = () => ({ status: 0, stdout: 'https://github.com/milechy/MCA\n', stderr: '' });
+  expect(detectRepositoryFromGitRemote('/tmp', { spawn: noGit })).toBe('milechy/MCA');
+});
+
+test('detectRepositoryFromGitRemote refuses malformed or hostile remote urls', () => {
+  resetRepositoryDetectionCacheForTests();
+  const evil = () => ({ status: 0, stdout: 'https://github.com/owner/repo; rm -rf /\n', stderr: '' });
+  expect(detectRepositoryFromGitRemote('/tmp', { spawn: evil })).toBeNull();
+
+  resetRepositoryDetectionCacheForTests();
+  const bad = () => ({ status: 1, stdout: '', stderr: 'fatal: no remote' });
+  expect(detectRepositoryFromGitRemote('/tmp', { spawn: bad })).toBeNull();
+});
+
+test('repositoryForStory order: arg > story.repository_full_name > github_issue.repository > env.GITHUB_REPOSITORY > git remote', () => {
+  resetRepositoryDetectionCacheForTests();
+  const detect = () => ({ status: 0, stdout: 'https://github.com/auto/detected.git\n', stderr: '' });
+
+  expect(repositoryForStory({}, {}, 'arg/wins', { rootDir: '/tmp', spawn: detect })).toBe('arg/wins');
+  resetRepositoryDetectionCacheForTests();
+  expect(repositoryForStory({ repository_full_name: 'story/wins' }, {}, null, { rootDir: '/tmp', spawn: detect })).toBe('story/wins');
+  resetRepositoryDetectionCacheForTests();
+  expect(repositoryForStory({ github_issue: { repository_full_name: 'issue/wins' } }, {}, null, { rootDir: '/tmp', spawn: detect })).toBe('issue/wins');
+  resetRepositoryDetectionCacheForTests();
+  expect(repositoryForStory({}, { GITHUB_REPOSITORY: 'env/wins' }, null, { rootDir: '/tmp', spawn: detect })).toBe('env/wins');
+  resetRepositoryDetectionCacheForTests();
+  expect(repositoryForStory({}, {}, null, { rootDir: '/tmp', spawn: detect })).toBe('auto/detected');
+});
+
+test('repositoryForStory filters out malformed candidates regardless of source', () => {
+  resetRepositoryDetectionCacheForTests();
+  expect(repositoryForStory({}, { GITHUB_REPOSITORY: 'evil; rm -rf /' }, null, { rootDir: '/tmp' })).toBeNull();
+});
