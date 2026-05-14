@@ -68,10 +68,12 @@ test('secret-scan ignores a sk-* substring on a line marked with inline // NOSCA
 
 test('secret-scan ignores a sk-* substring on a line whose previous line is // NOSCAN-FIXTURE: ...', () => {
   const repo = tmpRepo();
+  // NOSCAN-FIXTURE: the array-literal lines below contain synthetic sk-* strings for the redactor temp fixture content, not real secrets.
   fs.writeFileSync(
     path.join(repo, 'tests/redactor.spec.js'),
     [
       "// NOSCAN-FIXTURE: test fixture for redactor; not a real secret",
+      // NOSCAN-FIXTURE: synthetic sk-* string written into the temp redactor.spec.js for the scanner under test
       "const r = redactor('investigation reveals leak: sk-deadbeefdeadbeefdeadbeefdeadbeef');",
       ""
     ].join('\n')
@@ -82,11 +84,14 @@ test('secret-scan ignores a sk-* substring on a line whose previous line is // N
 
 test('secret-scan still flags a real-looking secret even if a nearby line carries // NOSCAN-FIXTURE for an unrelated line', () => {
   const repo = tmpRepo();
+  // NOSCAN-FIXTURE: the array-literal lines below contain a synthetic sk-* string the scanner under test is expected to catch.
   fs.writeFileSync(
     path.join(repo, 'src/leak.js'),
     [
       "// NOSCAN-FIXTURE: this annotation applies to the next line only",
+      // NOSCAN-FIXTURE: synthetic risk-evaluator-conservative slug for the outer scanner-under-test, not a secret
       "const dummy = 'risk-evaluator-conservative';  // not a secret",
+      // NOSCAN-FIXTURE: synthetic sk-* string the outer scanner-under-test must still catch
       "const real = 'sk-deadbeefdeadbeefdeadbeefdeadbeef'; // real-looking, should still be caught",
       ""
     ].join('\n')
@@ -98,11 +103,13 @@ test('secret-scan still flags a real-looking secret even if a nearby line carrie
 
 test('secret-scan accepts the # NOSCAN-FIXTURE form for shell scripts', () => {
   const repo = tmpRepo();
+  // NOSCAN-FIXTURE: the array-literal line below contains a synthetic sk-* string for the shell-form annotation test.
   fs.writeFileSync(
     path.join(repo, 'scripts/use.sh'),
     [
       "#!/usr/bin/env bash",
       "# NOSCAN-FIXTURE: example sk- shape in a script comment",
+      // NOSCAN-FIXTURE: synthetic sk-* string in a shell echo for the # NOSCAN-FIXTURE annotation test, not a real secret
       "echo 'sk-deadbeefdeadbeefdeadbeefdeadbeef is just example output'",
       ""
     ].join('\n')
