@@ -1,3 +1,26 @@
+/**
+ * NemoClaw-mediated OpenCode dispatcher.
+ *
+ * @deprecated 2026-05-14 (Phase 1 #5). Per
+ *   docs/adr-2026-05-14-retire-nemoclaw-mediator-default.md, this dispatcher is
+ *   no longer the autonomous-loop default. The default is now
+ *   src/ralph/opencode-kimi-dispatcher.js (OpenCode + Kimi K2.6 via OpenRouter),
+ *   which has been verified end-to-end across PRs #45, #46, #49, #50, #51, #52
+ *   and the 24-story soak documented in docs/soak-2026-05-14-summary.md.
+ *
+ *   This module is retained, not removed, for three reasons:
+ *     1. nemoclaw-policy.js is the authoritative policy spec for any execution
+ *        mediator; that spec is still consulted by external-agent-gateway.js
+ *        and by tests.
+ *     2. Operators on a deploy host where `openclaw` is installed and verified
+ *        end-to-end can re-enable this path with RALPH_DISPATCHER=nemoclaw.
+ *     3. The deterministic candidate-patch fallback path still recognizes
+ *        nemoclaw_runtime_timeout / nemoclaw_runtime_not_installed reasons
+ *        so partial NemoClaw installs degrade gracefully.
+ *
+ *   No new code should depend on the NemoClaw default unless the ADR's
+ *   "Reversal criteria" section is satisfied.
+ */
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');

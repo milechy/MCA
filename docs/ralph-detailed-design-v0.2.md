@@ -264,22 +264,22 @@ openclaw  not in PATH                       MISSING
 
 Because `openclaw` is missing, the NemoClaw mediated path returns `nemoclaw_runtime_timeout` on the first sandbox exec. The deterministic fallback set in `src/ralph/autonomous-loop-wired.js` (PR #45) covers this reason, so a story routed through NemoClaw degrades gracefully rather than blocking the loop forever.
 
-### 8.3 Effective execution path
+### 8.3 Effective execution path (post Phase 1 #5)
 
-Production-grade execution currently flows through `RALPH_DISPATCHER=opencode-kimi` → `src/ralph/opencode-kimi-dispatcher.js` (see §9). NemoClaw is treated as a parallel mediator option whose policy file (`nemoclaw-policy.js`) still gates direct opencode use as `dev-only`, but no Ralph autonomous tick currently exits through openclaw.
+Per [ADR 2026-05-14](./adr-2026-05-14-retire-nemoclaw-mediator-default.md), **the autonomous-loop default is OpenCode + Kimi K2.6 direct** (`src/ralph/opencode-kimi-dispatcher.js`). NemoClaw is now opt-in via `RALPH_DISPATCHER=nemoclaw`; `nemoclaw-policy.js` is retained as the authoritative policy spec. See §9.1 for the updated selection order.
 
 ## 9. Execution dispatcher — OpenCode + Kimi K2.6 direct (PR #45, refined in PR #46)
 
 ### 9.1 Selection
 
-`buildDefaultOpenCodeDispatcher` (in `src/ralph/autonomous-loop.js`) selects the dispatch path in this order:
+`buildDefaultOpenCodeDispatcher` (in `src/ralph/autonomous-loop.js`) selects the dispatch path in this order **(updated 2026-05-14 per ADR Phase 1 #5)**:
 
 1. Sandbox preflight failure → return the preflight diagnostic.
-2. `RALPH_DISPATCHER === 'opencode-kimi'` (or `RALPH_EXECUTION_DISPATCHER === 'opencode-kimi'`) → `dispatchOpenCodeKimi(...)`.
+2. `RALPH_DISPATCHER === 'nemoclaw'` (or `RALPH_EXECUTION_DISPATCHER === 'nemoclaw'`) → legacy NemoClaw mediator (`runNemoClawOpenCodeCandidatePatch`). Operators opt in here only when `openclaw` is installed and verified.
 3. `RALPH_OPENCODE_DIRECT_DEV_ONLY === 'true'` → direct OpenCode (dev-only).
-4. Otherwise → NemoClaw mediator (`runNemoClawOpenCodeCandidatePatch`).
+4. **Default** → `dispatchOpenCodeKimi` (OpenCode + Kimi K2.6 via OpenRouter).
 
-The Kimi-direct path is the recommended production setting until openclaw is shipped.
+`RALPH_DISPATCHER=opencode-kimi` is still accepted as an explicit opt-in for symmetry but is now redundant with the default.
 
 ### 9.2 Provider configuration
 
@@ -481,7 +481,7 @@ Full ralph test suite at v0.2 baseline: **277 passed**.
 
 ## 17. Known limits, not yet implemented at v0.2
 
-- `openclaw` runtime is missing on the development host; the NemoClaw mediated path is currently inert. All execution flows through `RALPH_DISPATCHER=opencode-kimi`.
+- `openclaw` runtime is missing on the development host; the NemoClaw mediated path is opt-in via `RALPH_DISPATCHER=nemoclaw` and is currently inert end-to-end. Per ADR 2026-05-14 (Phase 1 #5), the autonomous-loop default is now OpenCode + Kimi K2.6 direct; NemoClaw remains retained as the authoritative policy spec.
 - No 24h overnight soak has been demonstrated. The dispatcher is verified at the 1-cycle, 3-story, and 9-test scale; long-duration cost-and-stability data is still pending.
 - LangGraph planning layer is a non-executing skeleton; dynamic re-planning during a story (vs. plan-once-then-execute) is deferred.
 - Telegram `/approve` is connected to execution; `/approve` of a `RESUME_AFTER_SECURITY_STOP` approval still requires manual operator review because that approval type intentionally has no automatic resume hook.

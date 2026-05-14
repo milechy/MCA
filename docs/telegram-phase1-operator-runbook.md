@@ -23,7 +23,10 @@ export TELEGRAM_ALLOWED_CHAT_IDS='-1001234567890,12345678'
 export OPENROUTER_API_KEY='sk-or-v1-...'
 
 # Required for autonomous PR creation
-export RALPH_DISPATCHER=opencode-kimi
+# RALPH_DISPATCHER=opencode-kimi  # NEW default since ADR 2026-05-14 (Phase 1 #5).
+# This line is now redundant — leave unset to get OpenCode + Kimi K2.6 by default.
+# Only set RALPH_DISPATCHER=nemoclaw if you have openclaw installed and verified
+# end-to-end on the deploy host.
 ```
 
 Persist these in `~/MCA/.env` (chmod 600) and source via the daemon launcher.
@@ -218,7 +221,7 @@ The resume approval is single-use; a second stop on the same story requires a ne
 - [ ] `.ralph/roles.json` populated with the operator's user_id as admin
 - [ ] `OPENROUTER_API_KEY` present (verify with `node -e \"console.log((process.env.OPENROUTER_API_KEY||'').length)\"`)
 - [ ] `gh auth status` shows logged in with `repo` + `workflow` scopes
-- [ ] `RALPH_DISPATCHER=opencode-kimi` in env
+- [ ] `RALPH_DISPATCHER` left unset (default = opencode-kimi since Phase 1 #5) **or** explicitly set to `nemoclaw` if openclaw is installed
 - [ ] daemon launched via `nohup` and PID file recorded
 - [ ] `/ping` returns `pong`
 - [ ] `/status` returns a dashboard JSON
