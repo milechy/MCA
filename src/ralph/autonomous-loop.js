@@ -147,8 +147,18 @@ function advanceCommitPhase(story, { rootDir, now, timeout_ms }) {
   const commit = commitOpenCodeAppliedPatch({ rootDir, approval_id: story.current_approval_id, timeout_ms, now: () => now });
   if (!commit.ok) {
     const summary = boundedFailureSummary(commit);
-    const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: commit.reason || 'commit_failed', last_gate_failure_summary: summary }, { rootDir, now, event: 'commit_failed' });
-    return baseResult({ ok: false, reason: commit.reason || 'commit_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: commit.execution_connected === true, commands_executed: commit.commands_executed || [], files_modified: commit.files_modified || [], repository_files_modified: commit.repository_files_modified || [], commit_allowed: false, next_action: 'human_escalation_required' });
+    // Phase 1 #8 fix: a commit failure leaves the applied file uncommitted in
+    // the working tree. The scheduler's critical-section lock prevents new
+    // stories from starting an APPLY while this story is in COMMIT, but the
+    // failed story itself must clean up after itself or the leftover file
+    // would block the next preflight after the lock releases.
+    const rollback = rollbackAppliedFiles({
+      rootDir,
+      apply_result: story.last_apply_result || commit,
+      requested_paths: Array.isArray(story.requested_paths) ? story.requested_paths : []
+    });
+    const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: commit.reason || 'commit_failed', last_gate_failure_summary: summary, last_apply_rollback: rollback }, { rootDir, now, event: 'commit_failed' });
+    return baseResult({ ok: false, reason: commit.reason || 'commit_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, apply_rollback: rollback, provider_config: story.last_provider_config || null, execution_connected: commit.execution_connected === true, commands_executed: commit.commands_executed || [], files_modified: commit.files_modified || [], repository_files_modified: commit.repository_files_modified || [], commit_allowed: false, next_action: 'human_escalation_required' });
   }
 
   const updated = updateStoryForPhase(story, LOOP_PHASES.PUSH_APPROVAL_PENDING, { blocked_reason: null, retry_after_at: null, last_commit_result: boundedFailureSummary(commit), current_commit_sha: commit.commit_sha || null }, { rootDir, now, event: 'commit_completed' });
