@@ -33,6 +33,7 @@ node_modules/
 
 # Ralph runtime state
 .ralph/approval-pending/*
+.ralph/soak/*
 .ralph/tmp/*
 .ralph/opencode-jobs/*
 .ralph/external-agent-jobs/*
