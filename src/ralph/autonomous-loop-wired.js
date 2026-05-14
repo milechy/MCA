@@ -13,6 +13,7 @@ const { pushOpenCodeCommit } = require('../telegram/opencode-push');
 const { createOpenCodePrApproval } = require('../telegram/opencode-pr-approval');
 const { createOpenCodePullRequest } = require('../telegram/opencode-pr');
 const { writeDeterministicCandidatePatch } = require('./deterministic-candidate-patch-fallback');
+const { buildDefaultGithubPrClient } = require('./github-pr-client');
 
 const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
 const FALLBACK_FAILURE_REASONS = new Set([
@@ -135,12 +136,82 @@ function branchForStory(story, env = process.env) {
   return story.current_branch || story.branch || env.RALPH_CURRENT_BRANCH || null;
 }
 
-function baseBranchForStory(story, env = process.env) {
-  return story.base_branch || env.RALPH_PR_BASE_BRANCH || 'main';
+const REMOTE_HEAD_DEFAULT_BRANCH_TIMEOUT_MS = 5000;
+let cachedRemoteHeadDefaultBranch = null;
+
+function resolveRemoteHeadDefaultBranch(rootDir, { spawn = require('node:child_process').spawnSync, env = process.env } = {}) {
+  if (cachedRemoteHeadDefaultBranch) return cachedRemoteHeadDefaultBranch;
+  if (!rootDir) return null;
+  try {
+    const result = spawn('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], {
+      cwd: rootDir,
+      env: { PATH: env.PATH, HOME: env.HOME, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+      timeout: REMOTE_HEAD_DEFAULT_BRANCH_TIMEOUT_MS
+    });
+    if (result.status !== 0) return null;
+    const stdout = String(result.stdout || '').trim();
+    const stripped = stdout.startsWith('origin/') ? stdout.slice('origin/'.length) : stdout;
+    if (!stripped || !/^[A-Za-z0-9_./-]+$/.test(stripped)) return null;
+    cachedRemoteHeadDefaultBranch = stripped;
+    return stripped;
+  } catch {
+    return null;
+  }
 }
 
-function repositoryForStory(story, env = process.env, repository_full_name = null) {
-  return repository_full_name || story.repository_full_name || story.github_issue?.repository_full_name || env.GITHUB_REPOSITORY || null;
+function resetBaseBranchCacheForTests() {
+  cachedRemoteHeadDefaultBranch = null;
+}
+
+function baseBranchForStory(story, env = process.env, options = {}) {
+  if (story && story.base_branch) return story.base_branch;
+  if (env && env.RALPH_PR_BASE_BRANCH) return env.RALPH_PR_BASE_BRANCH;
+  const rootDir = options.rootDir;
+  if (rootDir) {
+    const detected = resolveRemoteHeadDefaultBranch(rootDir, options);
+    if (detected) return detected;
+  }
+  return 'main';
+}
+
+const SAFE_REPO_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+let cachedDetectedRepo = null;
+
+function detectRepositoryFromGitRemote(rootDir, { spawn = require('node:child_process').spawnSync, env = process.env, timeout = 5000 } = {}) {
+  if (cachedDetectedRepo !== null) return cachedDetectedRepo;
+  if (!rootDir) return null;
+  try {
+    const result = spawn('git', ['config', '--get', 'remote.origin.url'], {
+      cwd: rootDir,
+      env: { PATH: env.PATH, HOME: env.HOME, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+      timeout
+    });
+    if (result.status !== 0) { cachedDetectedRepo = null; return null; }
+    const url = String(result.stdout || '').trim();
+    // Match https://github.com/owner/repo(.git)? or git@github.com:owner/repo(.git)?
+    const m = url.match(/^(?:https?:\/\/[^/]+\/|git@[^:]+:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
+    if (!m || !SAFE_REPO_FULL_NAME.test(m[1])) { cachedDetectedRepo = null; return null; }
+    cachedDetectedRepo = m[1];
+    return cachedDetectedRepo;
+  } catch {
+    return null;
+  }
+}
+
+function resetRepositoryDetectionCacheForTests() {
+  cachedDetectedRepo = null;
+}
+
+function repositoryForStory(story, env = process.env, repository_full_name = null, options = {}) {
+  const candidate = repository_full_name
+    || (story && story.repository_full_name)
+    || (story && story.github_issue && story.github_issue.repository_full_name)
+    || env.GITHUB_REPOSITORY
+    || (options.rootDir ? detectRepositoryFromGitRemote(options.rootDir, options) : null);
+  if (!candidate) return null;
+  return SAFE_REPO_FULL_NAME.test(String(candidate)) ? candidate : null;
 }
 
 function taskForFallback(story) {
@@ -398,7 +469,7 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
     rootDir,
     commit_sha: push.commit_sha || story.current_commit_sha,
     head_branch: push.branch || branchForStory(story, env),
-    base_branch: baseBranchForStory(story, env),
+    base_branch: baseBranchForStory(story, env, { rootDir }),
     title: story.title || story.requirement || 'OpenCode change',
     body: '',
     allowed_user_ids: [],
@@ -433,7 +504,7 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
     current_approval_id: prApproval.approval_id,
     current_commit_sha: prApproval.commit_sha || push.commit_sha || story.current_commit_sha,
     current_branch: prApproval.head_branch || push.branch || branchForStory(story, env),
-    current_base_branch: prApproval.base_branch || baseBranchForStory(story, env),
+    current_base_branch: prApproval.base_branch || baseBranchForStory(story, env, { rootDir }),
     last_push_result: push,
     last_pr_approval: prApproval,
     blocked_reason: null,
@@ -459,12 +530,17 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
 }
 
 function advancePrPhase(story, { rootDir, now, env = process.env, githubClient, repository_full_name, pr_runner }) {
-  const repository = repositoryForStory(story, env, repository_full_name);
+  const repository = repositoryForStory(story, env, repository_full_name, { rootDir });
   const runner = pr_runner || createOpenCodePullRequest;
+  // If the caller did not inject a github client, build the default one from
+  // `gh` CLI. The default client is policy-bounded (validates repo / branch
+  // shape, scrubs env down to PATH/HOME/GH_TOKEN, 30s timeout). Operators or
+  // tests can still pass their own githubClient to override.
+  const effectiveClient = githubClient || buildDefaultGithubPrClient({ env });
   const pr = runner({
     rootDir,
     approval_id: story.current_approval_id,
-    githubClient,
+    githubClient: effectiveClient,
     repository_full_name: repository,
     now: () => now
   });
@@ -555,6 +631,12 @@ module.exports = {
   resumeApprovalToExecutionPhase,
   advancePushPhase,
   advancePrPhase,
+  baseBranchForStory,
+  resolveRemoteHeadDefaultBranch,
+  resetBaseBranchCacheForTests,
+  repositoryForStory,
+  detectRepositoryFromGitRemote,
+  resetRepositoryDetectionCacheForTests,
   approvalIsApproved,
   boundedSummary
 };

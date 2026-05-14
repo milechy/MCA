@@ -1,0 +1,1 @@
+The Phase 1 end-to-end test validates that an approved candidate patch successfully flows through the complete autonomous loop. It verifies the sequence from APPLY (patch application), through GATES (validation checks), to COMMIT (integration into the repository). This ensures the core automation pipeline functions correctly for trusted changes.
