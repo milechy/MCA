@@ -174,7 +174,7 @@ function makeBaseResult(overrides = {}) {
   };
 }
 
-function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, sandbox_root, requested_paths = [], pre_secret_scan_ok = false, env = process.env, now = new Date() } = {}) {
+function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, sandbox_root, requested_paths = [], pre_secret_scan_ok = false, env = process.env, now = new Date(), worktree_isolated = false } = {}) {
   const branch = currentBranch(rootDir);
   const entries = dirtyEntries(rootDir);
   const gitStatusFailed = entries === null;
@@ -203,7 +203,17 @@ function opencodeSandboxRunnerPreflight({ rootDir = process.cwd(), approval_id, 
   if (!approvalCheck.ok) return makeBaseResult({ ...base, reason: approvalCheck.reason });
   if (!sandbox_root) return makeBaseResult({ ...base, reason: 'sandbox_root_invalid' });
   if (!isAllowedSandboxRoot(sandbox_root)) return makeBaseResult({ ...base, reason: 'sandbox_root_not_allowed' });
-  if (!clean) return makeBaseResult({ ...base, reason: 'working_tree_dirty' });
+  // Phase 1 #8 Bug E fix: when the dispatcher uses git-worktree isolation
+  // (e.g. opencode-kimi-direct, which creates a detached worktree from HEAD
+  // for every dispatch), the real repository's working tree state cannot
+  // affect the dispatched run. Refusing dispatch on working_tree_dirty in
+  // that case caused the post-Bug-D cascade: a critical-section holder's
+  // applied-but-not-committed file blocked every other story's OPENCODE_RUNNING
+  // preflight, even though those stories would have run in fully isolated
+  // worktrees. Worktree-isolated callers pass worktree_isolated=true and the
+  // dirty state is downgraded to base.working_tree_clean / base.dirty_entries
+  // (informational) without blocking dispatch.
+  if (!clean && !worktree_isolated) return makeBaseResult({ ...base, reason: 'working_tree_dirty' });
   if (!branchAllowed(branch)) return makeBaseResult({ ...base, reason: 'branch_not_allowed' });
   if (blocked.length > 0) return makeBaseResult({ ...base, reason: 'requested_path_forbidden' });
   if (pre_secret_scan_ok !== true) return makeBaseResult({ ...base, reason: 'pre_secret_scan_failed' });
