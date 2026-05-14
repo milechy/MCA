@@ -1,6 +1,7 @@
 const { listStories, summarizeStory } = require('./story-queue');
 const { tickAutonomousLoopWired } = require('./autonomous-loop-wired');
 const { sortStoriesByPriority } = require('./story-priority');
+const { findApprovedResumeApproval } = require('./resume-after-security-stop');
 
 const SCHEDULER_VERSION = 'autonomous_scheduler_v0_1';
 const RUNNABLE_STATUSES = new Set(['queued', 'running', 'waiting_approval']);
@@ -23,8 +24,28 @@ function isRunnableStory(story, { now = new Date() } = {}) {
   return true;
 }
 
+function hasApprovedResumeWaiting(story, { rootDir, now = new Date() } = {}) {
+  if (!story || !rootDir) return false;
+  const stopped = story.current_phase === 'STOPPED_SECURITY'
+    || story.current_phase === 'STOPPED'
+    || story.status === 'failed'
+    || story.status === 'stopped';
+  if (!stopped) return false;
+  try {
+    return findApprovedResumeApproval(rootDir, story.story_id, { now }) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function selectRunnableStories({ rootDir = process.cwd(), limit = 5, now = new Date() } = {}) {
-  const stories = listStories({ rootDir, limit: 100 }).filter((story) => isRunnableStory(story, { now }));
+  const all = listStories({ rootDir, limit: 100 });
+  // Include normally-runnable stories AND stopped stories that have an admin-
+  // approved RESUME_AFTER_SECURITY_STOP record waiting to be consumed. The
+  // wired loop will detect the approved resume and transition the story back
+  // to PLAN_APPROVAL_PENDING on the same tick; without this widening the
+  // scheduler would never even call the wired loop for a stopped story.
+  const stories = all.filter((story) => isRunnableStory(story, { now }) || hasApprovedResumeWaiting(story, { rootDir, now }));
   return sortStoriesByPriority(stories).slice(0, Math.max(1, Math.min(25, limit)));
 }
 

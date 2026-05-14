@@ -12,6 +12,7 @@ const { runShellDryRunWithPreflight } = require('./shell-preflight-wrapper');
 const { runAllApprovedSmoke } = require('./run-all-smoke-helper');
 const { describeGateSequence, runGateSequence } = require('./gate-runner');
 const { createPlanningGraph } = require('./langgraph-planning-layer');
+const { requestResumeApproval, consumeApprovedResume } = require('./resume-after-security-stop');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -47,6 +48,8 @@ Commands:
   node src/ralph/cli.js mode fullauto-request <user_id> [hours]
   node src/ralph/cli.js mode fullauto-confirm <token> <user_id>
   node src/ralph/cli.js mode auto-revert
+  node src/ralph/cli.js resume-request <story_id> <admin_user_id> <rationale...>
+  node src/ralph/cli.js resume-consume <story_id>
 `);
 }
 
@@ -147,6 +150,19 @@ function main(argv = process.argv.slice(2), options = {}) {
 
   if (command === 'mode') {
     handleModeCommand(args);
+    return;
+  }
+
+  if (command === 'resume-request') {
+    const [storyId, userId, ...rest] = args;
+    const rationale = rest.join(' ');
+    console.log(JSON.stringify(requestResumeApproval({ story_id: storyId, requester_user_id: Number(userId), rationale }), null, 2));
+    return;
+  }
+
+  if (command === 'resume-consume') {
+    const [storyId] = args;
+    console.log(JSON.stringify(consumeApprovedResume({ story_id: storyId }), null, 2));
     return;
   }
 

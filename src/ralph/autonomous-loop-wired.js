@@ -15,6 +15,7 @@ const { createOpenCodePullRequest } = require('../telegram/opencode-pr');
 const { writeDeterministicCandidatePatch } = require('./deterministic-candidate-patch-fallback');
 const { buildDefaultGithubPrClient } = require('./github-pr-client');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
+const { consumeApprovedResume } = require('./resume-after-security-stop');
 
 const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
 const FALLBACK_FAILURE_REASONS = new Set([
@@ -604,8 +605,27 @@ function tickAutonomousLoopWired(options = {}) {
     allow_runtime_code_fallback = false
   } = options;
   if (!story_id) return baseResult({ reason: 'story_id_required' });
-  const story = readStory(rootDir, story_id);
+  let story = readStory(rootDir, story_id);
   if (!story) return baseResult({ reason: 'story_not_found', story_id });
+
+  // If the story was previously security-stopped, consult the resume registry
+  // first. consumeApprovedResume will only succeed when an admin-recorded,
+  // human-APPROVED RESUME_AFTER_SECURITY_STOP record is present and unexpired;
+  // it can never be flipped by the fullauto auto-approver. On success the
+  // story is re-armed to PLAN_APPROVAL_PENDING so the very next tick re-runs
+  // risk assessment and a fresh ControlDecision.
+  if (
+    story.current_phase === 'STOPPED_SECURITY'
+    || story.current_phase === LOOP_PHASES.STOPPED
+    || story.status === 'stopped'
+    || story.status === 'failed'
+  ) {
+    const resumed = consumeApprovedResume({ rootDir, story_id, now });
+    if (resumed && resumed.ok === true && resumed.transitioned === true) {
+      // Re-read the freshly transitioned story; fall through to normal handling.
+      story = readStory(rootDir, story_id);
+    }
+  }
 
   // For PUSH / PR approval boundaries the wired loop has its own resume path
   // (resumeApprovalToExecutionPhase) that drives the actual execution rather
