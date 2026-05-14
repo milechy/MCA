@@ -109,11 +109,17 @@ function runOpenCodeAppliedPatchGates({ rootDir = process.cwd(), approval_id, pa
   const timedOut = result.error && result.error.code === 'ETIMEDOUT';
   const ok = exitCode === 0 && !timedOut;
   const repositoryFilesModified = changedFilesFromTouched(preflight.files_touched, rootDir);
+  // Phase 1 #7 fix: scripts/gates/run-all.sh now emits a structured
+  // [gate] FAILED_GATE=<name> line when any sub-gate fails. Parse it so the
+  // wired loop's failure summary can report failed_gate by name rather than
+  // null, and operator dashboards can group gate failures by gate.
+  const failedGate = ok ? null : parseFailedGateName(result.stdout, result.stderr);
 
   return {
     ok,
     stage: 'opencode_gates',
     reason: ok ? null : timedOut ? 'opencode_gates_timeout' : 'opencode_gates_failed',
+    failed_gate: failedGate,
     preflight,
     approval_id: preflight.approval_id,
     patch_hash: preflight.patch_hash,
@@ -139,4 +145,20 @@ function runOpenCodeAppliedPatchGates({ rootDir = process.cwd(), approval_id, pa
   };
 }
 
-module.exports = { opencodeGatesPreflight, runOpenCodeAppliedPatchGates, oneLine };
+// Real gate names are kebab-case (pre-secret-scan, ralph-tests, supabase-local,
+// playwright-e2e, etc.). Requiring at least one hyphen rejects accidental
+// shell-tokens like "rm" if someone tried to slip them through FAILED_GATE=.
+// The downstream consumer just renders the name into JSON; shell-quoting is
+// not required, but the regex stays narrow so any future caller cannot use it
+// as a free-form metadata channel.
+const SAFE_GATE_NAME = /^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$/;
+function parseFailedGateName(stdout, stderr) {
+  for (const stream of [stdout, stderr]) {
+    if (!stream) continue;
+    const m = String(stream).match(/\[gate\]\s*FAILED_GATE=([A-Za-z0-9_.-]+)/);
+    if (m && SAFE_GATE_NAME.test(m[1])) return m[1];
+  }
+  return null;
+}
+
+module.exports = { opencodeGatesPreflight, runOpenCodeAppliedPatchGates, parseFailedGateName, oneLine };

@@ -10,6 +10,7 @@ const { runOpenCodeCandidatePatch } = require('../telegram/opencode-run');
 const { runNemoClawOpenCodeCandidatePatch } = require('./nemoclaw-opencode-gateway');
 const { dispatchOpenCodeKimi } = require('./opencode-kimi-dispatcher');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
+const { rollbackAppliedFiles } = require('./apply-rollback');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
 const { createOpenCodePatchPreviewApproval } = require('../telegram/opencode-patch-approval');
@@ -125,8 +126,21 @@ function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
   const repair = buildRepairDecision({ story, failure: summary, attempts, max_attempts: maxAttempts, now });
   const nextPhase = repair.escalation_required ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP;
   const repairHistory = appendRepairHistory(story, repair.repair_event);
-  const updated = updateStoryForPhase(story, nextPhase, { attempts, blocked_reason: gateBlockedReason(gates, repair), retry_after_at: null, last_gate_failure_summary: summary, last_repair_type: repair.failure_type, last_repair_instruction: repair.escalation_required ? null : repair.repair_instruction, repair_history: repairHistory }, { rootDir, now, event: repair.escalation_required ? 'gate_repair_escalated' : 'gate_failed_fix_required' });
-  return baseResult({ ok: false, reason: gateFailureReason(gates, repair), story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
+  // Phase 1 #7 fix: when GATES -> ESCALATED, roll back the APPLY step so the
+  // applied file does not linger in the working tree and trip
+  // working_tree_dirty on every subsequent story's sandbox preflight. The
+  // rollback is bounded to (repository_files_modified ∩ requested_paths) of
+  // this story; no other path can be touched.
+  let rollback = null;
+  if (repair.escalation_required) {
+    rollback = rollbackAppliedFiles({
+      rootDir,
+      apply_result: story.last_apply_result || gates,
+      requested_paths: Array.isArray(story.requested_paths) ? story.requested_paths : []
+    });
+  }
+  const updated = updateStoryForPhase(story, nextPhase, { attempts, blocked_reason: gateBlockedReason(gates, repair), retry_after_at: null, last_gate_failure_summary: summary, last_repair_type: repair.failure_type, last_repair_instruction: repair.escalation_required ? null : repair.repair_instruction, repair_history: repairHistory, last_apply_rollback: rollback }, { rootDir, now, event: repair.escalation_required ? 'gate_repair_escalated' : 'gate_failed_fix_required' });
+  return baseResult({ ok: false, reason: gateFailureReason(gates, repair), story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, apply_rollback: rollback, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
 }
 
 function advanceCommitPhase(story, { rootDir, now, timeout_ms }) {

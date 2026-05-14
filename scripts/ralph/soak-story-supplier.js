@@ -59,6 +59,7 @@ const TEMPLATES = [
       ['phase0-trunk', 'Decision: phase0 branch is the trunk', 'Record the decision that infra/phase0-autonomous-foundation is the canonical trunk during Phase 0/1. Mention defaultBranchRef and that main does not yet exist.'],
       ['kimi-default', 'Decision: opencode-kimi is default dispatcher', 'Record the ADR-2026-05-14 decision to promote OpenCode + Kimi K2.6 to default and demote NemoClaw to opt-in.'],
       ['mode-json-gitignored', 'Decision: untrack mode.json and state.json', 'Record the decision to untrack .ralph/mode.json and .ralph/state.json from git (Phase 1 #2).'],
+      // NOSCAN-FIXTURE: the slug "risk-evaluator-conservative" contains the literal sk-evaluator-conservative substring which trips the openai sk-* regex; this is a template label, not a secret.
       ['risk-evaluator-conservative', 'Decision: risk evaluator stays conservative', 'Record the decision to keep the substring-based risk_evaluator (touchesSecrets/touchesRls etc.) even though it gates many docs stories at PLAN_APPROVAL_PENDING.'],
       ['fullauto-pl-excludes-plan', 'Decision: PLAN approval never auto-approved', 'Record the decision that even in fullauto, PLAN approvals require a human; only DIFF/COMMIT/PUSH/PR are auto-approved.']
     ]
