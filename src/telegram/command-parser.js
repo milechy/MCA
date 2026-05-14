@@ -54,6 +54,8 @@ function parseTelegramCommand(text) {
   if (command === '/approve') return { type: 'approve', raw, args };
   if (command === '/deny') return { type: 'deny', raw, args };
   if (command === '/modify') return { type: 'modify', raw, args };
+  if (command === '/resume-request') return { type: 'resume_request', raw, args };
+  if (command === '/resume-status') return { type: 'resume_status', raw, args };
 
   return { type: 'unknown', raw, args };
 }

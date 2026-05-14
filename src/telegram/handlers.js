@@ -2,7 +2,7 @@ const { loadState } = require('../ralph/state-machine');
 const { loadMode, requestFullautoMode, confirmFullautoMode, setApprovalMode } = require('../ralph/mode-manager');
 const { loadRoles } = require('../ralph/roles');
 const { listApprovals, getApproval, summarizeApproval } = require('../ralph/approval-reader');
-const { approveFromTelegram, denyFromTelegram, modifyFromTelegram } = require('./approval-adapter');
+const { approveFromTelegram, denyFromTelegram, modifyFromTelegram, resumeRequestFromTelegram, resumeStatusFromTelegram } = require('./approval-adapter');
 const { executeNoopFromTelegram, runAllFromTelegram } = require('./execution-adapter');
 const { executionPolicyStatus } = require('./policy-reader');
 const { makeOpenCodeDryRunPlan, summarizeOpenCodeDryRunPlan } = require('./opencode-dry-run');
@@ -341,6 +341,27 @@ function handleTelegramCommand(parsed, context = {}) {
     const [approvalId, ...instructionParts] = parsed.args;
     const result = modifyFromTelegram(approvalId, userId, instructionParts.join(' '), { rootDir });
     return textResponse(result.ok ? `Approval superseded. Replan required. Execution remains disconnected.${jsonBlock(result)}` : `Modify failed: ${result.reason}${jsonBlock(result)}`, { result, wired_to_runtime: false });
+  }
+  if (parsed.type === 'resume_request') {
+    const [storyId, ...rationaleParts] = parsed.args;
+    const result = resumeRequestFromTelegram({
+      story_id: storyId,
+      requester_user_id: userId,
+      rationale: rationaleParts.join(' '),
+      options: { rootDir }
+    });
+    return textResponse(result.ok
+      ? `Resume requested. Admin must /approve ${result.approval_id} to consume.${jsonBlock(result)}`
+      : `Resume request failed: ${result.reason}${jsonBlock(result)}`,
+      { result, wired_to_runtime: result.wired_to_runtime === true });
+  }
+  if (parsed.type === 'resume_status') {
+    const [storyId] = parsed.args;
+    const result = resumeStatusFromTelegram({ story_id: storyId, options: { rootDir } });
+    return textResponse(result.ok
+      ? `Resume status for ${storyId}.${jsonBlock(result)}`
+      : `Resume status failed: ${result.reason}${jsonBlock(result)}`,
+      { result, wired_to_runtime: false });
   }
   if (parsed.type === 'execute_noop') {
     const result = executeNoopFromTelegram(parsed.args[0], parsed.args[1], { rootDir });
