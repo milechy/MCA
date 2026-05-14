@@ -466,3 +466,32 @@ test('tickAutonomousLoopWired uses wrapper approval resume path for push approva
     next_action: 'push_approved_commit'
   });
 });
+
+const { baseBranchForStory, resetBaseBranchCacheForTests } = require('../../src/ralph/autonomous-loop-wired');
+
+test('baseBranchForStory prefers story.base_branch over env over remote HEAD over main', () => {
+  resetBaseBranchCacheForTests();
+  // 1. story.base_branch wins
+  expect(baseBranchForStory({ base_branch: 'feature/x' }, { RALPH_PR_BASE_BRANCH: 'env-branch' }, { rootDir: '/tmp' })).toBe('feature/x');
+
+  // 2. env wins when story.base_branch is absent
+  resetBaseBranchCacheForTests();
+  expect(baseBranchForStory({}, { RALPH_PR_BASE_BRANCH: 'env-branch' }, { rootDir: '/tmp' })).toBe('env-branch');
+
+  // 3. remote HEAD detection wins when env is unset
+  resetBaseBranchCacheForTests();
+  const fakeSpawn = () => ({ status: 0, stdout: 'origin/infra/phase0-autonomous-foundation\n', stderr: '' });
+  expect(baseBranchForStory({}, {}, { rootDir: '/tmp', spawn: fakeSpawn })).toBe('infra/phase0-autonomous-foundation');
+
+  // 4. fall back to 'main' only when nothing else resolves
+  resetBaseBranchCacheForTests();
+  const failingSpawn = () => ({ status: 1, stdout: '', stderr: 'fatal' });
+  expect(baseBranchForStory({}, {}, { rootDir: '/tmp', spawn: failingSpawn })).toBe('main');
+});
+
+test('baseBranchForStory rejects unsafe ref shapes returned by git', () => {
+  resetBaseBranchCacheForTests();
+  const evilSpawn = () => ({ status: 0, stdout: 'origin/--upload-pack=evil\n', stderr: '' });
+  // Falls back to 'main' since the detected ref name is not a safe branch shape.
+  expect(baseBranchForStory({}, {}, { rootDir: '/tmp', spawn: evilSpawn })).toBe('main');
+});
