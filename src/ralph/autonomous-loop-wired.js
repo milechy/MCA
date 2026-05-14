@@ -13,6 +13,7 @@ const { pushOpenCodeCommit } = require('../telegram/opencode-push');
 const { createOpenCodePrApproval } = require('../telegram/opencode-pr-approval');
 const { createOpenCodePullRequest } = require('../telegram/opencode-pr');
 const { writeDeterministicCandidatePatch } = require('./deterministic-candidate-patch-fallback');
+const { buildDefaultGithubPrClient } = require('./github-pr-client');
 
 const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
 const FALLBACK_FAILURE_REASONS = new Set([
@@ -496,10 +497,15 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
 function advancePrPhase(story, { rootDir, now, env = process.env, githubClient, repository_full_name, pr_runner }) {
   const repository = repositoryForStory(story, env, repository_full_name);
   const runner = pr_runner || createOpenCodePullRequest;
+  // If the caller did not inject a github client, build the default one from
+  // `gh` CLI. The default client is policy-bounded (validates repo / branch
+  // shape, scrubs env down to PATH/HOME/GH_TOKEN, 30s timeout). Operators or
+  // tests can still pass their own githubClient to override.
+  const effectiveClient = githubClient || buildDefaultGithubPrClient({ env });
   const pr = runner({
     rootDir,
     approval_id: story.current_approval_id,
-    githubClient,
+    githubClient: effectiveClient,
     repository_full_name: repository,
     now: () => now
   });
