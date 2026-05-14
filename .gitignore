@@ -41,3 +41,5 @@ node_modules/
 .ralph/approval-log.jsonl
 .ralph/roles.json
 .ralph/telegram-offset.json
+.ralph/mode.json
+.ralph/state.json

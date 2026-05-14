@@ -14,6 +14,7 @@ const { createOpenCodePrApproval } = require('../telegram/opencode-pr-approval')
 const { createOpenCodePullRequest } = require('../telegram/opencode-pr');
 const { writeDeterministicCandidatePatch } = require('./deterministic-candidate-patch-fallback');
 const { buildDefaultGithubPrClient } = require('./github-pr-client');
+const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
 
 const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
 const FALLBACK_FAILURE_REASONS = new Set([
@@ -605,6 +606,21 @@ function tickAutonomousLoopWired(options = {}) {
   if (!story_id) return baseResult({ reason: 'story_id_required' });
   const story = readStory(rootDir, story_id);
   if (!story) return baseResult({ reason: 'story_not_found', story_id });
+
+  // For PUSH / PR approval boundaries the wired loop has its own resume path
+  // (resumeApprovalToExecutionPhase) that drives the actual execution rather
+  // than the inner-loop's pure phase advance. Auto-approve via the fullauto
+  // approver BEFORE consulting the resume path, so a fullauto-eligible PUSH or
+  // PR approval can flow through the real push / PR-creation work instead of
+  // skipping straight to the next approval phase via the inner-loop switch.
+  if (
+    story.current_phase === LOOP_PHASES.PUSH_APPROVAL_PENDING
+    || story.current_phase === LOOP_PHASES.PR_APPROVAL_PENDING
+    || story.current_phase === LOOP_PHASES.COMMIT_APPROVAL_PENDING
+    || story.current_phase === LOOP_PHASES.DIFF_APPROVAL_PENDING
+  ) {
+    maybeAutoApproveForFullauto({ rootDir, story, now });
+  }
 
   if (story.current_phase === LOOP_PHASES.PUSH_APPROVAL_PENDING || story.current_phase === LOOP_PHASES.PR_APPROVAL_PENDING) {
     const resumed = resumeApprovalToExecutionPhase(story, { rootDir, now, approvals });
