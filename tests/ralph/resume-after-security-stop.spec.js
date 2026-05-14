@@ -58,6 +58,7 @@ test('isStopped recognizes STOPPED_SECURITY phase and failed/stopped statuses', 
 });
 
 test('redactRationale strips secrets and tokens before persistence', () => {
+  // NOSCAN-FIXTURE: the next line passes synthetic sk-*/ghp_*/api_key=... strings into redactRationale as INPUT so the redaction test can assert they are stripped. These are not real credentials.
   const r = redactRationale('investigation reveals leak: api_key=sk-or-v1-deadbeefXXXX1234567890abcdefghij and password=supersecret and email a@b.com and gh token ghp_abcdefghijklmnopqrstuvwxyz12345');
   expect(r).not.toContain('sk-or-v1-deadbeef');
   expect(r).not.toContain('supersecret');
