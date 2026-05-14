@@ -164,3 +164,43 @@ test('maybeAutoApproveForFullauto reports already_approved for re-entrant calls'
   expect(r2).toMatchObject({ ok: true, approved: false, reason: 'already_approved' });
   expect(readApproval(root, apId).status).toBe(APPROVAL_STATUSES.APPROVED);
 });
+
+const { deriveGateKind } = require('../../src/ralph/fullauto-auto-approver');
+
+test('deriveGateKind maps legacy approval_id prefixes to gate kinds', () => {
+  expect(deriveGateKind({ approval_id: 'APR-OPENCODE-APPLY-X', approval_type: 'diff' })).toBe('diff');
+  expect(deriveGateKind({ approval_id: 'APR-OPENCODE-COMMIT-X', approval_type: 'diff' })).toBe('diff');
+  // The bug case: push approval stamped with approval_type='plan' but its real gate is push
+  expect(deriveGateKind({ approval_id: 'APR-OPENCODE-PUSH-X', approval_type: 'plan' })).toBe('push');
+  expect(deriveGateKind({ approval_id: 'APR-OPENCODE-PR-X', approval_type: 'plan' })).toBe('pr');
+  // Unknown prefix falls through to literal approval_type
+  expect(deriveGateKind({ approval_id: 'APR-OTHER-X', approval_type: 'plan' })).toBe('plan');
+});
+
+test('maybeAutoApproveForFullauto auto-approves a legacy-plan-typed push approval via prefix', () => {
+  const root = tmpRoot();
+  seedMode(root, { mode: 'fullauto', effective_until: new Date(Date.now() + 60_000).toISOString() });
+  // Simulate the legacy approval shape: approval_type='plan' but id prefix is PUSH
+  const apId = seedApproval(root, {
+    approval_id: 'APR-OPENCODE-PUSH-LEGACY-001',
+    approval_type: APPROVAL_TYPES.PLAN,
+    risk: { score: 1 }
+  });
+  const story = { story_id: 'STORY-X', current_approval_id: apId, target_env: 'local' };
+  const r = maybeAutoApproveForFullauto({ rootDir: root, story });
+  expect(r).toMatchObject({ ok: true, approved: true, reason: 'fullauto_auto_approved' });
+  expect(readApproval(root, apId).status).toBe(APPROVAL_STATUSES.APPROVED);
+});
+
+test('maybeAutoApproveForFullauto still refuses a true PLAN approval (no PUSH/PR prefix)', () => {
+  const root = tmpRoot();
+  seedMode(root, { mode: 'fullauto', effective_until: new Date(Date.now() + 60_000).toISOString() });
+  const apId = seedApproval(root, {
+    approval_id: 'APR-PLAN-REAL-001',
+    approval_type: APPROVAL_TYPES.PLAN,
+    risk: { score: 1 }
+  });
+  const story = { story_id: 'STORY-X', current_approval_id: apId, target_env: 'local' };
+  const r = maybeAutoApproveForFullauto({ rootDir: root, story });
+  expect(r).toMatchObject({ ok: true, approved: false, reason: 'approval_type_plan_requires_human' });
+});

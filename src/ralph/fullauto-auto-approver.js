@@ -11,6 +11,28 @@ const FULLAUTO_AUTO_APPROVABLE_TYPES = new Set([
   'pr'
 ]);
 
+// Some legacy approval creators in src/telegram/opencode-*-approval.js stamp
+// approval_type='plan' on records that are operationally push or PR approvals.
+// We derive the real gate kind from the approval_id prefix so the auto-approver
+// can recognize them; this is additive and never widens the type allow-list.
+const APPROVAL_ID_GATE_KIND = [
+  { prefix: 'APR-OPENCODE-APPLY-', kind: APPROVAL_TYPES.DIFF },
+  { prefix: 'APR-OPENCODE-AUTO-', kind: APPROVAL_TYPES.DIFF },
+  { prefix: 'APR-OPENCODE-COMMIT-', kind: 'commit' },
+  { prefix: 'APR-OPENCODE-PUSH-', kind: 'push' },
+  { prefix: 'APR-OPENCODE-PR-', kind: 'pr' }
+];
+
+function deriveGateKind(approval) {
+  const literalType = String(approval && approval.approval_type || '').toLowerCase();
+  if (FULLAUTO_AUTO_APPROVABLE_TYPES.has(literalType)) return literalType;
+  const id = String(approval && approval.approval_id || '');
+  for (const { prefix, kind } of APPROVAL_ID_GATE_KIND) {
+    if (id.startsWith(prefix)) return kind;
+  }
+  return literalType;
+}
+
 function readModeSafely(rootDir, { now = new Date() } = {}) {
   try {
     const mode = loadMode(rootDir);
@@ -51,8 +73,9 @@ function maybeAutoApproveForFullauto({ rootDir, story = {}, now = new Date() } =
   }
 
   const approvalType = String(approval.approval_type || '').toLowerCase();
-  if (!FULLAUTO_AUTO_APPROVABLE_TYPES.has(approvalType)) {
-    return { ok: true, approved: false, reason: `approval_type_${approvalType}_requires_human`, approval_id: approvalId };
+  const gateKind = deriveGateKind(approval);
+  if (!FULLAUTO_AUTO_APPROVABLE_TYPES.has(gateKind)) {
+    return { ok: true, approved: false, reason: `approval_type_${approvalType || 'unknown'}_requires_human`, approval_id: approvalId };
   }
 
   const risk = approval.risk || story.last_risk || story.risk || { score: 0 };
@@ -93,6 +116,8 @@ function maybeAutoApproveForFullauto({ rootDir, story = {}, now = new Date() } =
 module.exports = {
   AUTOAPPROVER_VERSION,
   FULLAUTO_AUTO_APPROVABLE_TYPES,
+  APPROVAL_ID_GATE_KIND,
+  deriveGateKind,
   readModeSafely,
   maybeAutoApproveForFullauto
 };
