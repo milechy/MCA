@@ -120,11 +120,68 @@ test('approvedOpenCodeApplyPreflight blocks invalid states', () => {
   expect(approvedOpenCodeApplyPreflight({ rootDir, approval_id: approval.approval_id, patch_hash: approval.patch_hash }).reason).toBe('candidate_patch_missing');
 });
 
-test('approvedOpenCodeApplyPreflight blocks tracked diff before file change step', () => {
+test('Phase 1 #9 (I): pre_apply_diff_hash mismatch is downgraded to informational when patch still applies cleanly (Bug F regression)', () => {
+  // Bug F scenario: between DIFF-approval creation and APPLY execution, the
+  // diff hash drifted (e.g. approval was created while another story had a
+  // dirty working tree from its own mid-APPLY state; by the time our APPLY
+  // runs, that story has COMMITed and the tree is clean again — so the
+  // recorded pre_exec_diff_hash no longer equals the live hash). Previously
+  // the strict equality check escalated us with pre_apply_diff_hash_mismatch
+  // even though our patch (touching unrelated files) still applies cleanly.
+  // With the Phase 1 #9 (I) semantic check, the preflight passes and records
+  // the drift in pre_apply_diff_hash_changed for observability.
   const rootDir = makeGitRepo();
   const { approval } = makeApprovedPatchApproval(rootDir);
-  fs.writeFileSync(path.join(rootDir, 'README.md'), '# changed\n');
-  expect(approvedOpenCodeApplyPreflight({ rootDir, approval_id: approval.approval_id, patch_hash: approval.patch_hash }).reason).toBe('pre_apply_diff_hash_mismatch');
+  // Simulate the drift by overwriting the approval's pre_exec_diff_hash with
+  // a fake non-matching value. This is the equivalent of the live hash
+  // having drifted between approval creation and APPLY.
+  const driftedApproval = { ...approval, pre_exec_diff_hash: 'sha256:0000drifted0000drifted0000drifted0000drifted0000drifted0000drift' };
+  writeApprovalFile(rootDir, driftedApproval);
+
+  const result = approvedOpenCodeApplyPreflight({ rootDir, approval_id: driftedApproval.approval_id, patch_hash: driftedApproval.patch_hash });
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe(null);
+  expect(result.pre_apply_diff_hash_changed).toBe(true);
+  expect(result.expected_pre_apply_diff_hash).toBe(driftedApproval.pre_exec_diff_hash);
+  expect(result.pre_apply_diff_hash).not.toBe(driftedApproval.pre_exec_diff_hash);
+  expect(result.apply_check_ok).toBe(true);
+  expect(result.apply_check_stderr_preview).toBe(null);
+  expect(result.apply_allowed).toBe(true);
+});
+
+test('Phase 1 #9 (I): preflight blocks candidate_patch_does_not_apply_cleanly when patch genuinely cannot apply', () => {
+  // When the patch genuinely conflicts with the live tree (e.g. another
+  // story already created the same target file), we surface a clean
+  // descriptive failure with the git stderr preview rather than the
+  // misleading pre_apply_diff_hash_mismatch.
+  const rootDir = makeGitRepo();
+  const { approval } = makeApprovedPatchApproval(rootDir);
+  // The PATCH_TEXT creates a NEW file at tests/opencode-generated.spec.js.
+  // Pretend another story already created that file (forcing a conflict).
+  fs.mkdirSync(path.join(rootDir, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'tests/opencode-generated.spec.js'), 'pre-existing content from another story\n');
+  gitCommit(rootDir, 'collision: same target file created by another story');
+
+  const result = approvedOpenCodeApplyPreflight({ rootDir, approval_id: approval.approval_id, patch_hash: approval.patch_hash });
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('candidate_patch_does_not_apply_cleanly');
+  expect(result.apply_check_ok).toBe(false);
+  expect(typeof result.apply_check_stderr_preview).toBe('string');
+  expect(result.apply_check_stderr_preview.length).toBeGreaterThan(0);
+  expect(result.apply_allowed).toBe(false);
+});
+
+test('Phase 1 #9 (I): preflight exposes pre_apply_diff_hash + expected_pre_apply_diff_hash on success even when unchanged', () => {
+  // Observability contract: the happy path always reports both hashes and
+  // the changed flag so dashboards/logs can verify the check ran.
+  const rootDir = makeGitRepo();
+  const { approval } = makeApprovedPatchApproval(rootDir);
+  const result = approvedOpenCodeApplyPreflight({ rootDir, approval_id: approval.approval_id, patch_hash: approval.patch_hash });
+  expect(result.ok).toBe(true);
+  expect(result.pre_apply_diff_hash_changed).toBe(false);
+  expect(result.pre_apply_diff_hash).toBe(approval.pre_exec_diff_hash);
+  expect(result.expected_pre_apply_diff_hash).toBe(approval.pre_exec_diff_hash);
+  expect(result.apply_check_ok).toBe(true);
 });
 
 test('/opencode-apply-preflight handler returns non-mutating apply-ready summary', () => {
