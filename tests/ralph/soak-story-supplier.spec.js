@@ -124,3 +124,30 @@ test('emitOnce writes to a docs/soak/ path that is in DEFAULT_ALLOWED_PREFIXES f
   expect(s.requested_paths.length).toBe(1);
   expect(s.requested_paths[0].startsWith('docs/')).toBe(true);
 });
+
+test('Phase 1 #11: pickRequestedPath includes run_stamp suffix when provided so concurrent runs do not collide', () => {
+  // Bug I regression guard. Without run_stamp the soak supplier produced
+  // `docs/soak/<family>-<slug>-NNNNNN.md` that collided with prior runs'
+  // commits already pushed to the remote branch, causing `git_commit_failed`
+  // ("nothing to commit") on every story. Adding the supplier's run_stamp
+  // partitions paths per run.
+  const tpl = { family: 'glossary', slug: 'risk-score', title: 't', requirement: 'r' };
+  const p1 = pickRequestedPath(tpl, 5, '20260515020000');
+  const p2 = pickRequestedPath(tpl, 5, '20260515030000');
+  const pNone = pickRequestedPath(tpl, 5);
+  expect(p1).toBe('docs/soak/glossary-risk-score-000005-20260515020000.md');
+  expect(p2).toBe('docs/soak/glossary-risk-score-000005-20260515030000.md');
+  expect(p1).not.toBe(p2);
+  // Back-compat: no run_stamp keeps the prior layout.
+  expect(pNone).toBe('docs/soak/glossary-risk-score-000005.md');
+});
+
+test('Phase 1 #11: emitOnce with run_stamp writes a story whose requested_paths carries the stamp suffix', () => {
+  const rootDir = tmpRoot();
+  const state = { seq: 0 };
+  const r = emitOnce({ rootDir, mode: 'approval', story_prefix: 'SOAK', dry_run: false, state, now: new Date(), run_stamp: '20260515020000' });
+  expect(r.ok).toBe(true);
+  const s = readStory(rootDir, r.story_id);
+  expect(s.requested_paths.length).toBe(1);
+  expect(s.requested_paths[0]).toMatch(/^docs\/soak\/.+-\d{6}-20260515020000\.md$/);
+});

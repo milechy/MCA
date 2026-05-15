@@ -1,9 +1,68 @@
 #!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
 const { schedulerTick } = require('../../src/ralph/autonomous-scheduler');
 const { tickIssueSupplier, supplierOptionsFromEnv } = require('../../src/ralph/github-issue-supplier');
 
 function parseBool(value) {
   return value === true || value === 'true';
+}
+
+// Phase 1 #11: refuse to start a second concurrent daemon against the same
+// rootDir. Two daemons ticking the same .ralph/stories/ directory in
+// parallel produced cross-daemon races where one daemon's Phase 1 #7 GATES
+// rollback removed files that the other daemon's COMMIT_APPROVAL preflight
+// was about to verify — surfacing as applied_files_missing in the soak.
+const DAEMON_LOCK_PATH_REL = '.ralph/locks/autonomous-daemon.lock';
+
+function tryAcquireDaemonLock(rootDir) {
+  const lockPath = path.join(rootDir, DAEMON_LOCK_PATH_REL);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Atomic create-only open: fails if the file already exists.
+  let fd;
+  try {
+    fd = fs.openSync(lockPath, 'wx');
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      // Stale-lock recovery: if the PID inside is no longer alive, take over.
+      let stalePid = null;
+      try {
+        const content = fs.readFileSync(lockPath, 'utf8');
+        const parsed = JSON.parse(content);
+        stalePid = Number.parseInt(parsed.pid, 10);
+      } catch { /* ignore */ }
+      if (Number.isInteger(stalePid) && stalePid > 0 && !pidIsAlive(stalePid)) {
+        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+        return tryAcquireDaemonLock(rootDir);
+      }
+      return { ok: false, reason: 'daemon_lock_held', lock_path: DAEMON_LOCK_PATH_REL, holder_pid: stalePid };
+    }
+    return { ok: false, reason: 'daemon_lock_create_failed', error: String(error && error.message || error) };
+  }
+  try {
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return { ok: true, lock_path: DAEMON_LOCK_PATH_REL };
+}
+
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function releaseDaemonLock(rootDir) {
+  const lockPath = path.join(rootDir, DAEMON_LOCK_PATH_REL);
+  try {
+    const content = fs.readFileSync(lockPath, 'utf8');
+    const parsed = JSON.parse(content);
+    if (Number.parseInt(parsed.pid, 10) === process.pid) fs.unlinkSync(lockPath);
+  } catch { /* ignore */ }
 }
 
 function parseArgs(argv = process.argv.slice(2), env = process.env) {
@@ -64,6 +123,16 @@ async function runDaemon(options = parseArgs()) {
   process.once?.('SIGINT', stop);
   process.once?.('SIGTERM', stop);
 
+  const lock = tryAcquireDaemonLock(options.rootDir);
+  if (!lock.ok) {
+    console.error(JSON.stringify({ ok: false, stage: 'ralph_autonomous_daemon', reason: lock.reason, holder_pid: lock.holder_pid || null, lock_path: lock.lock_path }, null, 2));
+    return { ok: false, stage: 'ralph_autonomous_daemon', reason: lock.reason, holder_pid: lock.holder_pid || null, cycles: 0, stopped: true, outputs: [], next_action: 'kill_other_daemon_or_remove_stale_lock' };
+  }
+  const releaseLockOnExit = () => releaseDaemonLock(options.rootDir);
+  process.once?.('SIGINT', releaseLockOnExit);
+  process.once?.('SIGTERM', releaseLockOnExit);
+  process.once?.('exit', releaseLockOnExit);
+
   const outputs = [];
   let cycle = 0;
   while (!stopped) {
@@ -100,6 +169,8 @@ async function runDaemon(options = parseArgs()) {
     await sleep(options.interval_ms);
   }
 
+  releaseDaemonLock(options.rootDir);
+
   return {
     ok: outputs.every((item) => item.ok === true),
     stage: 'ralph_autonomous_daemon',
@@ -126,5 +197,8 @@ module.exports = {
   parseBool,
   parseArgs,
   daemonStatus,
-  runDaemon
+  runDaemon,
+  tryAcquireDaemonLock,
+  releaseDaemonLock,
+  DAEMON_LOCK_PATH_REL
 };
