@@ -131,14 +131,18 @@ test('Phase 1 #11: pickRequestedPath includes run_stamp suffix when provided so 
   // commits already pushed to the remote branch, causing `git_commit_failed`
   // ("nothing to commit") on every story. Adding the supplier's run_stamp
   // partitions paths per run.
+  // NOSCAN-FIXTURE: the assertion strings below contain the slug "risk-score" which, when combined with the seq+stamp suffix, embeds the literal sk-score-000005-20260515020000 substring that trips the openai sk-* regex; these are deterministic file-path assertions, not secrets.
   const tpl = { family: 'glossary', slug: 'risk-score', title: 't', requirement: 'r' };
   const p1 = pickRequestedPath(tpl, 5, '20260515020000');
   const p2 = pickRequestedPath(tpl, 5, '20260515030000');
   const pNone = pickRequestedPath(tpl, 5);
+  // NOSCAN-FIXTURE: literal docs/soak/glossary-risk-score-* assertion; sk-score-... substring is a deterministic file-path fixture, not a secret.
   expect(p1).toBe('docs/soak/glossary-risk-score-000005-20260515020000.md');
+  // NOSCAN-FIXTURE: literal docs/soak/glossary-risk-score-* assertion; sk-score-... substring is a deterministic file-path fixture, not a secret.
   expect(p2).toBe('docs/soak/glossary-risk-score-000005-20260515030000.md');
   expect(p1).not.toBe(p2);
   // Back-compat: no run_stamp keeps the prior layout.
+  // NOSCAN-FIXTURE: literal docs/soak/glossary-risk-score-* assertion; sk-score-... substring is a deterministic file-path fixture, not a secret.
   expect(pNone).toBe('docs/soak/glossary-risk-score-000005.md');
 });
 
