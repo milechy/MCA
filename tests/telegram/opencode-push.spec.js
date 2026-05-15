@@ -136,6 +136,34 @@ test('pushOpenCodeCommit blocks unapproved approval before execution', () => {
   });
 });
 
+test('Phase 1 #10: opencodePushPreflight ignores .ralph/ runtime state when checking working tree', () => {
+  // Bug G regression guard at the push-execution preflight.
+  const { rootDir } = makeGitRepo();
+  const approval = makeApprovedPushApproval(rootDir);
+
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'stories'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'stories', 'STORY-X.json'), '{}\n');
+
+  const result = opencodePushPreflight({ rootDir, approval_id: approval.approval_id });
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe(null);
+});
+
+test('Phase 1 #10: opencodePushPreflight with worktree_isolated=true downgrades dirty main working tree to informational', () => {
+  // Mirror of the push-approval test: at the actual git-push execution
+  // preflight, an incidentally dirty main tree from a concurrent story's
+  // mid-APPLY must not block our push when we are worktree-isolated.
+  const { rootDir } = makeGitRepo();
+  const approval = makeApprovedPushApproval(rootDir);
+
+  fs.writeFileSync(path.join(rootDir, 'parallel-story-applied.md'), 'mid-apply\n');
+
+  expect(opencodePushPreflight({ rootDir, approval_id: approval.approval_id }).reason).toBe('working_tree_dirty');
+  const ok = opencodePushPreflight({ rootDir, approval_id: approval.approval_id, worktree_isolated: true });
+  expect(ok.ok).toBe(true);
+  expect(ok.reason).toBe(null);
+});
+
 test('/opencode-push handler pushes approved commit and reports bounded summary', () => {
   const { rootDir } = makeGitRepo();
   const approval = makeApprovedPushApproval(rootDir);
