@@ -1,10 +1,38 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { calculateDiffHash } = require('../ralph/hash');
 const { APPROVAL_TYPES, APPROVAL_STATUSES } = require('../ralph/types');
 const { readApproval } = require('../ralph/approval-manager');
 const { assertSandboxLocalPath } = require('./opencode-sandbox-runner');
 const { calculatePatchHash } = require('./opencode-patch-approval');
+
+const APPLY_CHECK_TIMEOUT_MS = 15000;
+
+function oneLine(value, maxLength = 240) {
+  const normalized = String(value || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function gitApplyCheck(rootDir, absolutePatchPath, timeout = APPLY_CHECK_TIMEOUT_MS) {
+  const result = spawnSync('git', ['apply', '--check', '--whitespace=nowarn', absolutePatchPath], {
+    cwd: rootDir,
+    encoding: 'utf8',
+    timeout,
+    maxBuffer: 1024 * 64
+  });
+  const timedOut = result.error && result.error.code === 'ETIMEDOUT';
+  return {
+    ok: !timedOut && result.status === 0,
+    timed_out: !!timedOut,
+    exit_code: typeof result.status === 'number' ? result.status : null,
+    stderr_preview: oneLine(result.stderr || result.error?.message || '', 240)
+  };
+}
 
 function blocked(reason, extra = {}) {
   return {
@@ -16,6 +44,9 @@ function blocked(reason, extra = {}) {
     expected_patch_hash: extra.expected_patch_hash || null,
     pre_apply_diff_hash: extra.pre_apply_diff_hash || null,
     expected_pre_apply_diff_hash: extra.expected_pre_apply_diff_hash || null,
+    pre_apply_diff_hash_changed: !!extra.pre_apply_diff_hash_changed,
+    apply_check_ok: extra.apply_check_ok === undefined ? null : !!extra.apply_check_ok,
+    apply_check_stderr_preview: extra.apply_check_stderr_preview || null,
     candidate_patch_path: extra.candidate_patch_path || null,
     sandbox_root: extra.sandbox_root || null,
     apply_allowed: false,
@@ -71,9 +102,35 @@ function approvedOpenCodeApplyPreflight({ rootDir = process.cwd(), approval_id, 
     return blocked('patch_hash_mismatch', { ...base, patch_hash: suppliedPatchHash, expected_patch_hash: approval.patch_hash });
   }
 
+  // Phase 1 #9 (I): replace the strict pre_apply_diff_hash equality check
+  // with a semantic "does this patch still apply cleanly?" test. The original
+  // hash equality was fundamentally fragile under the autonomous loop:
+  // between DIFF-approval creation and APPLY execution, other serialized
+  // stories' COMMIT phases legitimately advance main's tree, drifting the
+  // diff hash even though our own patch is still applicable. Bug F was
+  // exactly that false positive — pre_apply_diff_hash_mismatch blocking
+  // stories whose patches would have applied cleanly.
+  //
+  // The replacement: run `git apply --check` against the live working tree.
+  // If the patch would apply, we proceed; if not, we surface a descriptive
+  // candidate_patch_does_not_apply_cleanly with the git stderr preview.
+  //
+  // We still record `pre_apply_diff_hash` and `expected_pre_apply_diff_hash`
+  // for observability, plus a new `pre_apply_diff_hash_changed` boolean so
+  // operators can see at a glance whether main moved (informational, never
+  // a blocker on its own).
   const currentDiffHash = calculateDiffHash(rootDir);
-  if (approval.pre_exec_diff_hash !== currentDiffHash) {
-    return blocked('pre_apply_diff_hash_mismatch', { ...base, pre_apply_diff_hash: currentDiffHash, expected_pre_apply_diff_hash: approval.pre_exec_diff_hash });
+  const preApplyDiffHashChanged = approval.pre_exec_diff_hash !== currentDiffHash;
+
+  const applyCheck = gitApplyCheck(rootDir, absolutePatchPath);
+  if (!applyCheck.ok) {
+    return blocked('candidate_patch_does_not_apply_cleanly', {
+      ...base,
+      pre_apply_diff_hash: currentDiffHash,
+      pre_apply_diff_hash_changed: preApplyDiffHashChanged,
+      apply_check_ok: false,
+      apply_check_stderr_preview: applyCheck.stderr_preview
+    });
   }
 
   return {
@@ -88,6 +145,10 @@ function approvedOpenCodeApplyPreflight({ rootDir = process.cwd(), approval_id, 
     sandbox_root: approval.sandbox_root,
     patch_hash: approval.patch_hash,
     pre_apply_diff_hash: currentDiffHash,
+    expected_pre_apply_diff_hash: approval.pre_exec_diff_hash || null,
+    pre_apply_diff_hash_changed: preApplyDiffHashChanged,
+    apply_check_ok: true,
+    apply_check_stderr_preview: null,
     files_touched: approval.files_touched || [],
     risk: approval.risk,
     apply_allowed: true,
