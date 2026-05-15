@@ -6,7 +6,9 @@ const {
   tickAutonomousLoop,
   defaultSandboxRoot,
   defaultApprovalId,
-  defaultJobId
+  defaultJobId,
+  opencodeKimiDirectEnabled,
+  nemoclawDispatcherExplicitlyEnabled
 } = require('./autonomous-loop');
 const { createOpenCodePushApproval } = require('../telegram/opencode-push-approval');
 const { pushOpenCodeCommit } = require('../telegram/opencode-push');
@@ -357,13 +359,19 @@ function ensurePushApprovalAfterCommit(result, { rootDir, now, env = process.env
   if (!story) return result;
   const commitSha = story.current_commit_sha || result.current_commit_sha || result.commit_sha || story.last_commit_result?.commit_sha;
   const createApproval = create_push_approval || createOpenCodePushApproval;
+  // Phase 1 #10: same downgrade as the sandbox preflight — when the
+  // dispatcher uses git-worktree isolation, an incidentally dirty main
+  // working tree (from a parallel story's mid-APPLY) must not escalate this
+  // story's push approval. Bug G regression guard.
+  const worktreeIsolated = opencodeKimiDirectEnabled(env) || !nemoclawDispatcherExplicitlyEnabled(env);
   const pushApproval = createApproval({
     rootDir,
     commit_sha: commitSha,
     branch: branchForStory(story, env),
     remote: 'origin',
     allowed_user_ids: [],
-    now
+    now,
+    worktree_isolated: worktreeIsolated
   });
 
   if (!pushApproval.ok) {
@@ -442,7 +450,9 @@ function resumeApprovalToExecutionPhase(story, { rootDir, now, approvals = {} })
 
 function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, push_runner, create_pr_approval }) {
   const runner = push_runner || pushOpenCodeCommit;
-  const push = runner({ rootDir, approval_id: story.current_approval_id, timeout_ms, now: () => now });
+  // Phase 1 #10: same worktree_isolated downgrade for the execution preflight.
+  const worktreeIsolated = opencodeKimiDirectEnabled(env) || !nemoclawDispatcherExplicitlyEnabled(env);
+  const push = runner({ rootDir, approval_id: story.current_approval_id, timeout_ms, now: () => now, worktree_isolated: worktreeIsolated });
   if (!push.ok) {
     const summary = boundedSummary(push);
     const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, {

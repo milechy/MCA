@@ -112,3 +112,40 @@ test('git helpers return compact repository state', () => {
   expect(currentBranch(rootDir)).toBe('feature/opencode-push');
   expect(gitStatusShort(rootDir)).toBe('');
 });
+
+test('Phase 1 #10: createOpenCodePushApproval ignores .ralph/ runtime state when checking working tree', () => {
+  // The push approval must not be blocked by Ralph's own runtime state
+  // (story queue, approval-pending files, tmp dirs). Bug G regression guard.
+  const rootDir = makeGitRepo();
+  const head = currentHead(rootDir);
+  const branch = currentBranch(rootDir);
+
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'stories'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'stories', 'STORY-X.json'), '{}\n');
+  fs.mkdirSync(path.join(rootDir, '.ralph', 'tmp'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, '.ralph', 'tmp', 'scratch.txt'), 'tmp\n');
+
+  const result = createOpenCodePushApproval({ rootDir, commit_sha: head, branch, remote: 'origin' });
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe(null);
+});
+
+test('Phase 1 #10: createOpenCodePushApproval with worktree_isolated=true downgrades a dirty main working tree to informational', () => {
+  // Bug G core fix: when the autonomous-loop dispatcher uses per-story
+  // git-worktree isolation, an incidentally dirty main working tree (from
+  // a concurrent story mid-APPLY) must not escalate our push approval.
+  const rootDir = makeGitRepo();
+  const head = currentHead(rootDir);
+  const branch = currentBranch(rootDir);
+
+  // Simulate a parallel story's mid-APPLY state outside .ralph/
+  fs.writeFileSync(path.join(rootDir, 'parallel-story-applied.md'), 'mid-apply\n');
+
+  // Without worktree_isolated: blocks (back-compat with non-isolated callers).
+  expect(createOpenCodePushApproval({ rootDir, commit_sha: head, branch, remote: 'origin' }).reason).toBe('working_tree_dirty');
+
+  // With worktree_isolated=true: passes.
+  const result = createOpenCodePushApproval({ rootDir, commit_sha: head, branch, remote: 'origin', worktree_isolated: true });
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe(null);
+});

@@ -2,6 +2,14 @@ const { spawnSync } = require('node:child_process');
 const { readApproval } = require('../ralph/approval-manager');
 const { APPROVAL_STATUSES } = require('../ralph/types');
 const { currentHead, currentBranch, gitStatusShort } = require('./opencode-push-approval');
+const { parseGitStatusPorcelain, isRalphRuntimeStatePath } = require('./opencode-sandbox-preflight');
+
+// Phase 1 #10: mirror push-approval's dirty filter at the execution preflight.
+function blockingDirtyEntries(rootDir) {
+  const raw = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: rootDir, encoding: 'utf8', maxBuffer: 1024 * 64 });
+  if (raw.status !== 0) return null;
+  return parseGitStatusPorcelain(raw.stdout || '').filter((entry) => !isRalphRuntimeStatePath(entry.path));
+}
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const SECRET_LIKE_PATTERN = /(?:\b\d{8,}:[A-Za-z0-9_-]{20,}\b|ghp_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9+/]{32,}={0,2})/g;
@@ -51,7 +59,7 @@ function blocked(reason, extra = {}) {
   };
 }
 
-function opencodePushPreflight({ rootDir = process.cwd(), approval_id } = {}) {
+function opencodePushPreflight({ rootDir = process.cwd(), approval_id, worktree_isolated = false } = {}) {
   if (!approval_id) return blocked('approval_id_required');
   let approval;
   try {
@@ -69,9 +77,9 @@ function opencodePushPreflight({ rootDir = process.cwd(), approval_id } = {}) {
   if (head !== approval.commit_sha) return blocked('commit_sha_not_head', base);
   const branch = currentBranch(rootDir);
   if (branch !== approval.branch) return blocked('branch_not_current', base);
-  const status = gitStatusShort(rootDir);
-  if (status === null) return blocked('git_status_failed', base);
-  if (status !== '') return blocked('working_tree_dirty', base);
+  const blocking = blockingDirtyEntries(rootDir);
+  if (blocking === null) return blocked('git_status_failed', base);
+  if (blocking.length > 0 && !worktree_isolated) return blocked('working_tree_dirty', base);
   return {
     ok: true,
     stage: 'opencode_push_preflight',
@@ -94,8 +102,8 @@ function opencodePushPreflight({ rootDir = process.cwd(), approval_id } = {}) {
   };
 }
 
-function pushOpenCodeCommit({ rootDir = process.cwd(), approval_id, timeout_ms = DEFAULT_TIMEOUT_MS, now = () => new Date() } = {}) {
-  const preflight = opencodePushPreflight({ rootDir, approval_id });
+function pushOpenCodeCommit({ rootDir = process.cwd(), approval_id, timeout_ms = DEFAULT_TIMEOUT_MS, now = () => new Date(), worktree_isolated = false } = {}) {
+  const preflight = opencodePushPreflight({ rootDir, approval_id, worktree_isolated });
   if (!preflight.ok) return { ...preflight, stage: 'opencode_push' };
   const startedAt = now().toISOString();
   const result = spawnSync('git', ['push', preflight.remote, `HEAD:${preflight.branch}`], {
