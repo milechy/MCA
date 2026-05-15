@@ -6,6 +6,28 @@ const { findApprovedResumeApproval } = require('./resume-after-security-stop');
 const SCHEDULER_VERSION = 'autonomous_scheduler_v0_1';
 const RUNNABLE_STATUSES = new Set(['queued', 'running', 'waiting_approval']);
 
+// Phase 1 #8 fix: stories in any of these phases hold an exclusive lock on the
+// real repository working tree (APPLY writes files into it; GATES reads it for
+// secret-scan/playwright; COMMIT_APPROVAL_PENDING parks the commit approval
+// against an applied-but-not-committed tree; COMMIT executes git commit
+// against that same tree). Allowing two stories to be in this set
+// simultaneously caused the 2026-05-14 Phase 1 #7 cascade: story A's APPLY
+// landed alongside story B's APPLY, then story A's COMMIT failed because the
+// working tree carried files that did not belong to A's commit. The scheduler
+// therefore serializes the critical section: when any story occupies it, the
+// scheduler returns ONLY that story until it exits to PUSH_APPROVAL_PENDING /
+// ESCALATED / FIX_LOOP.
+const CRITICAL_SECTION_PHASES = new Set([
+  'APPLY',
+  'GATES',
+  'COMMIT_APPROVAL_PENDING',
+  'COMMIT'
+]);
+
+function inCriticalSection(story) {
+  return !!(story && CRITICAL_SECTION_PHASES.has(story.current_phase));
+}
+
 function retryAfterAt(story) {
   if (!story || !story.retry_after_at) return null;
   const timestamp = Date.parse(story.retry_after_at);
@@ -46,6 +68,19 @@ function selectRunnableStories({ rootDir = process.cwd(), limit = 5, now = new D
   // to PLAN_APPROVAL_PENDING on the same tick; without this widening the
   // scheduler would never even call the wired loop for a stopped story.
   const stories = all.filter((story) => isRunnableStory(story, { now }) || hasApprovedResumeWaiting(story, { rootDir, now }));
+
+  // Phase 1 #8 critical-section serialization: if any runnable story is
+  // already in {APPLY, GATES, COMMIT_APPROVAL_PENDING, COMMIT}, return only
+  // that story. The remaining queue waits in earlier phases (typically
+  // DIFF_APPROVAL_PENDING or auto-approved-then-waiting) until the critical-
+  // section holder advances to PUSH_APPROVAL_PENDING / ESCALATED / FIX_LOOP.
+  // We pick the highest-priority critical holder so a deterministic single
+  // story advances per cycle. Cap is hard at 1.
+  const criticalHolders = stories.filter(inCriticalSection);
+  if (criticalHolders.length > 0) {
+    return sortStoriesByPriority(criticalHolders).slice(0, 1);
+  }
+
   return sortStoriesByPriority(stories).slice(0, Math.max(1, Math.min(25, limit)));
 }
 
@@ -86,6 +121,8 @@ function schedulerTick({ rootDir = process.cwd(), now = new Date(), limit = 1, t
 
 module.exports = {
   SCHEDULER_VERSION,
+  CRITICAL_SECTION_PHASES,
+  inCriticalSection,
   retryAfterAt,
   storyBackoffActive,
   isRunnableStory,
