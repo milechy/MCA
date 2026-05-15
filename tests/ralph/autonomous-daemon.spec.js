@@ -116,3 +116,68 @@ test('daemonStatus surfaces a supplier summary when one is provided', () => {
     issue_supplier: { ok: true, pulled: true, repo: 'owner/repo' }
   });
 });
+
+const { tryAcquireDaemonLock, releaseDaemonLock, DAEMON_LOCK_PATH_REL } = require('../../scripts/ralph/autonomous-daemon');
+
+test('Phase 1 #11: tryAcquireDaemonLock writes the holder pid and refuses a second acquire while held', () => {
+  // Bug H regression guard. Two daemons ticking the same .ralph/stories/ in
+  // parallel produced cross-daemon races (e.g. one daemon's GATES rollback
+  // unlinked a file the other daemon's COMMIT_APPROVAL preflight was about
+  // to verify, surfacing as `applied_files_missing`). The lock makes this
+  // impossible at the daemon-process boundary.
+  const rootDir = tmpRoot();
+
+  const first = tryAcquireDaemonLock(rootDir);
+  expect(first.ok).toBe(true);
+  expect(first.lock_path).toBe(DAEMON_LOCK_PATH_REL);
+
+  const lockFile = path.join(rootDir, DAEMON_LOCK_PATH_REL);
+  expect(fs.existsSync(lockFile)).toBe(true);
+  const recorded = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+  expect(recorded.pid).toBe(process.pid);
+  expect(typeof recorded.acquired_at).toBe('string');
+
+  const second = tryAcquireDaemonLock(rootDir);
+  expect(second.ok).toBe(false);
+  expect(second.reason).toBe('daemon_lock_held');
+  expect(second.holder_pid).toBe(process.pid);
+
+  releaseDaemonLock(rootDir);
+  expect(fs.existsSync(lockFile)).toBe(false);
+
+  // After release, a new acquire succeeds.
+  const third = tryAcquireDaemonLock(rootDir);
+  expect(third.ok).toBe(true);
+  releaseDaemonLock(rootDir);
+});
+
+test('Phase 1 #11: tryAcquireDaemonLock recovers a stale lock whose pid is no longer alive', () => {
+  const rootDir = tmpRoot();
+  const lockPath = path.join(rootDir, DAEMON_LOCK_PATH_REL);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Write a lock with a PID that's almost certainly not running (PID 1 is
+  // root init on POSIX but on macOS we can't kill 0 it reliably from a
+  // non-root context; use an obviously-dead PID instead).
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999999, acquired_at: '1990-01-01T00:00:00Z' }));
+
+  const r = tryAcquireDaemonLock(rootDir);
+  expect(r.ok).toBe(true);
+  const recorded = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  expect(recorded.pid).toBe(process.pid);
+  releaseDaemonLock(rootDir);
+});
+
+test('Phase 1 #11: releaseDaemonLock refuses to remove a lock held by a different pid', () => {
+  const rootDir = tmpRoot();
+  const lockPath = path.join(rootDir, DAEMON_LOCK_PATH_REL);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Write a lock with another (still-alive) pid: this process's parent pid,
+  // which is virtually always 1 or another live process.
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid, acquired_at: '2026-05-15T00:00:00Z' }));
+
+  releaseDaemonLock(rootDir);
+  // Other-pid lock is preserved.
+  expect(fs.existsSync(lockPath)).toBe(true);
+  // Clean up to avoid leaking into other tests.
+  fs.unlinkSync(lockPath);
+});

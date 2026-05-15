@@ -147,18 +147,26 @@ function nextTemplate(seq) {
   return FLAT_TEMPLATES[seq % FLAT_TEMPLATES.length];
 }
 
-function pickRequestedPath(template, seq) {
-  return `docs/soak/${template.family}-${template.slug}-${String(seq).padStart(6, '0')}.md`;
+// Phase 1 #11 fix: include a run_stamp in the path so each soak run produces
+// unique file paths. Prior soak runs frequently pushed successful stories'
+// docs/soak/<title>-NNNNNN.md to the remote branch; on the next soak the
+// supplier would emit a story trying to create the SAME path, but because
+// the file was tracked at HEAD already, COMMIT would fail ("nothing to
+// commit"; identical content). Run-stamping the path eliminates collisions
+// between runs without changing the template list.
+function pickRequestedPath(template, seq, runStamp = '') {
+  const suffix = runStamp ? `-${runStamp}` : '';
+  return `docs/soak/${template.family}-${template.slug}-${String(seq).padStart(6, '0')}${suffix}.md`;
 }
 
-function buildStoryInput({ template, seq, mode, story_prefix, now }) {
+function buildStoryInput({ template, seq, mode, story_prefix, now, run_stamp }) {
   const stamp = now.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   const storyId = `STORY-${story_prefix}-${stamp}-${String(seq).padStart(6, '0')}`.slice(0, 80);
   return {
     story_id: storyId,
     title: template.title,
     requirement: template.requirement,
-    requested_paths: [pickRequestedPath(template, seq)],
+    requested_paths: [pickRequestedPath(template, seq, run_stamp)],
     priority: 50,
     mode,
     target_env: 'local',
@@ -168,10 +176,10 @@ function buildStoryInput({ template, seq, mode, story_prefix, now }) {
   };
 }
 
-function emitOnce({ rootDir, mode, story_prefix, dry_run, state, now }) {
+function emitOnce({ rootDir, mode, story_prefix, dry_run, state, now, run_stamp }) {
   const template = nextTemplate(state.seq);
   if (!template) return { ok: false, reason: 'no_templates' };
-  const input = buildStoryInput({ template, seq: state.seq, mode, story_prefix, now });
+  const input = buildStoryInput({ template, seq: state.seq, mode, story_prefix, now, run_stamp });
   if (dry_run) {
     appendSupplierLog(rootDir, { event: 'supplier_dry_run', story_id: input.story_id, family: template.family, slug: template.slug, requested_paths: input.requested_paths });
     return { ok: true, story_id: input.story_id, family: template.family, slug: template.slug, dry_run: true };
@@ -198,6 +206,10 @@ async function runSupplier(options) {
   process.once?.('SIGTERM', stop);
 
   const startedAt = new Date();
+  // Phase 1 #11: capture a compact run_stamp once per supplier process and
+  // bake it into every requested_path the supplier emits, so concurrent or
+  // sequential soak runs never collide on the same file path.
+  const runStamp = startedAt.toISOString().slice(0, 19).replace(/[-:T]/g, '');
   appendSupplierLog(rootDir, {
     event: 'supplier_started',
     version: SUPPLIER_VERSION,
@@ -206,13 +218,14 @@ async function runSupplier(options) {
     max_stories: options.max_stories,
     mode: options.mode,
     story_prefix: options.story_prefix,
+    run_stamp: runStamp,
     dry_run: options.dry_run
   });
 
   let state = loadSupplierState(rootDir);
   let emitted = 0;
   while (!stopped) {
-    const result = emitOnce({ rootDir, mode: options.mode, story_prefix: options.story_prefix, dry_run: options.dry_run, state, now: new Date() });
+    const result = emitOnce({ rootDir, mode: options.mode, story_prefix: options.story_prefix, dry_run: options.dry_run, state, now: new Date(), run_stamp: runStamp });
     if (result.ok) {
       emitted += 1;
       state.seq += 1;
