@@ -331,6 +331,54 @@ human review outcome
 failure reason if failed
 ```
 
+Write a bounded canary batch report from collected issue results:
+
+```bash
+node src/ralph/cli.js canary-batch-report \
+  --input /path/to/canary-issues.json \
+  --output .ralph/canary-batches/level-5-report.json
+```
+
+Input shape:
+
+```json
+{
+  "criteria": { "min_success_rate": 0.7, "min_issues": 3 },
+  "issues": [
+    {
+      "issue_number": 101,
+      "story_id": "STORY-GH-101",
+      "requested_paths": ["docs/example.md"],
+      "patch_source": "live_provider",
+      "provider_result": "ok",
+      "outcome": "passed",
+      "approval_count": 4,
+      "repair_attempts": 0,
+      "gates_ok": true,
+      "pr_url": "https://github.com/milechy/MCA/pull/101",
+      "review_result": "accepted"
+    }
+  ]
+}
+```
+
+Report summary includes:
+
+```text
+total
+passed
+failed
+blocked
+skipped
+success_rate
+reviewable_prs
+manual_json_edits
+policy_violations
+secret_leaks
+unauthorized_side_effects
+failure_taxonomy
+```
+
 Success criteria should be chosen before the batch. Example:
 
 ```text
