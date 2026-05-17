@@ -11,6 +11,7 @@ const { runNemoClawOpenCodeCandidatePatch } = require('./nemoclaw-opencode-gatew
 const { dispatchOpenCodeKimi } = require('./opencode-kimi-dispatcher');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
 const { rollbackAppliedFiles } = require('./apply-rollback');
+const { promoteCommitToFeatureBranch, featureBranchForStory } = require('./feature-branch-promote');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
 const { createOpenCodePatchPreviewApproval } = require('../telegram/opencode-patch-approval');
@@ -143,7 +144,11 @@ function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
   return baseResult({ ok: false, reason: gateFailureReason(gates, repair), story_id: story.story_id, from_phase: story.current_phase, to_phase: nextPhase, story: updated.summary, gates, repair, apply_rollback: rollback, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: gates.execution_connected === true, commands_executed: gates.commands_executed || [], files_modified: gates.files_modified || [], repository_files_modified: gates.repository_files_modified || [], next_action: repair.next_action });
 }
 
-function advanceCommitPhase(story, { rootDir, now, timeout_ms }) {
+function trunkBranchForPromotion(env = process.env) {
+  return env.RALPH_PR_BASE_BRANCH || env.RALPH_TRUNK_BRANCH || 'infra/phase0-autonomous-foundation';
+}
+
+function advanceCommitPhase(story, { rootDir, now, timeout_ms, env = process.env }) {
   const commit = commitOpenCodeAppliedPatch({ rootDir, approval_id: story.current_approval_id, timeout_ms, now: () => now });
   if (!commit.ok) {
     const summary = boundedFailureSummary(commit);
@@ -161,13 +166,46 @@ function advanceCommitPhase(story, { rootDir, now, timeout_ms }) {
     return baseResult({ ok: false, reason: commit.reason || 'commit_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, apply_rollback: rollback, provider_config: story.last_provider_config || null, execution_connected: commit.execution_connected === true, commands_executed: commit.commands_executed || [], files_modified: commit.files_modified || [], repository_files_modified: commit.repository_files_modified || [], commit_allowed: false, next_action: 'human_escalation_required' });
   }
 
-  const updated = updateStoryForPhase(story, LOOP_PHASES.PUSH_APPROVAL_PENDING, { blocked_reason: null, retry_after_at: null, last_commit_result: boundedFailureSummary(commit), current_commit_sha: commit.commit_sha || null }, { rootDir, now, event: 'commit_completed' });
-  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.PUSH_APPROVAL_PENDING, story: updated.summary, provider_config: story.last_provider_config || null, execution_connected: commit.execution_connected === true, commands_executed: commit.commands_executed || [], files_modified: commit.files_modified || [], repository_files_modified: commit.repository_files_modified || [], commit_allowed: false, next_action: nextActionForPhase(LOOP_PHASES.PUSH_APPROVAL_PENDING) });
+  // Phase 1 #13: promote the just-created commit onto a per-story feature
+  // branch and rewind trunk back to its prior tip. Without this, the
+  // autonomous loop pushes every story's commit directly to trunk and the
+  // subsequent PR creation fails with `base_branch_matches_head`
+  // (head=base=trunk). After this step, head=auto/<story-id>, base=trunk.
+  const trunkBranch = trunkBranchForPromotion(env);
+  const featureBranch = featureBranchForStory(story.story_id);
+  const promote = promoteCommitToFeatureBranch({
+    rootDir,
+    story_id: story.story_id,
+    commit_sha: commit.commit_sha,
+    trunk_branch: trunkBranch,
+    feature_branch: featureBranch
+  });
+  if (!promote.ok) {
+    const summary = boundedFailureSummary(commit);
+    const rollback = rollbackAppliedFiles({
+      rootDir,
+      apply_result: story.last_apply_result || commit,
+      requested_paths: Array.isArray(story.requested_paths) ? story.requested_paths : []
+    });
+    const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: promote.reason || 'feature_branch_promote_failed', last_gate_failure_summary: summary, last_apply_rollback: rollback, last_feature_branch_promote: promote }, { rootDir, now, event: 'feature_branch_promote_failed' });
+    return baseResult({ ok: false, reason: promote.reason || 'feature_branch_promote_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, failure_summary: summary, apply_rollback: rollback, feature_branch_promote: promote, provider_config: story.last_provider_config || null, execution_connected: false, commands_executed: commit.commands_executed || [], files_modified: commit.files_modified || [], repository_files_modified: commit.repository_files_modified || [], commit_allowed: false, next_action: 'human_escalation_required' });
+  }
+
+  const updated = updateStoryForPhase(story, LOOP_PHASES.PUSH_APPROVAL_PENDING, {
+    blocked_reason: null,
+    retry_after_at: null,
+    last_commit_result: boundedFailureSummary(commit),
+    current_commit_sha: commit.commit_sha || null,
+    current_branch: promote.feature_branch,
+    base_branch: promote.trunk_branch,
+    last_feature_branch_promote: promote
+  }, { rootDir, now, event: 'commit_completed' });
+  return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.PUSH_APPROVAL_PENDING, story: updated.summary, provider_config: story.last_provider_config || null, execution_connected: commit.execution_connected === true, commands_executed: commit.commands_executed || [], files_modified: commit.files_modified || [], repository_files_modified: commit.repository_files_modified || [], commit_allowed: false, feature_branch_promote: promote, next_action: nextActionForPhase(LOOP_PHASES.PUSH_APPROVAL_PENDING) });
 }
 
 function advanceFixLoopPhase(story, { rootDir, now }) { const updated = updateStoryForPhase(story, LOOP_PHASES.OPENCODE_RUNNING, { blocked_reason: null, retry_after_at: null, current_job_id: null, current_candidate_patch_path: null }, { rootDir, now, event: 'fix_loop_dispatch_ready' }); return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.OPENCODE_RUNNING, story: updated.summary, failure_summary: story.last_gate_failure_summary || null, repair: { failure_type: story.last_repair_type || null, repair_instruction: story.last_repair_instruction || null }, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.OPENCODE_RUNNING) }); }
 function advanceTerminalPhase(story) { return baseResult({ ok: true, reason: 'story_terminal', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: nextActionForPhase(story.current_phase) }); }
-function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms, nemclaw_spawn } = {}) { if (!story_id) return baseResult({ reason: 'story_id_required' }); const story = readStory(rootDir, story_id); if (!story) return baseResult({ reason: 'story_not_found', story_id }); if (story.status === STORY_STATUSES.STOPPED || story.current_phase === LOOP_PHASES.STOPPED) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.COMPLETED || story.current_phase === LOOP_PHASES.DONE) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.FAILED || story.current_phase === LOOP_PHASES.ESCALATED) return advanceTerminalPhase(story); switch (story.current_phase || LOOP_PHASES.PLAN) { case LOOP_PHASES.PLAN: return advancePlanPhase(story, { rootDir, now, env }); case LOOP_PHASES.PLAN_APPROVAL_PENDING: case LOOP_PHASES.DIFF_APPROVAL_PENDING: case LOOP_PHASES.COMMIT_APPROVAL_PENDING: case LOOP_PHASES.PUSH_APPROVAL_PENDING: case LOOP_PHASES.PR_APPROVAL_PENDING: return advanceWaitingApprovalPhase(story, { rootDir, now, approvals }); case LOOP_PHASES.OPENCODE_RUNNING: return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }); case LOOP_PHASES.PATCH_PREVIEW: return advancePatchPreviewPhase(story, { rootDir, now }); case LOOP_PHASES.APPLY: return advanceApplyPhase(story, { rootDir, now, apply_result, timeout_ms }); case LOOP_PHASES.GATES: return advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }); case LOOP_PHASES.COMMIT: return advanceCommitPhase(story, { rootDir, now, timeout_ms }); case LOOP_PHASES.FIX_LOOP: return advanceFixLoopPhase(story, { rootDir, now }); default: return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: 'implement_next_autonomous_loop_phase' }); } }
+function tickAutonomousLoop({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms, nemclaw_spawn } = {}) { if (!story_id) return baseResult({ reason: 'story_id_required' }); const story = readStory(rootDir, story_id); if (!story) return baseResult({ reason: 'story_not_found', story_id }); if (story.status === STORY_STATUSES.STOPPED || story.current_phase === LOOP_PHASES.STOPPED) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.COMPLETED || story.current_phase === LOOP_PHASES.DONE) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.FAILED || story.current_phase === LOOP_PHASES.ESCALATED) return advanceTerminalPhase(story); switch (story.current_phase || LOOP_PHASES.PLAN) { case LOOP_PHASES.PLAN: return advancePlanPhase(story, { rootDir, now, env }); case LOOP_PHASES.PLAN_APPROVAL_PENDING: case LOOP_PHASES.DIFF_APPROVAL_PENDING: case LOOP_PHASES.COMMIT_APPROVAL_PENDING: case LOOP_PHASES.PUSH_APPROVAL_PENDING: case LOOP_PHASES.PR_APPROVAL_PENDING: return advanceWaitingApprovalPhase(story, { rootDir, now, approvals }); case LOOP_PHASES.OPENCODE_RUNNING: return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }); case LOOP_PHASES.PATCH_PREVIEW: return advancePatchPreviewPhase(story, { rootDir, now }); case LOOP_PHASES.APPLY: return advanceApplyPhase(story, { rootDir, now, apply_result, timeout_ms }); case LOOP_PHASES.GATES: return advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }); case LOOP_PHASES.COMMIT: return advanceCommitPhase(story, { rootDir, now, timeout_ms, env }); case LOOP_PHASES.FIX_LOOP: return advanceFixLoopPhase(story, { rootDir, now }); default: return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: 'implement_next_autonomous_loop_phase' }); } }
 function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reason = 'operator_pause' } = {}) { const updated = updateStory(story_id, { status: STORY_STATUSES.STOPPED, current_phase: LOOP_PHASES.STOPPED, blocked_reason: reason }, { rootDir, now, event: 'story_paused' }); if (!updated.ok) return baseResult({ reason: updated.reason, story_id }); return baseResult({ ok: true, story_id, from_phase: null, to_phase: LOOP_PHASES.STOPPED, story: updated.summary, provider_config: updated.story?.last_provider_config || null, reason: null, next_action: 'story_stopped' }); }
 
 module.exports = { AUTONOMOUS_LOOP_VERSION, OPENCODE_RATE_LIMIT_BACKOFF_MS, OPENCODE_AGENT_OUTPUT_CONTRACT_BACKOFF_MS, OPENCODE_RUNTIME_MODES, LOOP_PHASES, boundedFailureSummary, defaultApprovalId, defaultApplyApprovalId, defaultJobId, defaultSandboxRoot, taskForStory, phaseForUltraPlan, statusForPhase, nextActionForPhase, currentSafeProviderConfig, failedOpenCodeNextAction, retryAfterForOpenCodeFailure, persistedApprovalIsApproved, buildPatchPreviewForStory, buildOpenCodePreflight, directOpenCodeDevOnlyAllowed, opencodeKimiDirectEnabled, nemoclawDispatcherExplicitlyEnabled, buildDefaultOpenCodeDispatcher, tickAutonomousLoop, pauseStory };

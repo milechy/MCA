@@ -80,17 +80,31 @@ function blocked(reason, extra = {}) {
   };
 }
 
+// Phase 1 #13: the commit_sha-at-HEAD invariant no longer holds. After the
+// promote-to-feature-branch step in advanceCommitPhase, HEAD points at the
+// trunk's prior tip and the just-created commit lives on the per-story
+// feature branch ref. We now resolve `commit_sha_not_head` against the
+// REQUESTED BRANCH's tip rather than HEAD, and drop the branch_not_current
+// check entirely (which would have rejected pushing a feature branch from a
+// daemon working tree that's still on trunk).
+function refTip(rootDir, ref) {
+  const result = spawnSync('git', ['rev-parse', ref], { cwd: rootDir, encoding: 'utf8', maxBuffer: 1024 * 8 });
+  if (result.status !== 0) return null;
+  const sha = String(result.stdout || '').trim();
+  return /^[a-f0-9]{7,40}$/.test(sha) ? sha : null;
+}
+
 function createOpenCodePushApproval({ rootDir = process.cwd(), commit_sha, branch, remote = 'origin', allowed_user_ids = [], expires_at, now = new Date(), worktree_isolated = false } = {}) {
-  const head = currentHead(rootDir);
   const current = currentBranch(rootDir);
   const requestedSha = normalizeRef(commit_sha);
   const requestedBranch = normalizeRef(branch) || current;
   const requestedRemote = normalizeRef(remote) || 'origin';
 
   if (!requestedSha) return blocked('commit_sha_required', { branch: requestedBranch, remote: requestedRemote });
-  if (requestedSha !== head) return blocked('commit_sha_not_head', { commit_sha: requestedSha, branch: requestedBranch, remote: requestedRemote });
   if (!requestedBranch) return blocked('branch_required', { commit_sha: requestedSha, remote: requestedRemote });
-  if (requestedBranch !== current) return blocked('branch_not_current', { commit_sha: requestedSha, branch: requestedBranch, remote: requestedRemote });
+  const branchTip = refTip(rootDir, requestedBranch);
+  if (!branchTip) return blocked('branch_not_found', { commit_sha: requestedSha, branch: requestedBranch, remote: requestedRemote });
+  if (requestedSha !== branchTip) return blocked('commit_sha_not_branch_tip', { commit_sha: requestedSha, branch: requestedBranch, branch_tip: branchTip, remote: requestedRemote });
   if (requestedRemote !== 'origin') return blocked('remote_not_allowed', { commit_sha: requestedSha, branch: requestedBranch, remote: requestedRemote });
   const blocking = blockingDirtyEntries(rootDir);
   if (blocking === null) return blocked('git_status_failed', { commit_sha: requestedSha, branch: requestedBranch, remote: requestedRemote });

@@ -104,7 +104,7 @@ test('pushOpenCodeCommit pushes approved HEAD without deploy or migration', () =
     duration_ms: 120,
     execution_connected: true,
     push_allowed: true,
-    commands_executed: ['git push origin HEAD:<approved_branch>'],
+    commands_executed: ['git push origin <approved_branch>:<approved_branch>'],
     files_modified: [],
     repository_files_modified: [],
     commit_created: false,
