@@ -1,3 +1,4 @@
+const { spawnSync } = require('node:child_process');
 const { readApproval } = require('../ralph/approval-manager');
 const { APPROVAL_STATUSES } = require('../ralph/types');
 const { buildPrBody } = require('../ralph/pr-body-generator');
@@ -53,7 +54,7 @@ function durationMs(startedAt, finishedAt) {
   return Math.max(0, finished - started);
 }
 
-function opencodePrPreflight({ rootDir = process.cwd(), approval_id, now } = {}) {
+function opencodePrPreflight({ rootDir = process.cwd(), approval_id, now, worktree_isolated = false } = {}) {
   if (!approval_id) return blocked('approval_id_required', { now });
   let approval;
   try {
@@ -68,11 +69,17 @@ function opencodePrPreflight({ rootDir = process.cwd(), approval_id, now } = {})
   if (!approval.head_branch) return blocked('head_branch_required', base);
   if (!approval.base_branch) return blocked('base_branch_required', base);
   if (approval.head_branch === approval.base_branch) return blocked('base_branch_matches_head', base);
-  if (currentHead(rootDir) !== approval.commit_sha) return blocked('commit_sha_not_head', base);
-  if (currentBranch(rootDir) !== approval.head_branch) return blocked('head_branch_not_current', base);
+  // Phase 1 #14: validate commit_sha against the head_branch's tip rather
+  // than HEAD. After promote-to-feature-branch, HEAD is on trunk's prior tip
+  // while the commit lives on the per-story feature ref. Drop the
+  // head_branch_not_current check (daemon stays on trunk by design).
+  const headBranchResult = spawnSync('git', ['rev-parse', approval.head_branch], { cwd: rootDir, encoding: 'utf8', maxBuffer: 1024 * 8 });
+  const headBranchTip = headBranchResult.status === 0 ? String(headBranchResult.stdout || '').trim() : null;
+  if (!headBranchTip || !/^[a-f0-9]{7,40}$/.test(headBranchTip)) return blocked('head_branch_not_found', base);
+  if (headBranchTip !== approval.commit_sha) return blocked('commit_sha_not_branch_tip', { ...base, head_branch_tip: headBranchTip });
   const status = gitStatusShort(rootDir);
   if (status === null) return blocked('git_status_failed', base);
-  if (status !== '') return blocked('working_tree_dirty', base);
+  if (status !== '' && !worktree_isolated) return blocked('working_tree_dirty', base);
   return {
     ok: true,
     stage: 'opencode_pr_preflight',
@@ -125,8 +132,8 @@ function buildFallbackPrBodyFromApproval(approval) {
   });
 }
 
-function createOpenCodePullRequest({ rootDir = process.cwd(), approval_id, githubClient, repository_full_name, now = () => new Date() } = {}) {
-  const preflight = opencodePrPreflight({ rootDir, approval_id, now });
+function createOpenCodePullRequest({ rootDir = process.cwd(), approval_id, githubClient, repository_full_name, now = () => new Date(), worktree_isolated = false } = {}) {
+  const preflight = opencodePrPreflight({ rootDir, approval_id, now, worktree_isolated });
   if (!preflight.ok) return { ...preflight, stage: 'opencode_pr' };
   const bodyResult = preflight.body ? { ok: true, body: preflight.body, body_length: preflight.body.length, bounded_output: true, raw_logs_included: false, secrets_included: false } : buildFallbackPrBodyFromApproval(preflight.approval);
   const startedAt = nowIso(now);
