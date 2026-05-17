@@ -1,0 +1,1 @@
+- Refined dispatcher with worktree-prompt rewrite, reordered classify operations, and downgraded soft timeout handling (PR #46).
