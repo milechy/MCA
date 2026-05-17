@@ -1,0 +1,3 @@
+# Fullauto Window
+
+The **fullauto window** is a scheduled period during which a system or process operates in fully automated mode without requiring manual intervention. Only an **admin** can initiate or modify this window, and they must explicitly **confirm** the action before the automation begins. By default, the window length is governed by **DEFAULT_FULLAUTO_HOURS=6**, which means automation runs for six hours unless otherwise specified. This upper cap is enforced by **MAX_FULLAUTO_HOURS=24**, preventing any single window from exceeding one full day. Adhering to these limits helps maintain control and predictability over automated operations.
