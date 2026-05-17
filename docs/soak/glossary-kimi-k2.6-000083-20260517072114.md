@@ -1,0 +1,3 @@
+# OpenCode + Kimi K2.6 Dispatcher
+
+The default execution provider for Ralph is the **OpenCode dispatcher**, which routes requests to the **Kimi K2.6** model via **OpenRouter**. OpenRouter acts as an aggregation layer that handles load balancing, provider failover, and rate-limit management across multiple upstream hosts. Before any prompt leaves the dispatcher, an **environment scrubber** strips secrets, raw env vars, and sensitive credentials from the context window to prevent leakage. The dispatcher then streams the sanitized request to Kimi K2.6 and returns the model's output back to Ralph for further processing. This pipeline ensures secure, resilient, and high-quality inference for every task execution.
