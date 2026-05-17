@@ -1,0 +1,3 @@
+# Fullauto Window
+
+The **fullauto window** is a grace period during which a Fullauto soak test will automatically pause and wait for explicit confirmation before proceeding to the next stage or shutting down. By default, this window is governed by the `DEFAULT_FULLAUTO_HOURS=6` constant, meaning an administrator has up to six hours to review the system state and provide a confirm signal. If the admin does not check in within that interval, the soak process proceeds according to its fallback policy. The hard upper bound for this wait is set by `MAX_FULLAUTO_HOURS=24`, preventing any fullauto run from sitting idle indefinitely and affecting soak resources. Both values are designed to balance administrative oversight with efficient automated testing throughput.
