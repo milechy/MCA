@@ -477,6 +477,9 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
   }
 
   const createApproval = create_pr_approval || createOpenCodePrApproval;
+  // Phase 1 #14: reuse the worktreeIsolated computed earlier in this function
+  // for the push step. Same downgrade pattern as Phase 1 #10/#13 applied to
+  // PR-approval creation (HEAD vs branch-tip + dirty downgrade).
   const prApproval = createApproval({
     rootDir,
     commit_sha: push.commit_sha || story.current_commit_sha,
@@ -485,7 +488,8 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
     title: story.title || story.requirement || 'OpenCode change',
     body: '',
     allowed_user_ids: [],
-    now
+    now,
+    worktree_isolated: worktreeIsolated
   });
 
   if (!prApproval.ok) {
@@ -549,12 +553,16 @@ function advancePrPhase(story, { rootDir, now, env = process.env, githubClient, 
   // shape, scrubs env down to PATH/HOME/GH_TOKEN, 30s timeout). Operators or
   // tests can still pass their own githubClient to override.
   const effectiveClient = githubClient || buildDefaultGithubPrClient({ env });
+  // Phase 1 #14: forward worktree_isolated to the PR preflight, same as
+  // Phase 1 #10/#13 pattern.
+  const worktreeIsolated = opencodeKimiDirectEnabled(env) || !nemoclawDispatcherExplicitlyEnabled(env);
   const pr = runner({
     rootDir,
     approval_id: story.current_approval_id,
     githubClient: effectiveClient,
     repository_full_name: repository,
-    now: () => now
+    now: () => now,
+    worktree_isolated: worktreeIsolated
   });
 
   if (!pr.ok) {

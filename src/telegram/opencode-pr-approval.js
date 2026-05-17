@@ -50,23 +50,36 @@ function blocked(reason, extra = {}) {
   };
 }
 
-function createOpenCodePrApproval({ rootDir = process.cwd(), commit_sha, head_branch, base_branch = 'main', title, body, allowed_user_ids = [], expires_at, now = new Date() } = {}) {
+// Phase 1 #14: same Phase 1 #13 / Phase 1 #10 patterns applied to the PR
+// approval stage. After promote-to-feature-branch, HEAD is on trunk's prior
+// tip and the daemon's current branch is trunk — but the approved head_branch
+// is the feature ref. Validate commit_sha against the head_branch's tip via
+// `git rev-parse <branch>`, drop the HEAD/current-branch invariants, and
+// downgrade working-tree-dirty to informational when the caller indicates
+// the dispatcher is worktree-isolated (mirroring Phase 1 #10).
+function refTipSha(rootDir, ref) {
+  const result = spawnSync('git', ['rev-parse', ref], { cwd: rootDir, encoding: 'utf8', maxBuffer: 1024 * 8 });
+  if (result.status !== 0) return null;
+  const sha = String(result.stdout || '').trim();
+  return /^[a-f0-9]{7,40}$/.test(sha) ? sha : null;
+}
+
+function createOpenCodePrApproval({ rootDir = process.cwd(), commit_sha, head_branch, base_branch = 'main', title, body, allowed_user_ids = [], expires_at, now = new Date(), worktree_isolated = false } = {}) {
   const requestedSha = String(commit_sha || '').trim();
   const requestedHead = normalizeBranch(head_branch) || currentBranch(rootDir);
   const requestedBase = normalizeBranch(base_branch) || 'main';
-  const head = currentHead(rootDir);
-  const current = currentBranch(rootDir);
 
   if (!requestedSha) return blocked('commit_sha_required', { head_branch: requestedHead, base_branch: requestedBase });
-  if (requestedSha !== head) return blocked('commit_sha_not_head', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
   if (!requestedHead) return blocked('head_branch_required', { commit_sha: requestedSha, base_branch: requestedBase });
-  if (requestedHead !== current) return blocked('head_branch_not_current', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
+  const headTip = refTipSha(rootDir, requestedHead);
+  if (!headTip) return blocked('head_branch_not_found', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
+  if (requestedSha !== headTip) return blocked('commit_sha_not_branch_tip', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase, head_branch_tip: headTip });
   if (!requestedBase) return blocked('base_branch_required', { commit_sha: requestedSha, head_branch: requestedHead });
   if (requestedBase === requestedHead) return blocked('base_branch_matches_head', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
   if (!branchExists(rootDir, requestedBase)) return blocked('base_branch_not_found', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
   const status = gitStatusShort(rootDir);
   if (status === null) return blocked('git_status_failed', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
-  if (status !== '') return blocked('working_tree_dirty', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
+  if (status !== '' && !worktree_isolated) return blocked('working_tree_dirty', { commit_sha: requestedSha, head_branch: requestedHead, base_branch: requestedBase });
 
   const prTitle = String(title || `OpenCode change ${requestedSha.slice(0, 12)}`).trim().slice(0, 120);
   const prBody = String(body || 'Created by controlled Telegram OpenCode flow.').trim().slice(0, 4000);
