@@ -73,10 +73,14 @@ function opencodePushPreflight({ rootDir = process.cwd(), approval_id, worktree_
   if (approval.remote !== 'origin') return blocked('remote_not_allowed', base);
   if (!approval.branch) return blocked('branch_required', base);
   if (!approval.commit_sha) return blocked('commit_sha_required', base);
-  const head = currentHead(rootDir);
-  if (head !== approval.commit_sha) return blocked('commit_sha_not_head', base);
-  const branch = currentBranch(rootDir);
-  if (branch !== approval.branch) return blocked('branch_not_current', base);
+  // Phase 1 #13: resolve the approved commit_sha against the approved BRANCH's
+  // tip rather than HEAD. After promote-to-feature-branch, HEAD is on trunk
+  // (rewound to the commit's parent) while the commit lives on the per-story
+  // feature branch ref. The push is `<branch>:<branch>` rather than `HEAD:<branch>`.
+  const branchTipResult = spawnSync('git', ['rev-parse', approval.branch], { cwd: rootDir, encoding: 'utf8', maxBuffer: 1024 * 8 });
+  const branchTip = branchTipResult.status === 0 ? String(branchTipResult.stdout || '').trim() : null;
+  if (!branchTip || !/^[a-f0-9]{7,40}$/.test(branchTip)) return blocked('branch_not_found', base);
+  if (branchTip !== approval.commit_sha) return blocked('commit_sha_not_branch_tip', { ...base, branch_tip: branchTip });
   const blocking = blockingDirtyEntries(rootDir);
   if (blocking === null) return blocked('git_status_failed', base);
   if (blocking.length > 0 && !worktree_isolated) return blocked('working_tree_dirty', base);
@@ -106,7 +110,10 @@ function pushOpenCodeCommit({ rootDir = process.cwd(), approval_id, timeout_ms =
   const preflight = opencodePushPreflight({ rootDir, approval_id, worktree_isolated });
   if (!preflight.ok) return { ...preflight, stage: 'opencode_push' };
   const startedAt = now().toISOString();
-  const result = spawnSync('git', ['push', preflight.remote, `HEAD:${preflight.branch}`], {
+  // Phase 1 #13: use <branch>:<branch> so we push the named local ref. HEAD
+  // is no longer guaranteed to match the feature branch after the post-commit
+  // promote step.
+  const result = spawnSync('git', ['push', preflight.remote, `${preflight.branch}:${preflight.branch}`], {
     cwd: rootDir,
     encoding: 'utf8',
     timeout: timeout_ms,
@@ -132,7 +139,7 @@ function pushOpenCodeCommit({ rootDir = process.cwd(), approval_id, timeout_ms =
     stderr_preview: oneLine(result.stderr || result.error?.message || ''),
     execution_connected: true,
     push_allowed: true,
-    commands_executed: ['git push origin HEAD:<approved_branch>'],
+    commands_executed: ['git push origin <approved_branch>:<approved_branch>'],
     files_modified: [],
     repository_files_modified: [],
     git_status_files: gitStatusShort(rootDir) === '' ? [] : String(gitStatusShort(rootDir) || '').split('\n').filter(Boolean),

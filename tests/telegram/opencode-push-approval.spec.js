@@ -78,8 +78,10 @@ test('createOpenCodePushApproval blocks unsafe or stale push approval inputs', (
   const branch = currentBranch(rootDir);
 
   expect(createOpenCodePushApproval({ rootDir, branch, remote: 'origin' }).reason).toBe('commit_sha_required');
-  expect(createOpenCodePushApproval({ rootDir, commit_sha: 'bad', branch, remote: 'origin' }).reason).toBe('commit_sha_not_head');
-  expect(createOpenCodePushApproval({ rootDir, commit_sha: head, branch: 'main', remote: 'origin' }).reason).toBe('branch_not_current');
+  // Phase 1 #13: commit_sha is validated against the BRANCH's tip, not HEAD.
+  // A non-matching sha → commit_sha_not_branch_tip; a non-existent branch → branch_not_found.
+  expect(createOpenCodePushApproval({ rootDir, commit_sha: '0000000000000000000000000000000000000000', branch, remote: 'origin' }).reason).toBe('commit_sha_not_branch_tip');
+  expect(createOpenCodePushApproval({ rootDir, commit_sha: head, branch: 'no-such-branch-anywhere', remote: 'origin' }).reason).toBe('branch_not_found');
   expect(createOpenCodePushApproval({ rootDir, commit_sha: head, branch, remote: 'upstream' }).reason).toBe('remote_not_allowed');
   fs.writeFileSync(path.join(rootDir, 'dirty.txt'), 'dirty\n');
   expect(createOpenCodePushApproval({ rootDir, commit_sha: head, branch, remote: 'origin' }).reason).toBe('working_tree_dirty');
