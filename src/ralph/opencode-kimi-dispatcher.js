@@ -66,6 +66,17 @@ function resolveModel(env) {
   return raw;
 }
 
+function buildRequestedPathsSection({ rootDir, requested_paths }) {
+  const lines = ['Requested paths (you MUST touch ALL of them):'];
+  for (let i = 0; i < requested_paths.length; i++) {
+    const p = requested_paths[i];
+    const exists = fs.existsSync(path.join(rootDir, p));
+    const action = exists ? 'MODIFY EXISTING' : 'CREATE';
+    lines.push(`${i + 1}. ${p} (${action})`);
+  }
+  return lines.join('\n');
+}
+
 function buildPrompt({ task, requested_paths, rootDir }) {
   const file_context = buildRequestedFileContext({ rootDir, requested_paths });
   const lines = buildOpenClawDiffOnlyPrompt({ task, requested_paths, file_context }).split('\n');
@@ -75,7 +86,6 @@ function buildPrompt({ task, requested_paths, rootDir }) {
 
 function buildWorktreePrompt({ task, requested_paths, rootDir }) {
   const file_context = buildRequestedFileContext({ rootDir, requested_paths });
-  const paths = requested_paths.length ? requested_paths.join(', ') : '(no requested paths supplied)';
   return [
     'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).',
     'You are running inside an isolated git worktree owned by Ralph. Ralph will run `git diff` over the worktree after you finish, and the resulting unified diff IS the candidate patch.',
@@ -83,14 +93,15 @@ function buildWorktreePrompt({ task, requested_paths, rootDir }) {
     '  - Modify or create files at the paths listed under "Requested paths" using normal write/edit tools.',
     '  - Do NOT write a file literally named "candidate.patch" or "candidate.diff" anywhere — that file would itself appear in the diff and be rejected.',
     '  - Do NOT print the diff to stdout; just leave the worktree in the desired final state.',
-    '  - It is acceptable to create only a subset of the requested paths if the task does not need all of them.',
+    '  - You MUST produce changes for EVERY path listed under Requested paths. Partial output will be rejected by the requested_paths coverage gate and retried.',
+    '  - If a requested path already exists in the worktree, MODIFY it in-place. If it does not exist, CREATE it. Do not invent additional paths.',
     'Hard constraints:',
     '  - Do NOT touch any path outside the explicit requested_paths.',
     '  - Do NOT run git, gh, npm publish, deploy, migration, or any push/merge/release command.',
     '  - Do NOT print secrets or raw environment values.',
     '  - Do NOT delete .git, .ralph, or anything under those directories.',
     '  - If the requested paths reference an existing file, treat the bounded file context below as the source of truth; do not invent contents you did not read.',
-    `Requested paths: ${paths}`,
+    buildRequestedPathsSection({ rootDir, requested_paths }),
     `Task: ${String(task || '').slice(0, 4000)}`,
     file_context ? `Bounded file context:\n${file_context}` : 'Bounded file context: (none supplied)',
     'When you are done, simply end the session. Ralph will capture the diff.'
@@ -371,6 +382,7 @@ module.exports = {
   safeEnv,
   buildPrompt,
   buildWorktreePrompt,
+  buildRequestedPathsSection,
   classifyFailure,
   nextActionForFailure,
   runtimeInstalled,
