@@ -16,6 +16,11 @@ const {
   diffStoryWorktree
 } = require('./story-worktree');
 
+const {
+  isOverBudget,
+  recordKimiCall
+} = require('./kimi-cost-tracker');
+
 const OPENCODE_COMMAND = 'opencode';
 const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k2.6';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -244,6 +249,21 @@ function dispatchOpenCodeKimi({
     return makeBase({ ok: false, reason: 'opencode_kimi_api_key_missing', job_id, approval_id, sandbox_root: policy.sandbox_root, candidate_patch_path: candidate_patch_path_relative, runtime_installed: true, timeout_ms, next_action: nextActionForFailure('opencode_kimi_api_key_missing') });
   }
 
+  const budgetCheck = isOverBudget({ rootDir, env });
+  if (budgetCheck.over) {
+    return makeBase({
+      ok: false,
+      reason: 'kimi_daily_budget_exceeded',
+      job_id,
+      approval_id,
+      sandbox_root: policy.sandbox_root,
+      candidate_patch_path: candidate_patch_path_relative,
+      runtime_installed: true,
+      timeout_ms,
+      next_action: 'retry_after_kimi_budget_reset'
+    });
+  }
+
   const useWorktree = use_worktree === true || (use_worktree === undefined && !worktreeDisabled(env));
   let worktreePath = null;
   let baseSha = null;
@@ -331,6 +351,16 @@ function dispatchOpenCodeKimi({
     const removal = destroyStoryWorktree({ rootDir, sandbox_root: policy.sandbox_root, spawn, env });
     if (!removal.ok) commands.push(`worktree_remove_failed: ${oneLine(removal.stderr_preview || '', 120)}`);
   }
+
+  // Record cost telemetry
+  recordKimiCall({
+    rootDir,
+    story_id: story && story.story_id ? story.story_id : null,
+    prompt_text: prompt,
+    output_text: stdout,
+    model,
+    now: started
+  });
 
   // Soft-timeout downgrade: when the OpenCode subprocess overran the wall clock
   // but the agent had already produced a fully valid candidate patch (worktree
