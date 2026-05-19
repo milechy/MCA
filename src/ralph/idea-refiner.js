@@ -110,7 +110,10 @@ function buildRepoContext(rootDir) {
 function validateStorySpec(parsed) {
   if (!parsed || typeof parsed !== 'object') return false;
   if (typeof parsed.title !== 'string' || parsed.title.trim().length === 0) return false;
-  if (typeof parsed.requirement !== 'string' || !parsed.requirement.includes('FILE 1')) return false;
+  // Case-insensitive check so planner output variations like "File 1" or
+  // "## FILE 1" or "FILE 1:" all pass. The structural intent — at least
+  // one FILE-N section — is what we're validating.
+  if (typeof parsed.requirement !== 'string' || !/file\s*1/i.test(parsed.requirement)) return false;
   if (!Array.isArray(parsed.requested_paths) || parsed.requested_paths.length === 0) return false;
   if (!VALID_DIFFICULTIES.has(parsed.difficulty)) return false;
   if (typeof parsed.recommended_executor !== 'string' || parsed.recommended_executor.trim().length === 0) return false;
@@ -146,7 +149,13 @@ function refineIdea({
       retryCount = attempt;
     }
 
-    const result = spawn('opencode', ['run', '--model', plannerModel, '--format', 'json', '--print', prompt], {
+    // Phase 3 #2 review: align with src/ralph/opencode-kimi-dispatcher.js's
+    // invocation pattern — `--dir <cwd> <prompt>` as the trailing args.
+    // The original draft used `--print` which is not a documented opencode
+    // flag and would have caused planner_dispatch_failed in production.
+    // The `--dir` argument anchors opencode at the project root rather
+    // than process.cwd, matching how the executor dispatcher works.
+    const result = spawn('opencode', ['run', '--model', plannerModel, '--format', 'json', '--dir', rootDir, prompt], {
       encoding: 'utf8',
       timeout: 120000,
       env

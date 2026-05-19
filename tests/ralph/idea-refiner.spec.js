@@ -386,3 +386,55 @@ test('buildRepoContext handles second-level unreadable directories gracefully', 
     }
   }
 });
+
+// ============================================================
+// Phase 3 #2 review fixups: opencode invocation flags + case-insensitive FILE 1
+// ============================================================
+
+test('Phase 3 #2 review: spawn args use --dir rootDir and pass prompt as final positional', () => {
+  // Aligns with src/ralph/opencode-kimi-dispatcher.js. The earlier draft
+  // used `--print` (not a documented opencode flag) and omitted --dir
+  // (anchoring opencode at process.cwd rather than the project root).
+  let seenArgs;
+  const spawn = (cmd, args, opts) => {
+    seenArgs = args;
+    return { stdout: makeValidStdout(), stderr: '', status: 0, error: null };
+  };
+  const rootDir = tmpRoot();
+  refineIdea({ idea: 'test', rootDir, spawn });
+  expect(seenArgs[0]).toBe('run');
+  expect(seenArgs[1]).toBe('--model');
+  // index 2 is the plannerModel
+  expect(seenArgs[3]).toBe('--format');
+  expect(seenArgs[4]).toBe('json');
+  expect(seenArgs[5]).toBe('--dir');
+  expect(seenArgs[6]).toBe(rootDir);
+  // prompt is the final positional arg
+  expect(typeof seenArgs[7]).toBe('string');
+  expect(seenArgs[7]).toContain('test');
+  // --print MUST NOT be present anywhere in the args
+  expect(seenArgs).not.toContain('--print');
+});
+
+test('Phase 3 #2 review: validateStorySpec accepts case variations of FILE 1', () => {
+  // Lowercase
+  const lowerCase = makeValidStdout({ requirement: 'file 1 (create): make it so' });
+  const lowResult = refineIdea({ idea: 'x', rootDir: tmpRoot(), spawn: makeSpawnSync(lowerCase) });
+  expect(lowResult.ok).toBe(true);
+
+  // Mixed case
+  const mixed = makeValidStdout({ requirement: 'File 1 (CREATE): mixed case' });
+  const mixedResult = refineIdea({ idea: 'x', rootDir: tmpRoot(), spawn: makeSpawnSync(mixed) });
+  expect(mixedResult.ok).toBe(true);
+
+  // Heading style with whitespace
+  const heading = makeValidStdout({ requirement: '## FILE 1 (CREATE) heading style\nbody' });
+  const headingResult = refineIdea({ idea: 'x', rootDir: tmpRoot(), spawn: makeSpawnSync(heading) });
+  expect(headingResult.ok).toBe(true);
+
+  // No file marker at all → still rejected
+  const noFile = makeValidStdout({ requirement: 'just plain instructions without the marker' });
+  const noFileResult = refineIdea({ idea: 'x', rootDir: tmpRoot(), spawn: makeSpawnSync(noFile) });
+  expect(noFileResult.ok).toBe(false);
+  expect(noFileResult.reason).toBe('planner_invalid_response');
+});
