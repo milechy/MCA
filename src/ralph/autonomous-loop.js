@@ -12,6 +12,7 @@ const { dispatchOpenCodeKimi } = require('./opencode-kimi-dispatcher');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
 const { rollbackAppliedFiles } = require('./apply-rollback');
 const { promoteCommitToFeatureBranch, featureBranchForStory } = require('./feature-branch-promote');
+const { checkRequestedPathsCoverage, repairInstructionForMissingPaths } = require('./requested-paths-coverage');
 const { opencodeSandboxRunnerPreflight, OPENCODE_SANDBOX_ENV } = require('../telegram/opencode-sandbox-preflight');
 const { runOpenCodeAppliedPatchGates } = require('../telegram/opencode-gates');
 const { createOpenCodePatchPreviewApproval } = require('../telegram/opencode-patch-approval');
@@ -78,7 +79,124 @@ function advancePatchPreviewPhase(story, { rootDir, now }) { const preview = bui
   const updated = updateStoryForPhase(story, LOOP_PHASES.DIFF_APPROVAL_PENDING, { current_approval_id: patchApproval.approval_id, current_patch_hash: patchApproval.patch_hash, blocked_reason: 'diff_approval_required', retry_after_at: null }, { rootDir, now, event: 'diff_approval_required' });
   return baseResult({ ok: true, reason: 'diff_approval_required', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.DIFF_APPROVAL_PENDING, story: updated.summary, patch_approval: patchApproval, approval_id: patchApproval.approval_id, job_id: story.current_job_id || null, candidate_patch_path: story.current_candidate_patch_path || null, provider_config: story.last_provider_config || null, next_action: nextActionForPhase(LOOP_PHASES.DIFF_APPROVAL_PENDING) }); }
 
-function advanceApplyPhase(story, { rootDir, now, apply_result = null, timeout_ms }) { const effectiveApply = apply_result || (story.current_candidate_patch_path && story.current_patch_hash ? applyOpenCodeCandidatePatch({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now }) : null); if (effectiveApply && effectiveApply.ok === false) { const summary = boundedFailureSummary(effectiveApply); const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, { blocked_reason: effectiveApply.reason || 'apply_failed', last_gate_failure_summary: summary }, { rootDir, now, event: 'apply_failed' }); return baseResult({ ok: false, reason: effectiveApply.reason || 'apply_failed', story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.ESCALATED, story: updated.summary, apply: effectiveApply, failure_summary: summary, provider_config: story.last_provider_config || null, execution_connected: effectiveApply.execution_connected === true, commands_executed: effectiveApply.commands_executed || [], files_modified: effectiveApply.files_modified || [], repository_files_modified: effectiveApply.repository_files_modified || [], next_action: 'human_escalation_required' }); } const updated = updateStoryForPhase(story, LOOP_PHASES.GATES, { blocked_reason: null, retry_after_at: null, last_apply_result: effectiveApply ? boundedFailureSummary(effectiveApply) : null }, { rootDir, now, event: 'apply_completed_or_deferred' }); return baseResult({ ok: true, reason: null, story_id: story.story_id, from_phase: story.current_phase, to_phase: LOOP_PHASES.GATES, story: updated.summary, apply: effectiveApply, provider_config: story.last_provider_config || null, execution_connected: effectiveApply?.execution_connected === true, commands_executed: effectiveApply?.commands_executed || [], files_modified: effectiveApply?.files_modified || [], repository_files_modified: effectiveApply?.repository_files_modified || [], next_action: nextActionForPhase(LOOP_PHASES.GATES) }); }
+function advanceApplyPhase(story, { rootDir, now, apply_result = null, timeout_ms }) {
+  const effectiveApply = apply_result || (story.current_candidate_patch_path && story.current_patch_hash
+    ? applyOpenCodeCandidatePatch({ rootDir, approval_id: story.current_approval_id, patch_hash: story.current_patch_hash, timeout_ms, now: () => now })
+    : null);
+
+  // Hard-fail path: the apply itself returned ok=false.
+  if (effectiveApply && effectiveApply.ok === false) {
+    const summary = boundedFailureSummary(effectiveApply);
+    const updated = updateStoryForPhase(story, LOOP_PHASES.ESCALATED, {
+      blocked_reason: effectiveApply.reason || 'apply_failed',
+      last_gate_failure_summary: summary
+    }, { rootDir, now, event: 'apply_failed' });
+    return baseResult({
+      ok: false,
+      reason: effectiveApply.reason || 'apply_failed',
+      story_id: story.story_id,
+      from_phase: story.current_phase,
+      to_phase: LOOP_PHASES.ESCALATED,
+      story: updated.summary,
+      apply: effectiveApply,
+      failure_summary: summary,
+      provider_config: story.last_provider_config || null,
+      execution_connected: effectiveApply.execution_connected === true,
+      commands_executed: effectiveApply.commands_executed || [],
+      files_modified: effectiveApply.files_modified || [],
+      repository_files_modified: effectiveApply.repository_files_modified || [],
+      next_action: 'human_escalation_required'
+    });
+  }
+
+  // Phase 2 #3b: requested_paths coverage gate.
+  //
+  // Run between APPLY success and GATES to catch the partial-implementation
+  // failure mode observed in PR #137 (smoke) and PR #139 (3a dogfood) where
+  // Kimi K2.6 touched only a subset of the declared requested_paths. If any
+  // declared path was not touched, route to FIX_LOOP (or ESCALATED if max
+  // attempts exhausted) with a focused repair instruction listing exactly
+  // the missing paths.
+  if (effectiveApply) {
+    const coverage = checkRequestedPathsCoverage({ rootDir, story, apply_result: effectiveApply });
+    if (!coverage.ok) {
+      const attempts = (Number.isInteger(story.attempts) ? story.attempts : 0) + 1;
+      const maxAttempts = Number.isInteger(story.max_attempts) ? story.max_attempts : 3;
+      const escalate = attempts >= maxAttempts;
+      const nextPhase = escalate ? LOOP_PHASES.ESCALATED : LOOP_PHASES.FIX_LOOP;
+      const failureSummary = boundedFailureSummary({
+        ok: false,
+        stage: 'requested_paths_coverage',
+        reason: 'requested_paths_coverage_incomplete',
+        missing_paths: coverage.missing_paths.slice(0, 20),
+        touched_paths: coverage.touched_paths.slice(0, 20),
+        stdout_preview: `missing ${coverage.missing_paths.length}/${coverage.requested_paths.length}: ${coverage.missing_paths.join(', ').slice(0, 200)}`,
+        stderr_preview: ''
+      });
+      // Rollback the partial apply so the FIX_LOOP starts clean. Bounded to
+      // requested_paths so we never touch operator-owned files.
+      const rollback = rollbackAppliedFiles({
+        rootDir,
+        apply_result: effectiveApply,
+        requested_paths: Array.isArray(story.requested_paths) ? story.requested_paths : []
+      });
+      const updated = updateStoryForPhase(story, nextPhase, {
+        attempts,
+        blocked_reason: 'requested_paths_coverage_incomplete',
+        last_gate_failure_summary: failureSummary,
+        last_repair_type: 'requested_paths_coverage',
+        last_repair_instruction: escalate ? null : repairInstructionForMissingPaths(coverage.missing_paths),
+        last_apply_rollback: rollback,
+        last_requested_paths_coverage: {
+          ok: false,
+          missing_paths: coverage.missing_paths,
+          touched_paths: coverage.touched_paths,
+          fallback_used: coverage.fallback_used
+        }
+      }, { rootDir, now, event: escalate ? 'requested_paths_coverage_escalated' : 'requested_paths_coverage_fix_required' });
+      return baseResult({
+        ok: false,
+        reason: 'requested_paths_coverage_incomplete',
+        story_id: story.story_id,
+        from_phase: story.current_phase,
+        to_phase: nextPhase,
+        story: updated.summary,
+        apply: effectiveApply,
+        apply_rollback: rollback,
+        coverage,
+        failure_summary: failureSummary,
+        provider_config: story.last_provider_config || null,
+        execution_connected: effectiveApply.execution_connected === true,
+        commands_executed: effectiveApply.commands_executed || [],
+        files_modified: effectiveApply.files_modified || [],
+        repository_files_modified: effectiveApply.repository_files_modified || [],
+        next_action: escalate ? 'human_escalation_required' : nextActionForPhase(LOOP_PHASES.FIX_LOOP)
+      });
+    }
+  }
+
+  // Happy path: coverage ok, advance to GATES as before.
+  const updated = updateStoryForPhase(story, LOOP_PHASES.GATES, {
+    blocked_reason: null,
+    retry_after_at: null,
+    last_apply_result: effectiveApply ? boundedFailureSummary(effectiveApply) : null
+  }, { rootDir, now, event: 'apply_completed_or_deferred' });
+  return baseResult({
+    ok: true,
+    reason: null,
+    story_id: story.story_id,
+    from_phase: story.current_phase,
+    to_phase: LOOP_PHASES.GATES,
+    story: updated.summary,
+    apply: effectiveApply,
+    provider_config: story.last_provider_config || null,
+    execution_connected: effectiveApply?.execution_connected === true,
+    commands_executed: effectiveApply?.commands_executed || [],
+    files_modified: effectiveApply?.files_modified || [],
+    repository_files_modified: effectiveApply?.repository_files_modified || [],
+    next_action: nextActionForPhase(LOOP_PHASES.GATES)
+  });
+}
 function gateFailureReason(gates, repair) { if (!repair.escalation_required) return gates.reason || 'gates_failed'; if (repair.immediate_escalation) return repair.repair_event.reason; return 'retry_exhausted'; }
 function gateBlockedReason(gates, repair) { if (!repair.escalation_required) return gates.reason || 'gates_failed'; if (repair.immediate_escalation) return repair.repair_event.reason; return gates.reason || 'gates_failed'; }
 function advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }) {
