@@ -595,3 +595,94 @@ test('Phase 2 #4.1: buildWorktreePrompt forbids deleting existing tests / functi
   expect(prompt).toContain('Only APPEND new content');
 });
 
+test('Phase 2 #5: dispatchOpenCodeKimi refuses dispatch when daily budget is exceeded', () => {
+  const rootDir = tmpRoot();
+  fs.mkdirSync(path.join(rootDir, '.ralph'), { recursive: true });
+  const ledgerPath = path.join(rootDir, '.ralph', 'cost-ledger.jsonl');
+  const entry = {
+    at: new Date().toISOString(),
+    story_id: 'STORY-EXPENSIVE',
+    model: 'openrouter/moonshotai/kimi-k2.6',
+    input_tokens: 100_000_000,
+    output_tokens: 100_000_000,
+    cost_usd: 100.0
+  };
+  fs.writeFileSync(ledgerPath, JSON.stringify(entry) + '\n', 'utf8');
+
+  let runCalled = false;
+  function spawn(command, args) {
+    if (Array.isArray(args) && args[0] === 'run') runCalled = true;
+    return { status: 0, stdout: '', stderr: '' };
+  }
+
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'task',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key', RALPH_KIMI_DAILY_BUDGET_USD: '0.01' },
+    use_worktree: false
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: 'kimi_daily_budget_exceeded',
+    runtime_installed: true,
+    next_action: 'retry_after_kimi_budget_reset'
+  });
+  expect(runCalled).toBe(false);
+});
+
+test('Phase 2 #5: dispatchOpenCodeKimi records cost telemetry after a successful run', () => {
+  const rootDir = tmpRoot();
+  const spawn = fakeSpawn({ run: { status: 0, stdout: SAMPLE_DIFF, stderr: '' } });
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    approval_id: 'APR-KIMI',
+    job_id: 'JOB-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'create docs/kimi-smoke.md',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key' },
+    use_worktree: false
+  });
+  expect(result.ok).toBe(true);
+
+  const ledgerPath = path.join(rootDir, '.ralph', 'cost-ledger.jsonl');
+  expect(fs.existsSync(ledgerPath)).toBe(true);
+  const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+  expect(lines.length).toBe(1);
+  const entry = JSON.parse(lines[0]);
+  expect(entry.story_id).toBe('STORY-KIMI');
+  expect(entry.model).toBe(DEFAULT_MODEL);
+  expect(entry.input_tokens).toBeGreaterThanOrEqual(0);
+  expect(entry.output_tokens).toBeGreaterThanOrEqual(0);
+  expect(entry.cost_usd).toBeGreaterThanOrEqual(0);
+});
+
+test('Phase 2 #5: dispatchOpenCodeKimi allows dispatch when under daily budget', () => {
+  const rootDir = tmpRoot();
+  const spawn = fakeSpawn({ run: { status: 0, stdout: SAMPLE_DIFF, stderr: '' } });
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    approval_id: 'APR-KIMI',
+    job_id: 'JOB-KIMI',
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'create docs/kimi-smoke.md',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: { PATH: '/bin', HOME: '/u', OPENROUTER_API_KEY: 'or-key', RALPH_KIMI_DAILY_BUDGET_USD: '500' },
+    use_worktree: false
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    reason: null,
+    patch_source: PATCH_SOURCE,
+    next_action: 'preview_candidate_patch_before_apply'
+  });
+});
+
