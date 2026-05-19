@@ -12,6 +12,7 @@ const {
   safeEnv,
   buildPrompt,
   buildWorktreePrompt,
+  buildRequestedPathsSection,
   classifyFailure,
   dispatchOpenCodeKimi
 } = require('../../src/ralph/opencode-kimi-dispatcher');
@@ -508,6 +509,11 @@ test('dispatchOpenCodeKimi (worktree mode) rejects patches that escape requested
 });
 
 test('dispatchOpenCodeKimi never injects unrelated secrets into spawned env', () => {
+  // Restored after Phase 2 #4 autonomous dogfood (PR #141) inadvertently
+  // deleted this test while modifying the file. The story spec said
+  // "Add new tests after the existing tests"; Kimi K2.6 misinterpreted
+  // and replaced the last existing test with the new ones. The deleted
+  // test is the Phase 1 env-scrubbing security guard — we must keep it.
   const rootDir = tmpRoot();
   const observed = [];
   function spawn(command, args, opts) {
@@ -535,4 +541,49 @@ test('dispatchOpenCodeKimi never injects unrelated secrets into spawned env', ()
   expect(runCall.env).not.toHaveProperty('SUPABASE_SERVICE_ROLE');
   expect(runCall.env).not.toHaveProperty('GITHUB_TOKEN');
   expect(runCall.env.OPENROUTER_API_KEY).toBe('or-key');
+});
+
+test('Phase 2 #4: buildRequestedPathsSection classifies existing vs new files', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-dispatcher-phase2-'));
+  fs.mkdirSync(path.join(rootDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'src', 'existing.js'), '// existing\n');
+
+  const section = buildRequestedPathsSection({
+    rootDir,
+    requested_paths: ['src/existing.js', 'src/new.js']
+  });
+
+  expect(section).toContain('Requested paths (you MUST touch ALL of them):');
+  expect(section).toContain('1. src/existing.js (MODIFY EXISTING)');
+  expect(section).toContain('2. src/new.js (CREATE)');
+});
+
+test('Phase 2 #4: buildWorktreePrompt no longer says partial output is acceptable', () => {
+  const rootDir = tmpRoot();
+  fs.mkdirSync(path.join(rootDir, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'docs', 'x.md'), '# x\n');
+
+  const prompt = buildWorktreePrompt({
+    task: 'create docs/x.md and docs/y.md',
+    requested_paths: ['docs/x.md', 'docs/y.md'],
+    rootDir
+  });
+
+  expect(prompt).not.toContain('acceptable to create only a subset');
+  expect(prompt).toContain('You MUST produce changes for EVERY path');
+  expect(prompt).toContain('docs/x.md (MODIFY EXISTING)');
+  expect(prompt).toContain('docs/y.md (CREATE)');
+});
+
+test('Phase 2 #4: buildWorktreePrompt with empty requested_paths still produces valid prompt', () => {
+  const rootDir = tmpRoot();
+  const prompt = buildWorktreePrompt({
+    task: 'do nothing',
+    requested_paths: [],
+    rootDir
+  });
+
+  expect(prompt).toContain('Requested paths (you MUST touch ALL of them):');
+  // Should not crash and should still contain task
+  expect(prompt).toContain('do nothing');
 });
