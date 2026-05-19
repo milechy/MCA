@@ -138,21 +138,51 @@ function evaluateRisk(plan) {
   // (path_risk.score === 0) and there are paths to evaluate, the content
   // risk is ignored even if substrings matched. A docs story that describes
   // RLS / auth / secrets concepts must not be gated as if it were changing
-  // those concepts. This is the key chicken-and-egg break: Phase 1 soak
-  // stories with security-related glossary content were unnecessarily
-  // gated at PLAN_APPROVAL_PENDING under fullauto.
+  // those concepts. This was the chicken-and-egg break that unblocked Phase 1
+  // soak glossary stories.
   //
-  // Destructive content (Risk 5) is NEVER downgraded — even a docs file
-  // saying "drop table users" or "force push to main" stays at Risk 5.
-  // That keyword set is small and intentional.
-  const docsOnly = pathRisk.paths_evaluated > 0
+  // Phase 2 #2.5 safe-scope downgrade: extends the same idea to src/tests/
+  // scripts paths. When every touched path is in a non-security-sensitive
+  // scope (path_risk.score <= 2) and the content risk is the "soft mention"
+  // variety (Risk 3-4 from substring keywords like "secret", "token",
+  // "api key", "auth", "rls"), use the path-based risk instead. Rationale:
+  // real engineering tasks commonly *mention* these concepts in their
+  // requirements (e.g. "Implement a gate that emits 'pre-secret-scan'", or
+  // "Add token validation to ...") without actually changing the security-
+  // critical code path. The first Phase 2 #3 smoke test (PR #137) was
+  // initially gated because its requirement mentioned the gate name
+  // "pre-secret-scan" — the word "secret" triggered touchesSecrets and
+  // bumped a Risk 2 scripts story to Risk 4.
+  //
+  // Destructive content (Risk 5) is NEVER downgraded — even a docs or
+  // scripts file saying "drop table users", "service_role", "force push to
+  // main", etc. stays at Risk 5. The destructive keyword set is small and
+  // intentional and represents operations that are dangerous regardless of
+  // where they're mentioned. Path-aware risk for explicit auth/pii/rls
+  // paths (3a/3b/3c/3d, Risk >= 3) already pulls those paths out of the
+  // safe scope, so they are not affected by this downgrade either.
+  const hasPaths = pathRisk.paths_evaluated > 0;
+  const contentNotDestructive = contentRisk.score < 5;
+
+  const docsOnly = hasPaths
     && pathRisk.score === 0
-    && contentRisk.score < 5;
+    && contentNotDestructive;
+
+  const safeScope = hasPaths
+    && pathRisk.score > 0
+    && pathRisk.score <= 2
+    && contentRisk.score >= 3
+    && contentNotDestructive;
 
   let finalRisk;
   if (docsOnly && contentRisk.score >= 2) {
     finalRisk = createRisk(0, 'docs_only_downgrade', 'RISK_0_DOCS_ONLY_DOWNGRADE', {
       content_risk_pre_downgrade: { score: contentRisk.score, category: contentRisk.category, label: contentRisk.label }
+    });
+  } else if (safeScope) {
+    finalRisk = createRisk(pathRisk.score, 'safe_scope_downgrade', `RISK_${pathRisk.score}_SAFE_SCOPE_DOWNGRADE`, {
+      content_risk_pre_downgrade: { score: contentRisk.score, category: contentRisk.category, label: contentRisk.label },
+      path_label: pathRisk.label
     });
   } else {
     finalRisk = contentRisk.score >= pathRisk.score
