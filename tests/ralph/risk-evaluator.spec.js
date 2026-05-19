@@ -190,7 +190,11 @@ test('Phase 2 #2: src/** change stays at content-based Risk 3 (no downgrade)', (
   expect(risk.label).not.toBe('RISK_0_DOCS_ONLY_DOWNGRADE');
 });
 
-test('Phase 2 #2: tests/** test addition is Risk 1 even with content keywords', () => {
+test('Phase 2 #2.5: tests/** test addition is Risk 1 even with content keywords (safe-scope downgrade)', () => {
+  // Phase 2 #2 originally returned 3 here (content wins via touchesRls).
+  // Phase 2 #2.5 introduced the safe-scope downgrade: when path_risk <= 2
+  // and content_risk is 3-4 (non-destructive), the path-based risk wins.
+  // Result: a test file *mentioning* RLS in its title/requirement is Risk 1.
   const plan = {
     story_id: 'STORY-TEST-RLS',
     requested_paths: ['tests/ralph/rls-policy.spec.js'],
@@ -198,11 +202,9 @@ test('Phase 2 #2: tests/** test addition is Risk 1 even with content keywords', 
     requirement: 'Test that RLS policy blocks cross-tenant queries.'
   };
   const risk = evaluateRisk(plan);
-  // path rule for tests/rls/** is Risk 3 (RLS test). But this is tests/ralph/rls-policy.spec.js
-  // — not under tests/rls/, so it should match tests/** (Risk 1) or *.spec.js (Risk 1).
-  // The content also mentions RLS so content risk = 3. We take max(content=3, path=1) = 3
-  // because the file is named *.spec.js but the *.spec.js rule scores Risk 1 — content wins.
-  expect(risk.score).toBe(3);
+  expect(risk.score).toBe(1);
+  expect(risk.label).toBe('RISK_1_SAFE_SCOPE_DOWNGRADE');
+  expect(risk.content_risk_pre_downgrade.score).toBe(3);
 });
 
 test('Phase 2 #2: tests/rls/** RLS-specific test is Risk 3d (path-based, not downgraded)', () => {
@@ -325,4 +327,149 @@ test('Phase 2 #2: backwards-compat — existing migration plan still triggers Ri
   };
   const risk = evaluateRisk(plan);
   expect(risk.score).toBe(3);
+});
+
+// ============================================================
+// Phase 2 #2.5: safe-scope downgrade tests
+// ============================================================
+
+test('Phase 2 #2.5: scripts/** story with "secret-scan" keyword stays at Risk 2 (the original smoke-test scenario)', () => {
+  // This is the exact scenario from the first Phase 2 #3 smoke test
+  // (STORY-PHASE2-03-SMOKE-PATH-FILTER). The requirement legitimately
+  // mentioned the gate name "pre-secret-scan" multiple times; before
+  // Phase 2 #2.5, touchesSecrets matched "secret" -> content_risk=4 ->
+  // story stuck at PLAN_APPROVAL_PENDING even though path_risk=2 (scripts).
+  const plan = {
+    story_id: 'STORY-PATH-FILTER',
+    requested_paths: ['scripts/gates/path-filter.sh', 'tests/ralph/path-filter.spec.js'],
+    title: 'Add path-filter gate suite',
+    requirement: [
+      'Add scripts/gates/path-filter.sh that selects which gates to run.',
+      'Always emit pre-secret-scan.',
+      'Emit ralph-tests if any tests/ralph/ path changed.',
+      'Emit telegram-tests if any tests/telegram/ path changed.'
+    ].join(' ')
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBe(2);
+  expect(risk.label).toBe('RISK_2_SAFE_SCOPE_DOWNGRADE');
+  expect(risk.content_risk_pre_downgrade.score).toBeGreaterThanOrEqual(3);
+  expect(risk.path_label).toBe('RISK_2_SCRIPT');
+});
+
+test('Phase 2 #2.5: src/** story mentioning "auth" and "token" stays at Risk 2', () => {
+  // A regular source code task that *mentions* auth/token in passing —
+  // for example refactoring a request handler that happens to validate
+  // a bearer token — must not be gated.
+  const plan = {
+    story_id: 'STORY-SRC-REFACTOR',
+    requested_paths: ['src/ralph/request-handler.js'],
+    title: 'Refactor request-handler',
+    requirement: 'Extract the auth token parsing into a helper.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBe(2);
+  expect(risk.label).toBe('RISK_2_SAFE_SCOPE_DOWNGRADE');
+  expect(risk.content_risk_pre_downgrade.score).toBeGreaterThanOrEqual(3);
+});
+
+test('Phase 2 #2.5: src/auth/** story mentioning "auth" is NOT downgraded (path is auth-scoped)', () => {
+  // When the touched path is itself in an auth scope (src/auth/**, Risk 3b),
+  // the safe-scope downgrade must NOT apply. Real auth changes require
+  // proper plan approval.
+  const plan = {
+    story_id: 'STORY-AUTH-CHANGE',
+    requested_paths: ['src/auth/session-validator.ts'],
+    title: 'Update auth flow',
+    requirement: 'Modify auth token validation.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBeGreaterThanOrEqual(3);
+  // Either content_risk (3) wins or path-based RISK_3B_AUTH_LOGIC wins.
+  expect(risk.label).not.toBe('RISK_2_SAFE_SCOPE_DOWNGRADE');
+});
+
+test('Phase 2 #2.5: supabase/migrations/** is NOT downgraded (Risk 3a always wins)', () => {
+  // Migration files must always require plan approval.
+  const plan = {
+    story_id: 'STORY-MIGRATION',
+    requested_paths: ['supabase/migrations/050_add_table.sql'],
+    title: 'Add new table',
+    requirement: 'Add ghi.skills table with proper indexes.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBeGreaterThanOrEqual(3);
+  expect(risk.label).not.toBe('RISK_2_SAFE_SCOPE_DOWNGRADE');
+});
+
+test('Phase 2 #2.5: destructive keyword (drop table) in scripts is Risk 5 (no downgrade)', () => {
+  // The destructive keyword set always wins. A migration runner script
+  // that contains the literal phrase "drop table" — even in scripts/ —
+  // stays at Risk 5.
+  const plan = {
+    story_id: 'STORY-RUNNER',
+    requested_paths: ['scripts/db/runner.sh'],
+    title: 'Migration runner',
+    requirement: 'Helper that can run drop table cleanup in dev.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBe(5);
+  expect(risk.label).not.toBe('RISK_2_SAFE_SCOPE_DOWNGRADE');
+});
+
+test('Phase 2 #2.5: service_role keyword in scripts is Risk 5 (no downgrade)', () => {
+  // service_role is in the destructive set by long-standing design and
+  // is never downgraded.
+  const plan = {
+    story_id: 'STORY-SR-HELPER',
+    requested_paths: ['scripts/utils/db-helper.sh'],
+    title: 'Add db helper',
+    requirement: 'Helper script that uses service_role to seed test data.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBe(5);
+});
+
+test('Phase 2 #2.5: docs-only downgrade still wins when both apply (docs path + content risk)', () => {
+  // Backwards-compat with Phase 2 #2: docs-only path keeps its
+  // RISK_0_DOCS_ONLY_DOWNGRADE label (not RISK_0_SAFE_SCOPE_DOWNGRADE).
+  const plan = {
+    story_id: 'STORY-DOC-AUTH',
+    requested_paths: ['docs/soak/glossary-auth.md'],
+    title: 'Glossary: auth',
+    requirement: 'Describe the auth token lifecycle.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBe(0);
+  expect(risk.label).toBe('RISK_0_DOCS_ONLY_DOWNGRADE');
+});
+
+test('Phase 2 #2.5: mixed paths (scripts + supabase/migrations) is NOT downgraded — Risk 3 wins', () => {
+  // Mixed-scope path lists: any path with Risk >= 3 disqualifies the
+  // safe-scope downgrade (path_risk for the set is 3).
+  const plan = {
+    story_id: 'STORY-MIXED-MIGRATION',
+    requested_paths: ['scripts/utils/runner.sh', 'supabase/migrations/060_seed.sql'],
+    title: 'Add migration + runner'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBeGreaterThanOrEqual(3);
+  expect(risk.label).not.toBe('RISK_2_SAFE_SCOPE_DOWNGRADE');
+});
+
+test('Phase 2 #2.5: content_risk = 2 (touchesAuthOrRls returns false) does not trigger safe-scope downgrade', () => {
+  // The safe-scope downgrade only fires when content_risk >= 3 (because
+  // a content_risk of 2 = clean of soft mentions; no downgrade needed).
+  // A plain scripts story with no security keywords should just be path-
+  // based Risk 2, no downgrade label.
+  const plan = {
+    story_id: 'STORY-PLAIN-SCRIPT',
+    requested_paths: ['scripts/utils/echo.sh'],
+    title: 'Add echo helper',
+    requirement: 'Print stdin to stdout.'
+  };
+  const risk = evaluateRisk(plan);
+  expect(risk.score).toBe(2);
+  // path-based (not a "downgrade" because no content risk to suppress)
+  expect(risk.label).toBe('RISK_2_SCRIPT');
 });
