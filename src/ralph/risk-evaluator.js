@@ -1,4 +1,5 @@
 const { CONTROL_ACTIONS, CONTROL_REASONS, APPROVAL_TYPES } = require('./types');
+const { riskForPaths, pathsFromPlan } = require('./risk-paths');
 
 function maxRisk(a, b) {
   return b.score > a.score ? b : a;
@@ -91,7 +92,9 @@ function isDestructive(plan) {
   return destructivePatterns.some((pattern) => text.includes(pattern));
 }
 
-function evaluateRisk(plan) {
+// Phase 2 #2: compute the content-based risk (the pre-existing substring
+// logic) as a standalone helper so we can combine it with path-based risk.
+function evaluateContentBasedRisk(plan) {
   let risk = createRisk(0, 'low', 'RISK_0_LOW');
 
   if (hasDbMigration(plan)) {
@@ -123,10 +126,50 @@ function evaluateRisk(plan) {
     risk = createRisk(5, 'destructive_or_secret_risk', 'RISK_5_DESTRUCTIVE_OR_SECRET');
   }
 
+  return risk;
+}
+
+function evaluateRisk(plan) {
+  const contentRisk = evaluateContentBasedRisk(plan);
+  const paths = pathsFromPlan(plan);
+  const pathRisk = riskForPaths(paths);
+
+  // Phase 2 #2 docs-only downgrade: when every touched path is docs/markdown
+  // (path_risk.score === 0) and there are paths to evaluate, the content
+  // risk is ignored even if substrings matched. A docs story that describes
+  // RLS / auth / secrets concepts must not be gated as if it were changing
+  // those concepts. This is the key chicken-and-egg break: Phase 1 soak
+  // stories with security-related glossary content were unnecessarily
+  // gated at PLAN_APPROVAL_PENDING under fullauto.
+  //
+  // Destructive content (Risk 5) is NEVER downgraded — even a docs file
+  // saying "drop table users" or "force push to main" stays at Risk 5.
+  // That keyword set is small and intentional.
+  const docsOnly = pathRisk.paths_evaluated > 0
+    && pathRisk.score === 0
+    && contentRisk.score < 5;
+
+  let finalRisk;
+  if (docsOnly && contentRisk.score >= 2) {
+    finalRisk = createRisk(0, 'docs_only_downgrade', 'RISK_0_DOCS_ONLY_DOWNGRADE', {
+      content_risk_pre_downgrade: { score: contentRisk.score, category: contentRisk.category, label: contentRisk.label }
+    });
+  } else {
+    finalRisk = contentRisk.score >= pathRisk.score
+      ? contentRisk
+      : createRisk(pathRisk.score, 'path_based', pathRisk.label);
+  }
+
   return {
-    ...risk,
-    requires_approval: risk.score >= 2,
-    control_model: 'control_decision_v1'
+    ...finalRisk,
+    requires_approval: finalRisk.score >= 2,
+    control_model: 'control_decision_v1',
+    path_risk: {
+      score: pathRisk.score,
+      label: pathRisk.label,
+      paths_evaluated: pathRisk.paths_evaluated,
+      paths_unmatched: pathRisk.paths_unmatched
+    }
   };
 }
 
@@ -203,6 +246,7 @@ function decideControlAction(risk, modeOrOptions = 'approval', envArg = 'local',
 module.exports = {
   createRisk,
   controlDecision,
+  evaluateContentBasedRisk,
   evaluateRisk,
   decideControlAction,
   targetEnv,
