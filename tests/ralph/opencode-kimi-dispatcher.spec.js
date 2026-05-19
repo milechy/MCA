@@ -508,6 +508,41 @@ test('dispatchOpenCodeKimi (worktree mode) rejects patches that escape requested
   expect(fs.existsSync(path.join(repo, 'src/forbidden.js'))).toBe(false);
 });
 
+test('dispatchOpenCodeKimi never injects unrelated secrets into spawned env', () => {
+  // Restored after Phase 2 #4 autonomous dogfood (PR #141) inadvertently
+  // deleted this test while modifying the file. The story spec said
+  // "Add new tests after the existing tests"; Kimi K2.6 misinterpreted
+  // and replaced the last existing test with the new ones. The deleted
+  // test is the Phase 1 env-scrubbing security guard — we must keep it.
+  const rootDir = tmpRoot();
+  const observed = [];
+  function spawn(command, args, opts) {
+    observed.push({ command, args, env: opts && opts.env });
+    if (args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n' };
+    return { status: 0, stdout: SAMPLE_DIFF };
+  }
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: story(),
+    sandbox_root: '.ralph/sandboxes/STORY-KIMI',
+    task: 'task',
+    requested_paths: ['docs/kimi-smoke.md'],
+    spawn,
+    env: {
+      PATH: '/bin',
+      HOME: '/u',
+      OPENROUTER_API_KEY: 'or-key',
+      SUPABASE_SERVICE_ROLE: 'must-not-leak',
+      GITHUB_TOKEN: 'must-not-leak'
+    }
+  });
+  expect(result.ok).toBe(true);
+  const runCall = observed.find((entry) => entry.args[0] === 'run');
+  expect(runCall.env).not.toHaveProperty('SUPABASE_SERVICE_ROLE');
+  expect(runCall.env).not.toHaveProperty('GITHUB_TOKEN');
+  expect(runCall.env.OPENROUTER_API_KEY).toBe('or-key');
+});
+
 test('Phase 2 #4: buildRequestedPathsSection classifies existing vs new files', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-dispatcher-phase2-'));
   fs.mkdirSync(path.join(rootDir, 'src'), { recursive: true });
