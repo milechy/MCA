@@ -181,3 +181,147 @@ test('Phase 1 #11: releaseDaemonLock refuses to remove a lock held by a differen
   // Clean up to avoid leaking into other tests.
   fs.unlinkSync(lockPath);
 });
+
+// ============================================================
+// Phase 2 #5.x: daemon budget guard tests
+// ============================================================
+
+const { evaluateBudgetGuard } = require('../../scripts/ralph/autonomous-daemon');
+const fsForBudget = require('node:fs');
+const osForBudget = require('node:os');
+const pathForBudget = require('node:path');
+
+function budgetTmpRoot() {
+  return fsForBudget.mkdtempSync(pathForBudget.join(osForBudget.tmpdir(), 'daemon-budget-guard-'));
+}
+
+function writeCostLedger(rootDir, entries) {
+  fsForBudget.mkdirSync(pathForBudget.join(rootDir, '.ralph'), { recursive: true });
+  const ledgerPath = pathForBudget.join(rootDir, '.ralph', 'cost-ledger.jsonl');
+  const lines = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+  fsForBudget.writeFileSync(ledgerPath, lines, 'utf8');
+}
+
+test('Phase 2 #5.x: evaluateBudgetGuard returns paused=false when spend is under cap', () => {
+  const rootDir = budgetTmpRoot();
+  writeCostLedger(rootDir, [{
+    at: new Date().toISOString(),
+    story_id: 'STORY-A',
+    model: 'kimi',
+    input_tokens: 100,
+    output_tokens: 100,
+    cost_usd: 0.0001
+  }]);
+  const guard = evaluateBudgetGuard({
+    rootDir,
+    env: { RALPH_KIMI_DAILY_BUDGET_USD: '5.00' }
+  });
+  expect(guard.paused).toBe(false);
+  expect(guard.over).toBe(false);
+  expect(guard.daily_cap).toBe(5.00);
+  expect(guard.daily_spend).toBe(0.0001);
+});
+
+test('Phase 2 #5.x: evaluateBudgetGuard returns paused=true when spend exceeds cap', () => {
+  const rootDir = budgetTmpRoot();
+  writeCostLedger(rootDir, [{
+    at: new Date().toISOString(),
+    story_id: 'STORY-EXPENSIVE',
+    model: 'kimi',
+    input_tokens: 999999,
+    output_tokens: 999999,
+    cost_usd: 100.0
+  }]);
+  const guard = evaluateBudgetGuard({
+    rootDir,
+    env: { RALPH_KIMI_DAILY_BUDGET_USD: '0.01' }
+  });
+  expect(guard.paused).toBe(true);
+  expect(guard.over).toBe(true);
+  expect(guard.reason).toBe('daily_budget_exceeded');
+});
+
+test('Phase 2 #5.x: evaluateBudgetGuard with skip=true bypasses the check', () => {
+  const rootDir = budgetTmpRoot();
+  writeCostLedger(rootDir, [{
+    at: new Date().toISOString(),
+    story_id: 'STORY-EXPENSIVE',
+    model: 'kimi',
+    input_tokens: 999999,
+    output_tokens: 999999,
+    cost_usd: 100.0
+  }]);
+  const guard = evaluateBudgetGuard({
+    rootDir,
+    env: { RALPH_KIMI_DAILY_BUDGET_USD: '0.01' },
+    skip: true
+  });
+  expect(guard.paused).toBe(false);
+  expect(guard.reason).toBe('budget_guard_skipped');
+});
+
+test('Phase 2 #5.x: evaluateBudgetGuard handles missing ledger gracefully (no spend yet)', () => {
+  const rootDir = budgetTmpRoot();
+  // No ledger file at all
+  const guard = evaluateBudgetGuard({
+    rootDir,
+    env: { RALPH_KIMI_DAILY_BUDGET_USD: '5.00' }
+  });
+  expect(guard.paused).toBe(false);
+  expect(guard.daily_spend).toBe(0);
+});
+
+test('Phase 2 #5.x: parseArgs picks up --skip-budget-guard from flag and env', () => {
+  const opts1 = parseArgs(['--skip-budget-guard'], {});
+  expect(opts1.skip_budget_guard).toBe(true);
+  const opts2 = parseArgs([], { RALPH_DAEMON_SKIP_BUDGET_GUARD: 'true' });
+  expect(opts2.skip_budget_guard).toBe(true);
+  const opts3 = parseArgs([], {});
+  expect(opts3.skip_budget_guard).toBe(false);
+});
+
+test('Phase 2 #5.x: daemonStatus includes the budget object when provided', () => {
+  const status = daemonStatus(1, {
+    ok: true, stage: 's', execution_connected: false, commands_executed: [], repository_files_modified: [], next_action: 'n'
+  }, { interval_ms: 60000, limit: 1, ticks_per_story: 1, pre_secret_scan_ok: false }, null, {
+    paused: false, reason: null, over: false, daily_spend: 0.42, daily_cap: 5.0, fraction: 0.084
+  });
+  expect(status.budget).toMatchObject({ paused: false, daily_spend: 0.42, daily_cap: 5.0 });
+});
+
+test('Phase 2 #5.x: runDaemon emits budget_paused status without invoking scheduler when over budget', async () => {
+  // End-to-end: write a ledger that exceeds an artificially-low cap, run
+  // one daemon cycle, assert no scheduler run happened.
+  const rootDir = budgetTmpRoot();
+  writeCostLedger(rootDir, [{
+    at: new Date().toISOString(),
+    story_id: 'STORY-OVER',
+    model: 'kimi',
+    input_tokens: 999999,
+    output_tokens: 999999,
+    cost_usd: 50.0
+  }]);
+  const prevCap = process.env.RALPH_KIMI_DAILY_BUDGET_USD;
+  process.env.RALPH_KIMI_DAILY_BUDGET_USD = '0.01';
+  try {
+    const result = await runDaemon({
+      rootDir,
+      once: true,
+      interval_ms: 1000,
+      max_cycles: 1,
+      limit: 1,
+      ticks_per_story: 1,
+      pre_secret_scan_ok: true,
+      issue_pull_every_cycles: 0,
+      skip_budget_guard: false
+    });
+    expect(result.outputs.length).toBeGreaterThanOrEqual(1);
+    const firstStatus = result.outputs[0];
+    expect(firstStatus.budget.paused).toBe(true);
+    expect(firstStatus.scheduler.stage).toBe('ralph_autonomous_daemon_budget_paused');
+    expect(firstStatus.scheduler.reason).toBe('daily_budget_exceeded');
+  } finally {
+    if (prevCap === undefined) delete process.env.RALPH_KIMI_DAILY_BUDGET_USD;
+    else process.env.RALPH_KIMI_DAILY_BUDGET_USD = prevCap;
+  }
+});

@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { schedulerTick } = require('../../src/ralph/autonomous-scheduler');
+const { isOverBudget } = require('../../src/ralph/kimi-cost-tracker');
 const { tickIssueSupplier, supplierOptionsFromEnv } = require('../../src/ralph/github-issue-supplier');
 
 function parseBool(value) {
@@ -90,7 +91,10 @@ function parseArgs(argv = process.argv.slice(2), env = process.env) {
     issue_pull_every_cycles: Number.isFinite(issuePullEvery) && issuePullEvery >= 0 ? issuePullEvery : 0,
     issue_repo: value('--issue-repo', supplierFromEnv.repo),
     issue_ready_labels: supplierFromEnv.ready_labels,
-    issue_max: supplierFromEnv.max_issues
+    issue_max: supplierFromEnv.max_issues,
+    // Phase 2 #5.x: budget guard CLI flag. Default OFF (i.e., guard ON).
+    // Set RALPH_DAEMON_SKIP_BUDGET_GUARD=true or pass --skip-budget-guard to bypass.
+    skip_budget_guard: has('--skip-budget-guard') || parseBool(value('--skip-budget-guard', env.RALPH_DAEMON_SKIP_BUDGET_GUARD))
   };
 }
 
@@ -98,7 +102,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function daemonStatus(cycle, result, options, supplier = null) {
+function daemonStatus(cycle, result, options, supplier = null, budget = null) {
   return {
     ok: result.ok === true && (supplier === null || supplier.ok === true),
     stage: 'ralph_autonomous_daemon_cycle',
@@ -109,12 +113,51 @@ function daemonStatus(cycle, result, options, supplier = null) {
     pre_secret_scan_ok: options.pre_secret_scan_ok === true,
     issue_pull_every_cycles: options.issue_pull_every_cycles || 0,
     issue_supplier: supplier,
+    budget,
     scheduler: result,
     execution_connected: result.execution_connected === true,
     commands_executed: result.commands_executed || [],
     repository_files_modified: result.repository_files_modified || [],
     next_action: result.next_action
   };
+}
+
+// Phase 2 #5.x: daemon-level budget guard.
+//
+// Before each scheduler tick, consult kimi-cost-tracker.isOverBudget to see
+// whether today's Kimi spend has exceeded the configured daily cap. When
+// over budget, the daemon SKIPS the scheduler tick (no new stories started)
+// and emits a paused status. The daemon continues running so it can resume
+// automatically (a) when the user adds OpenRouter credit + the call cost
+// estimates fall back under the cap, or more commonly (b) when the date
+// rolls over and the new daily window starts fresh.
+//
+// CLI: --skip-budget-guard disables the check (testing / one-off forced run).
+function evaluateBudgetGuard({ rootDir, env = process.env, skip = false, now = new Date() }) {
+  if (skip) {
+    return { paused: false, reason: 'budget_guard_skipped', over: false, daily_spend: 0, daily_cap: 0, fraction: 0 };
+  }
+  try {
+    const result = isOverBudget({ rootDir, env, now });
+    return {
+      paused: result.over === true,
+      reason: result.over ? 'daily_budget_exceeded' : null,
+      over: result.over === true,
+      daily_spend: result.daily_spend,
+      daily_cap: result.daily_cap,
+      fraction: result.fraction
+    };
+  } catch (error) {
+    // Best-effort: a failure in the budget tracker must not crash the daemon.
+    return {
+      paused: false,
+      reason: `budget_guard_error:${String(error && error.message ? error.message : error).slice(0, 80)}`,
+      over: false,
+      daily_spend: 0,
+      daily_cap: 0,
+      fraction: 0
+    };
+  }
 }
 
 async function runDaemon(options = parseArgs()) {
@@ -153,15 +196,42 @@ async function runDaemon(options = parseArgs()) {
         }
       });
     }
-    const result = schedulerTick({
+    // Phase 2 #5.x: budget guard. If today's Kimi spend exceeds the daily
+    // cap (RALPH_KIMI_DAILY_BUDGET_USD or default $5.00), skip the
+    // scheduler tick to prevent runaway spend. Resume automatically when
+    // back under cap (e.g., after midnight rollover or operator adds
+    // credit). The daemon stays alive so the operator doesn't need to
+    // restart it.
+    const budget = evaluateBudgetGuard({
       rootDir: options.rootDir,
-      now,
-      limit: options.limit,
-      ticks_per_story: options.ticks_per_story,
-      pre_secret_scan_ok: options.pre_secret_scan_ok === true,
-      env: process.env
+      env: process.env,
+      skip: options.skip_budget_guard === true,
+      now
     });
-    const status = daemonStatus(cycle, result, options, supplier);
+
+    let result;
+    if (budget.paused) {
+      // Synthetic paused-cycle result. No scheduler invocation.
+      result = {
+        ok: true,
+        stage: 'ralph_autonomous_daemon_budget_paused',
+        reason: budget.reason,
+        execution_connected: false,
+        commands_executed: [],
+        repository_files_modified: [],
+        next_action: 'wait_for_budget_window_or_increase_cap'
+      };
+    } else {
+      result = schedulerTick({
+        rootDir: options.rootDir,
+        now,
+        limit: options.limit,
+        ticks_per_story: options.ticks_per_story,
+        pre_secret_scan_ok: options.pre_secret_scan_ok === true,
+        env: process.env
+      });
+    }
+    const status = daemonStatus(cycle, result, options, supplier, budget);
     outputs.push(status);
     console.log(JSON.stringify(status, null, 2));
 
@@ -197,6 +267,7 @@ module.exports = {
   parseBool,
   parseArgs,
   daemonStatus,
+  evaluateBudgetGuard,
   runDaemon,
   tryAcquireDaemonLock,
   releaseDaemonLock,
