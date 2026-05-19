@@ -101,6 +101,7 @@ function buildWorktreePrompt({ task, requested_paths, rootDir }) {
     '  - Do NOT print secrets or raw environment values.',
     '  - Do NOT delete .git, .ralph, or anything under those directories.',
     '  - If the requested paths reference an existing file, treat the bounded file context below as the source of truth; do not invent contents you did not read.',
+    '  - When modifying an existing file in requested_paths, NEVER delete or replace existing tests, functions, exports, or comments unless the task explicitly asks you to. Only APPEND new content (e.g. add new tests at the end of the test file), or change the specific lines the task names. The autonomous loop tracks regressions and will roll back any patch that removes pre-existing tests.',
     buildRequestedPathsSection({ rootDir, requested_paths }),
     `Task: ${String(task || '').slice(0, 4000)}`,
     file_context ? `Bounded file context:\n${file_context}` : 'Bounded file context: (none supplied)',

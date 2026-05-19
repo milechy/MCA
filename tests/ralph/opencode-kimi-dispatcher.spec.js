@@ -587,3 +587,11 @@ test('Phase 2 #4: buildWorktreePrompt with empty requested_paths still produces 
   // Should not crash and should still contain task
   expect(prompt).toContain('do nothing');
 });
+
+test('Phase 2 #4.1: buildWorktreePrompt forbids deleting existing tests / functions when modifying', () => {
+  const rootDir = tmpRoot();
+  const prompt = buildWorktreePrompt({ task: 'modify the file', requested_paths: ['tests/example.spec.js'], rootDir });
+  expect(prompt).toContain('NEVER delete or replace existing tests');
+  expect(prompt).toContain('Only APPEND new content');
+});
+
