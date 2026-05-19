@@ -686,3 +686,33 @@ test('Phase 2 #5: dispatchOpenCodeKimi allows dispatch when under daily budget',
   });
 });
 
+
+test('Phase 3 #1: resolveModel honors story.executor_model over env defaults', () => {
+  const { resolveModel } = require('../../src/ralph/opencode-kimi-dispatcher');
+
+  // No story → env-based default (or DEFAULT_MODEL)
+  expect(resolveModel({ OPENCODE_MODEL: 'openrouter/openai/gpt-5' }, null))
+    .toBe('openrouter/openai/gpt-5');
+
+  // Story overrides env
+  expect(resolveModel(
+    { OPENCODE_MODEL: 'openrouter/openai/gpt-5' },
+    { executor_model: 'openrouter/anthropic/claude-sonnet-4.6' }
+  )).toBe('openrouter/anthropic/claude-sonnet-4.6');
+
+  // Story with empty executor_model → fall back to env
+  expect(resolveModel(
+    { OPENCODE_MODEL: 'openrouter/openai/gpt-5' },
+    { executor_model: '' }
+  )).toBe('openrouter/openai/gpt-5');
+
+  // Story with shell-meta characters in executor_model → rejected, falls back to env
+  expect(resolveModel(
+    { OPENCODE_MODEL: 'openrouter/openai/gpt-5' },
+    { executor_model: 'evil; rm -rf /' }
+  )).toBe('openrouter/openai/gpt-5');
+
+  // No story and no env → DEFAULT_MODEL
+  const { DEFAULT_MODEL } = require('../../src/ralph/opencode-kimi-dispatcher');
+  expect(resolveModel({}, null)).toBe(DEFAULT_MODEL);
+});

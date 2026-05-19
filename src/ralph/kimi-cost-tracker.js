@@ -3,17 +3,53 @@ const path = require('node:path');
 
 const DEFAULT_DAILY_BUDGET_USD = 5.00;
 
-const INPUT_COST_PER_TOKEN = 0.0000002;
-const OUTPUT_COST_PER_TOKEN = 0.0000008;
+// Phase 2 #5 default (Kimi K2.6 only) — kept as the fallback for any model
+// not in MODEL_PRICING below.
+const INPUT_COST_PER_TOKEN = 0.0000002;   // $0.20 / 1M tokens
+const OUTPUT_COST_PER_TOKEN = 0.0000008;  // $0.80 / 1M tokens
+
+// Phase 3 #1: per-model pricing table. All rates are USD per token (not per
+// 1M). Rates approximate OpenRouter listed prices as of 2026-05; review
+// quarterly. If a model name is not in this table, fall back to Kimi rates
+// (defined above). The fallback is intentionally an UNDER-COUNT for
+// expensive models, which means a missing pricing entry is a SPEND LEAK
+// the operator must catch and patch. Phase 3 #5 surfaces fallback usage
+// in ledger entry metadata so dashboards can highlight stale entries.
+const MODEL_PRICING = Object.freeze({
+  // Cheap executors (Phase 2 default)
+  'openrouter/moonshotai/kimi-k2.6': { input: 0.0000002, output: 0.0000008, label: 'kimi-k2.6' },
+  'openrouter/moonshotai/kimi-k2': { input: 0.0000002, output: 0.0000008, label: 'kimi-k2' },
+
+  // Anthropic Claude family on OpenRouter
+  'openrouter/anthropic/claude-sonnet-4.5': { input: 0.000003, output: 0.000015, label: 'claude-sonnet-4.5' },
+  'openrouter/anthropic/claude-sonnet-4.6': { input: 0.000003, output: 0.000015, label: 'claude-sonnet-4.6' },
+  'openrouter/anthropic/claude-opus-4.7': { input: 0.000015, output: 0.000075, label: 'claude-opus-4.7' },
+  'openrouter/anthropic/claude-haiku-4.5': { input: 0.000001, output: 0.000005, label: 'claude-haiku-4.5' },
+
+  // OpenAI GPT-5 family on OpenRouter
+  'openrouter/openai/gpt-5': { input: 0.000005, output: 0.000015, label: 'gpt-5' },
+  'openrouter/openai/gpt-5-mini': { input: 0.0000015, output: 0.000006, label: 'gpt-5-mini' },
+
+  // Google Gemini on OpenRouter
+  'openrouter/google/gemini-3.0-pro': { input: 0.0000035, output: 0.0000105, label: 'gemini-3.0-pro' }
+});
+
+function pricingForModel(model) {
+  if (model && Object.prototype.hasOwnProperty.call(MODEL_PRICING, model)) {
+    return MODEL_PRICING[model];
+  }
+  return { input: INPUT_COST_PER_TOKEN, output: OUTPUT_COST_PER_TOKEN, label: 'fallback_kimi_rates' };
+}
 
 function estimateTokens(text) {
   if (text == null) return 0;
   return Math.ceil(String(text).length / 4);
 }
 
-function estimateCostUsd({ input_tokens, output_tokens }) {
-  const inputCost = (input_tokens || 0) * INPUT_COST_PER_TOKEN;
-  const outputCost = (output_tokens || 0) * OUTPUT_COST_PER_TOKEN;
+function estimateCostUsd({ input_tokens, output_tokens, model } = {}) {
+  const rates = pricingForModel(model);
+  const inputCost = (input_tokens || 0) * rates.input;
+  const outputCost = (output_tokens || 0) * rates.output;
   const total = inputCost + outputCost;
   return Math.round(total * 1_000_000) / 1_000_000;
 }
@@ -32,7 +68,10 @@ function recordKimiCall({ rootDir, story_id, prompt_text, output_text, model, no
 
   const it = input_tokens != null ? input_tokens : estimateTokens(prompt_text);
   const ot = output_tokens != null ? output_tokens : estimateTokens(output_text);
-  const cost = estimateCostUsd({ input_tokens: it, output_tokens: ot });
+  // Phase 3 #1: pass model into pricing so per-model rates apply.
+  const cost = estimateCostUsd({ input_tokens: it, output_tokens: ot, model });
+  const rates = pricingForModel(model);
+  const pricingSource = rates.label === 'fallback_kimi_rates' ? 'fallback_kimi_rates' : rates.label;
 
   const entry = {
     at: now.toISOString(),
@@ -40,7 +79,8 @@ function recordKimiCall({ rootDir, story_id, prompt_text, output_text, model, no
     model,
     input_tokens: it,
     output_tokens: ot,
-    cost_usd: cost
+    cost_usd: cost,
+    pricing_source: pricingSource
   };
 
   fs.appendFileSync(ledgerPath, JSON.stringify(entry) + '\n', 'utf8');
@@ -127,6 +167,8 @@ function isOverBudget({ rootDir, env = process.env, now = new Date() } = {}) {
 
 module.exports = {
   DEFAULT_DAILY_BUDGET_USD,
+  MODEL_PRICING,
+  pricingForModel,
   estimateTokens,
   estimateCostUsd,
   recordKimiCall,
