@@ -65,8 +65,16 @@ function safeEnv(env) {
   };
 }
 
-function resolveModel(env) {
-  const raw = String(env.RALPH_OPENCODE_KIMI_MODEL || env.OPENCODE_MODEL || DEFAULT_MODEL).trim();
+function resolveModel(env, story = null) {
+  // Phase 3 #1: story.executor_model takes precedence over env defaults.
+  // This lets the (Phase 3 #2) idea-refiner pick a model per-story based
+  // on difficulty assessment — e.g. trivial → kimi-k2.6, architectural →
+  // claude-sonnet-4.6 — without changing global env state.
+  if (story && story.executor_model) {
+    const fromStory = String(story.executor_model).trim();
+    if (fromStory && !/[\s;|&`$<>]/.test(fromStory)) return fromStory;
+  }
+  const raw = String((env && env.RALPH_OPENCODE_KIMI_MODEL) || (env && env.OPENCODE_MODEL) || DEFAULT_MODEL).trim();
   if (!raw || /[\s;|&`$<>]/.test(raw)) return DEFAULT_MODEL;
   return raw;
 }
@@ -291,7 +299,8 @@ function dispatchOpenCodeKimi({
     if (worktreeResult.command_preview) commands.push(worktreeResult.command_preview);
   }
 
-  const model = resolveModel(env);
+  // Phase 3 #1: pass story so resolveModel can honor story.executor_model.
+  const model = resolveModel(env, story);
   const promptCwd = worktreePath || rootDir;
   const prompt = useWorktree
     ? buildWorktreePrompt({ task, requested_paths, rootDir })

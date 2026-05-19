@@ -44,6 +44,20 @@ function normalizeRequestedPaths(value) {
   return Array.from(new Set(value.map(normalizePath).filter(Boolean))).slice(0, 50);
 }
 
+// Phase 3 #1 helpers for optional planner/executor metadata.
+function normalizeOptionalString(value, maxLength = 120) {
+  if (value === null || value === undefined) return null;
+  const s = oneLine(String(value), maxLength);
+  return s ? s : null;
+}
+
+const ALLOWED_DIFFICULTIES = Object.freeze(['trivial', 'easy', 'medium', 'hard', 'architectural']);
+function normalizeDifficulty(value) {
+  if (value === null || value === undefined) return null;
+  const s = String(value).toLowerCase().trim();
+  return ALLOWED_DIFFICULTIES.includes(s) ? s : null;
+}
+
 function normalizeLabels(value) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.map((item) => {
@@ -109,6 +123,16 @@ function buildStory(input = {}, { now = new Date() } = {}) {
       mode: input.mode || 'approval',
       target_env: input.target_env || input.environment || 'local',
       requested_paths: normalizeRequestedPaths(input.requested_paths),
+      // Phase 3 #1: optional planner/executor metadata. All fields default
+      // to null; legacy stories without these continue to work. The
+      // idea-refiner (Phase 3 #2) will populate planner_* fields when
+      // creating a story from a vague user idea. The dispatcher (Phase 3 #4)
+      // will route to executor_model when present, otherwise fall back to
+      // the env-based default.
+      executor_model: normalizeOptionalString(input.executor_model, 120),
+      planner_model: normalizeOptionalString(input.planner_model, 120),
+      planner_cost_usd: Number.isFinite(input.planner_cost_usd) && input.planner_cost_usd >= 0 ? input.planner_cost_usd : null,
+      difficulty: normalizeDifficulty(input.difficulty),
       status,
       attempts: Number.isInteger(input.attempts) && input.attempts >= 0 ? input.attempts : 0,
       max_attempts: Number.isInteger(input.max_attempts) && input.max_attempts > 0 ? Math.min(input.max_attempts, 10) : 3,
@@ -141,6 +165,11 @@ function summarizeStory(story) {
     current_job_id: story.current_job_id || null,
     current_plan_hash: story.current_plan_hash || null,
     requested_paths: story.requested_paths || [],
+    // Phase 3 #1: surface planner/executor metadata in the bounded summary.
+    executor_model: story.executor_model || null,
+    planner_model: story.planner_model || null,
+    planner_cost_usd: typeof story.planner_cost_usd === 'number' ? story.planner_cost_usd : null,
+    difficulty: story.difficulty || null,
     retry_after_at: story.retry_after_at || null,
     updated_at: story.updated_at,
     next_action: story.status === STORY_STATUSES.QUEUED ? 'run_ultraplan_for_story' : 'inspect_story_or_advance_loop'
@@ -224,6 +253,14 @@ function updateStory(storyId, patch = {}, { rootDir = process.cwd(), now = new D
     labels: patch.labels ? normalizeLabels(patch.labels) : current.labels,
     github_issue: patch.github_issue ? normalizeGitHubIssue(patch.github_issue) : current.github_issue,
     requested_paths: patch.requested_paths ? normalizeRequestedPaths(patch.requested_paths) : current.requested_paths,
+    // Phase 3 #1: optional fields with normalization. Setting to null
+    // explicitly clears them; omitting from the patch preserves current.
+    executor_model: Object.prototype.hasOwnProperty.call(patch, 'executor_model') ? normalizeOptionalString(patch.executor_model, 120) : current.executor_model || null,
+    planner_model: Object.prototype.hasOwnProperty.call(patch, 'planner_model') ? normalizeOptionalString(patch.planner_model, 120) : current.planner_model || null,
+    planner_cost_usd: Object.prototype.hasOwnProperty.call(patch, 'planner_cost_usd')
+      ? (Number.isFinite(patch.planner_cost_usd) && patch.planner_cost_usd >= 0 ? patch.planner_cost_usd : null)
+      : (typeof current.planner_cost_usd === 'number' ? current.planner_cost_usd : null),
+    difficulty: Object.prototype.hasOwnProperty.call(patch, 'difficulty') ? normalizeDifficulty(patch.difficulty) : current.difficulty || null,
     acceptance_criteria: patch.acceptance_criteria ? normalizeStringList(patch.acceptance_criteria, 25, 300) : current.acceptance_criteria,
     retry_after_at: Object.prototype.hasOwnProperty.call(patch, 'retry_after_at') ? normalizeIsoTimestamp(patch.retry_after_at) : current.retry_after_at || null,
     updated_at: now.toISOString(),
@@ -267,5 +304,8 @@ module.exports = {
   summarizeStory,
   normalizeLabels,
   normalizeRequestedPaths,
-  normalizeIsoTimestamp
+  normalizeIsoTimestamp,
+  normalizeOptionalString,
+  normalizeDifficulty,
+  ALLOWED_DIFFICULTIES
 };

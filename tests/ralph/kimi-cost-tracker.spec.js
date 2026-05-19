@@ -140,3 +140,79 @@ test('isOverBudget true when daily_spend exceeds cap', () => {
   expect(check.daily_spend).toBe(100.0);
   expect(check.daily_cap).toBe(0.01);
 });
+
+// ============================================================
+// Phase 3 #1: per-model pricing tests
+// ============================================================
+
+const { MODEL_PRICING, pricingForModel } = require('../../src/ralph/kimi-cost-tracker');
+
+test('Phase 3 #1: MODEL_PRICING contains entries for Kimi, Claude, GPT-5, Gemini', () => {
+  expect(MODEL_PRICING['openrouter/moonshotai/kimi-k2.6']).toBeDefined();
+  expect(MODEL_PRICING['openrouter/anthropic/claude-sonnet-4.6']).toBeDefined();
+  expect(MODEL_PRICING['openrouter/openai/gpt-5']).toBeDefined();
+  expect(MODEL_PRICING['openrouter/google/gemini-3.0-pro']).toBeDefined();
+});
+
+test('Phase 3 #1: pricingForModel returns Kimi rates for unknown models (fallback)', () => {
+  const p = pricingForModel('some/unknown/model-xyz');
+  expect(p.label).toBe('fallback_kimi_rates');
+  expect(p.input).toBe(0.0000002);
+  expect(p.output).toBe(0.0000008);
+});
+
+test('Phase 3 #1: estimateCostUsd uses Claude Sonnet pricing for that model', () => {
+  // Sonnet 4.6: $3/$15 per 1M = 0.000003 / 0.000015 per token
+  const cost = estimateCostUsd({
+    input_tokens: 1000,
+    output_tokens: 1000,
+    model: 'openrouter/anthropic/claude-sonnet-4.6'
+  });
+  // 1000 * 0.000003 + 1000 * 0.000015 = 0.003 + 0.015 = 0.018
+  expect(cost).toBe(0.018);
+});
+
+test('Phase 3 #1: estimateCostUsd uses GPT-5 pricing for that model', () => {
+  // GPT-5: $5/$15 per 1M = 0.000005 / 0.000015 per token
+  const cost = estimateCostUsd({
+    input_tokens: 1000,
+    output_tokens: 1000,
+    model: 'openrouter/openai/gpt-5'
+  });
+  // 1000 * 0.000005 + 1000 * 0.000015 = 0.005 + 0.015 = 0.020
+  expect(cost).toBe(0.020);
+});
+
+test('Phase 3 #1: estimateCostUsd without model arg uses fallback Kimi rates', () => {
+  // Backwards-compat: callers that don't pass model still work.
+  const cost = estimateCostUsd({ input_tokens: 1000, output_tokens: 1000 });
+  // 1000 * 0.0000002 + 1000 * 0.0000008 = 0.001
+  expect(cost).toBe(0.001);
+});
+
+test('Phase 3 #1: recordKimiCall records pricing_source = model label when known', () => {
+  const rootDir = tmpRoot();
+  const r = recordKimiCall({
+    rootDir,
+    story_id: 'STORY-CLAUDE',
+    prompt_text: 'x'.repeat(4000),
+    output_text: 'y'.repeat(4000),
+    model: 'openrouter/anthropic/claude-sonnet-4.6'
+  });
+  expect(r.ok).toBe(true);
+  expect(r.entry.pricing_source).toBe('claude-sonnet-4.6');
+  expect(r.entry.cost_usd).toBeGreaterThan(0);
+});
+
+test('Phase 3 #1: recordKimiCall records pricing_source = fallback_kimi_rates for unknown model', () => {
+  const rootDir = tmpRoot();
+  const r = recordKimiCall({
+    rootDir,
+    story_id: 'STORY-UNKNOWN',
+    prompt_text: 'x'.repeat(100),
+    output_text: 'y'.repeat(100),
+    model: 'some/exotic/model-not-in-table'
+  });
+  expect(r.ok).toBe(true);
+  expect(r.entry.pricing_source).toBe('fallback_kimi_rates');
+});
