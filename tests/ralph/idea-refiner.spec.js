@@ -393,24 +393,35 @@ test('buildRepoContext handles second-level unreadable directories gracefully', 
 // Phase 3 #2 review fixups: opencode invocation flags + case-insensitive FILE 1
 // ============================================================
 
-test('Phase 3 #2 review: spawn args use --dir rootDir and pass prompt as final positional', () => {
-  // Aligns with src/ralph/opencode-kimi-dispatcher.js. The earlier draft
-  // used `--print` (not a documented opencode flag) and omitted --dir
-  // (anchoring opencode at process.cwd rather than the project root).
+test('Phase 3 #2 review + Phase 4 #2.1: spawn args use --dir <plannerSandbox> (not rootDir) and pass prompt as final positional', () => {
+  // Phase 3 #2 review: aligns with src/ralph/opencode-kimi-dispatcher.js
+  // for the shape (run --model … --format json --dir … <prompt>).
+  // Phase 4 #2.1: --dir now points at an injectable isolated sandbox dir,
+  // NOT rootDir. This prevents a rogue planner from writing files into
+  // the project worktree via opencode's file-write tools (smoke caught
+  // Claude doing exactly that when the idea text said "create a new file").
   let seenArgs;
   const spawn = (cmd, args, opts) => {
     seenArgs = args;
     return { stdout: makeValidStdout(), stderr: '', status: 0, error: null };
   };
   const rootDir = tmpRoot();
-  refineIdea({ idea: 'test', rootDir, spawn });
+  const sandboxDir = '/tmp/ralph-planner-fake-sandbox';
+  refineIdea({
+    idea: 'test',
+    rootDir,
+    spawn,
+    makeSandboxDir: () => sandboxDir,
+    cleanupSandboxDir: () => {}
+  });
   expect(seenArgs[0]).toBe('run');
   expect(seenArgs[1]).toBe('--model');
   // index 2 is the plannerModel
   expect(seenArgs[3]).toBe('--format');
   expect(seenArgs[4]).toBe('json');
   expect(seenArgs[5]).toBe('--dir');
-  expect(seenArgs[6]).toBe(rootDir);
+  expect(seenArgs[6]).toBe(sandboxDir);
+  expect(seenArgs[6]).not.toBe(rootDir);
   // prompt is the final positional arg
   expect(typeof seenArgs[7]).toBe('string');
   expect(seenArgs[7]).toContain('test');
@@ -539,4 +550,88 @@ test('Phase 3 E2E: refineIdea works against real opencode streaming envelope (re
   expect(result.ok).toBe(true);
   expect(result.story_spec.title).toBe('Streaming test');
   expect(result.story_spec.requested_paths).toEqual(['docs/streamed.md']);
+});
+
+// ============================================================
+// Phase 4 #2.1: planner side-effect isolation
+// ============================================================
+
+test('Phase 4 #2.1: PLANNER_PROMPT_TEMPLATE forbids file writes', () => {
+  // Smoke caught Claude using opencode file-write tools because the idea
+  // said "create a new file ...". The template now states the planning-only
+  // contract loudly enough that the model cannot miss it.
+  expect(PLANNER_PROMPT_TEMPLATE).toContain('PLANNING ONLY');
+  expect(PLANNER_PROMPT_TEMPLATE).toMatch(/DO NOT (write|create)/i);
+  expect(PLANNER_PROMPT_TEMPLATE).toContain('executor');
+});
+
+test('Phase 4 #2.1: refineIdea creates a sandbox dir, passes it as --dir, and cleans up on success', () => {
+  let createdDir = null;
+  let cleanedDir = null;
+  const spawn = (cmd, args) => {
+    // index 6 is the --dir value
+    expect(args[5]).toBe('--dir');
+    expect(args[6]).toBe(createdDir);
+    return { stdout: makeValidStdout(), stderr: '', status: 0, error: null };
+  };
+  const result = refineIdea({
+    idea: 'something',
+    rootDir: tmpRoot(),
+    spawn,
+    makeSandboxDir: () => { createdDir = '/tmp/ralph-planner-test-sandbox-' + Math.random(); return createdDir; },
+    cleanupSandboxDir: (dir) => { cleanedDir = dir; }
+  });
+  expect(result.ok).toBe(true);
+  expect(cleanedDir).toBe(createdDir);
+});
+
+test('Phase 4 #2.1: refineIdea cleans up sandbox dir even when planner fails', () => {
+  let createdDir = null;
+  let cleanedDir = null;
+  const result = refineIdea({
+    idea: 'fail me',
+    rootDir: tmpRoot(),
+    spawn: () => ({ stdout: '', stderr: 'boom', status: 1, error: new Error('boom') }),
+    makeSandboxDir: () => { createdDir = '/tmp/ralph-planner-failtest'; return createdDir; },
+    cleanupSandboxDir: (dir) => { cleanedDir = dir; }
+  });
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('planner_dispatch_failed');
+  // Cleanup MUST run even on the failure return path.
+  expect(cleanedDir).toBe(createdDir);
+});
+
+test('Phase 4 #2.1: refineIdea cleans up sandbox dir when planner returns invalid JSON across all retries', () => {
+  let cleanedDir = null;
+  const result = refineIdea({
+    idea: 'will never parse',
+    rootDir: tmpRoot(),
+    spawn: () => ({ stdout: 'definitely not json', stderr: '', status: 0, error: null }),
+    maxRetries: 0,
+    makeSandboxDir: () => '/tmp/ralph-planner-invalid-json',
+    cleanupSandboxDir: (dir) => { cleanedDir = dir; }
+  });
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('planner_invalid_response');
+  expect(cleanedDir).toBe('/tmp/ralph-planner-invalid-json');
+});
+
+test('Phase 4 #2.1: makePlannerSandboxDir actually creates a real tmpdir; cleanupPlannerSandboxDir removes it', () => {
+  const { makePlannerSandboxDir, cleanupPlannerSandboxDir } = require('../../src/ralph/idea-refiner');
+  const dir = makePlannerSandboxDir(new Date('2026-05-20T12:34:56Z'));
+  expect(fs.existsSync(dir)).toBe(true);
+  expect(dir).toContain('ralph-planner-');
+  // Write a marker file to prove the dir is real and writable.
+  fs.writeFileSync(path.join(dir, 'marker.txt'), 'x');
+  expect(fs.existsSync(path.join(dir, 'marker.txt'))).toBe(true);
+  cleanupPlannerSandboxDir(dir);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test('Phase 4 #2.1: cleanupPlannerSandboxDir is a no-op on null/undefined/missing dir (best-effort cleanup)', () => {
+  const { cleanupPlannerSandboxDir } = require('../../src/ralph/idea-refiner');
+  // Each of these must not throw.
+  cleanupPlannerSandboxDir(null);
+  cleanupPlannerSandboxDir(undefined);
+  cleanupPlannerSandboxDir('/nonexistent/path/that/does/not/exist/' + Math.random());
 });
