@@ -716,3 +716,80 @@ test('Phase 3 #1: resolveModel honors story.executor_model over env defaults', (
   const { DEFAULT_MODEL } = require('../../src/ralph/opencode-kimi-dispatcher');
   expect(resolveModel({}, null)).toBe(DEFAULT_MODEL);
 });
+
+test('Phase 3 #5: dispatchOpenCodeKimi uses executor-router fallback when story.executor_model is unknown', () => {
+  // Story with an unknown executor_model should still dispatch — via the FALLBACK_EXECUTOR_MODEL (kimi-k2.6).
+  const rootDir = tmpRoot();
+  const { spawnSync } = require('node:child_process');
+  spawnSync('git', ['init', '-q'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: rootDir });
+  spawnSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: rootDir });
+
+  let seenModel;
+  function spawn(command, args, opts) {
+    if (Array.isArray(args) && args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n' };
+    if (Array.isArray(args) && args[0] === 'run') {
+      // args[2] is the model after '--model'
+      seenModel = args[2];
+      const dirIdx = args.indexOf('--dir');
+      const workDir = dirIdx >= 0 ? args[dirIdx + 1] : opts.cwd;
+      fs.mkdirSync(path.join(workDir, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(workDir, 'docs', 'hello.md'), '# hi\n');
+      return { status: 0, stdout: 'ok' };
+    }
+    // pass through to real spawn for git (worktree) operations
+    return spawnSync(command, args, opts);
+  }
+
+  const storyWithBadModel = { ...story(), executor_model: 'some/unknown/model-not-in-allowlist' };
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: storyWithBadModel,
+    sandbox_root: '.ralph/sandboxes/STORY-PHASE3-5',
+    task: 'create docs/hello.md',
+    requested_paths: ['docs/hello.md'],
+    spawn,
+    env: { PATH: process.env.PATH, HOME: '/tmp', OPENROUTER_API_KEY: 'or-key' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(seenModel).toBe('openrouter/moonshotai/kimi-k2.6');
+});
+
+test('Phase 3 #5: dispatchOpenCodeKimi honors story.executor_model when it IS in the allowlist', () => {
+  const rootDir = tmpRoot();
+  const { spawnSync } = require('node:child_process');
+  spawnSync('git', ['init', '-q'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: rootDir });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: rootDir });
+  spawnSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: rootDir });
+
+  let seenModel;
+  function spawn(command, args, opts) {
+    if (Array.isArray(args) && args[0] === '--version') return { status: 0, stdout: 'opencode 1.14.39\n' };
+    if (Array.isArray(args) && args[0] === 'run') {
+      seenModel = args[2];
+      const dirIdx = args.indexOf('--dir');
+      const workDir = dirIdx >= 0 ? args[dirIdx + 1] : opts.cwd;
+      fs.mkdirSync(path.join(workDir, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(workDir, 'docs', 'hello.md'), '# hi\n');
+      return { status: 0, stdout: 'ok' };
+    }
+    return spawnSync(command, args, opts);
+  }
+
+  const storyWithClaude = { ...story(), executor_model: 'openrouter/anthropic/claude-sonnet-4.6' };
+  const result = dispatchOpenCodeKimi({
+    rootDir,
+    story: storyWithClaude,
+    sandbox_root: '.ralph/sandboxes/STORY-PHASE3-5-CLAUDE',
+    task: 'create docs/hello.md',
+    requested_paths: ['docs/hello.md'],
+    spawn,
+    env: { PATH: process.env.PATH, HOME: '/tmp', OPENROUTER_API_KEY: 'or-key' }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(seenModel).toBe('openrouter/anthropic/claude-sonnet-4.6');
+});

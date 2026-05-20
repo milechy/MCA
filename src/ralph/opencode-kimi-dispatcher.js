@@ -20,6 +20,7 @@ const {
   isOverBudget,
   recordKimiCall
 } = require('./kimi-cost-tracker');
+const { routeExecutor } = require('./executor-router');
 
 const OPENCODE_COMMAND = 'opencode';
 const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k2.6';
@@ -300,7 +301,10 @@ function dispatchOpenCodeKimi({
   }
 
   // Phase 3 #1: pass story so resolveModel can honor story.executor_model.
-  const model = resolveModel(env, story);
+  // Phase 3 #5: route through executor-router for allowlist + fallback safety net.
+  const route = routeExecutor({ story, env, rootDir });
+  const model = route.executor_model;
+  // route.reason / route.fallback_applied flow through to logs via the existing audit trail; no behavior change for happy-path callers.
   const promptCwd = worktreePath || rootDir;
   const prompt = useWorktree
     ? buildWorktreePrompt({ task, requested_paths, rootDir })
