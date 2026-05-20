@@ -107,6 +107,61 @@ function buildRepoContext(rootDir) {
   }
 }
 
+// Phase 3 E2E fix: opencode run --format json emits NDJSON (one JSON event
+// per line: step_start, text, step_finish, etc.). The actual assistant text
+// lives inside `text` events under `.part.text`, and may be wrapped in a
+// ```json ... ``` markdown fence. extractPlannerJson handles both that
+// streaming envelope AND the simpler "stdout is already pure JSON" case
+// (which is what unit-test fake spawns return).
+function stripCodeFence(text) {
+  const trimmed = String(text || '').trim();
+  const fenced = trimmed.match(/^```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```\s*$/);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function extractPlannerJson(stdout) {
+  if (stdout == null) return null;
+  const raw = String(stdout).trim();
+  if (raw.length === 0) return null;
+
+  // Fast path: stdout is already a pure JSON object (test mocks, or future
+  // opencode versions that emit non-streaming output).
+  try {
+    const direct = JSON.parse(raw);
+    if (direct && typeof direct === 'object' && !Array.isArray(direct) && typeof direct.title === 'string') {
+      return direct;
+    }
+    // If direct parse succeeded but it doesn't look like a story spec, fall
+    // through to streaming-envelope handling (it might have been a single
+    // step_start event with no surrounding lines).
+  } catch (_err) {
+    // not pure JSON; fall through to NDJSON path
+  }
+
+  // Streaming-envelope path: concatenate text from every `type:"text"` event.
+  const textChunks = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const event = JSON.parse(t);
+      if (event && event.type === 'text' && event.part && typeof event.part.text === 'string') {
+        textChunks.push(event.part.text);
+      }
+    } catch (_err) {
+      // Skip non-JSON lines.
+    }
+  }
+
+  if (textChunks.length === 0) return null;
+  const assembled = stripCodeFence(textChunks.join(''));
+  try {
+    return JSON.parse(assembled);
+  } catch (_err) {
+    return null;
+  }
+}
+
 function validateStorySpec(parsed) {
   if (!parsed || typeof parsed !== 'object') return false;
   if (typeof parsed.title !== 'string' || parsed.title.trim().length === 0) return false;
@@ -174,10 +229,11 @@ function refineIdea({
       };
     }
 
-    let parsed;
-    try {
-      parsed = JSON.parse(result.stdout || '');
-    } catch (_err) {
+    // Phase 3 E2E fix: opencode emits NDJSON; extractPlannerJson handles
+    // both the streaming envelope and the legacy pure-JSON shape used by
+    // unit-test fake spawns.
+    const parsed = extractPlannerJson(result.stdout);
+    if (parsed == null) {
       if (attempt === maxAttempts - 1) {
         return {
           ok: false,
@@ -248,5 +304,7 @@ module.exports = {
   DEFAULT_PLANNER_MODEL,
   DEFAULT_MAX_RETRIES,
   refineIdea,
-  buildRepoContext
+  buildRepoContext,
+  extractPlannerJson,
+  stripCodeFence
 };
