@@ -545,3 +545,72 @@ test('repositoryForStory filters out malformed candidates regardless of source',
   resetRepositoryDetectionCacheForTests();
   expect(repositoryForStory({}, { GITHUB_REPOSITORY: 'evil; rm -rf /' }, null, { rootDir: '/tmp' })).toBeNull();
 });
+
+test('Phase 4 #1: PR approval creation passes a generated body (not empty) using buildPrBody', () => {
+  const rootDir = tmpRoot();
+  const created = createStory({
+    story_id: 'STORY-PR-BODY',
+    title: 'Demo story for PR body',
+    requirement: 'Implement a small change to verify PR body content.',
+    mode: 'fullauto',
+    target_env: 'local',
+    requested_paths: ['src/demo-change.js'],
+    risk: { score: 0, category: 'low', label: 'RISK_0_LOW' },
+    current_phase: 'PUSH',
+    status: STORY_STATUSES.RUNNING,
+    current_approval_id: 'APR-PUSH-BODY',
+    current_commit_sha: 'abc1234567',
+    current_branch: 'feature/body-test',
+    base_branch: 'main'
+  }, { rootDir, now: new Date('2026-05-12T12:00:00.000Z') });
+  expect(created.ok).toBe(true);
+
+  let capturedBody = null;
+  const result = advancePushPhase(readStory(rootDir, 'STORY-PR-BODY'), {
+    rootDir,
+    now: new Date('2026-05-12T12:01:00.000Z'),
+    push_runner: () => ({
+      ok: true,
+      stage: 'opencode_push',
+      approval_id: 'APR-PUSH-BODY',
+      commit_sha: 'abc1234567',
+      branch: 'feature/body-test',
+      remote: 'origin',
+      execution_connected: true,
+      push_allowed: true,
+      commands_executed: [],
+      files_modified: [],
+      repository_files_modified: [],
+      push_performed: true
+    }),
+    create_pr_approval: (input) => {
+      capturedBody = input && input.body;
+      return {
+        ok: true,
+        stage: 'opencode_pr_approval',
+        approval_id: 'APR-PR-BODY',
+        commit_sha: 'abc1234567',
+        head_branch: 'feature/body-test',
+        base_branch: 'main',
+        pr_allowed: false,
+        execution_connected: false,
+        commands_executed: [],
+        files_modified: [],
+        repository_files_modified: [],
+        next_action: 'approve_or_deny_pr_before_github_pr_creation'
+      };
+    }
+  });
+
+  expect(result.ok).toBe(true);
+  expect(typeof capturedBody).toBe('string');
+  expect(capturedBody.length).toBeGreaterThan(0);
+  // Body must come from buildPrBody, which always includes these headers.
+  expect(capturedBody).toContain('## Summary');
+  expect(capturedBody).toContain('STORY-PR-BODY');
+  expect(capturedBody).toContain('Demo story for PR body');
+  expect(capturedBody).toContain('## Plan');
+  expect(capturedBody).toContain('## Changed files');
+  // It must NOT be the legacy default string.
+  expect(capturedBody).not.toContain('Created by controlled Telegram OpenCode flow');
+});
