@@ -16,6 +16,7 @@ const { createOpenCodePrApproval } = require('../telegram/opencode-pr-approval')
 const { createOpenCodePullRequest } = require('../telegram/opencode-pr');
 const { writeDeterministicCandidatePatch } = require('./deterministic-candidate-patch-fallback');
 const { buildDefaultGithubPrClient } = require('./github-pr-client');
+const { buildPrBody } = require('./pr-body-generator');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
 const { consumeApprovedResume } = require('./resume-after-security-stop');
 
@@ -486,7 +487,7 @@ function advancePushPhase(story, { rootDir, now, env = process.env, timeout_ms, 
     head_branch: push.branch || branchForStory(story, env),
     base_branch: baseBranchForStory(story, env, { rootDir }),
     title: story.title || story.requirement || 'OpenCode change',
-    body: '',
+    body: buildPrBody({ story, ultraplan: story.last_ultraplan || {}, changed_files: story.repository_files_modified || story.files_modified || story.requested_paths || [], gates: story.last_gate_result || {}, approvals: [], plan_hash: story.current_plan_hash, diff_hash: story.current_patch_hash }).body,
     allowed_user_ids: [],
     now,
     worktree_isolated: worktreeIsolated
