@@ -82,11 +82,19 @@ function resolveModel(env, story = null) {
 
 function buildRequestedPathsSection({ rootDir, requested_paths }) {
   const lines = ['Requested paths (you MUST touch ALL of them):'];
+  let anyModify = false;
   for (let i = 0; i < requested_paths.length; i++) {
     const p = requested_paths[i];
     const exists = fs.existsSync(path.join(rootDir, p));
     const action = exists ? 'MODIFY EXISTING' : 'CREATE';
-    lines.push(`${i + 1}. ${p} (${action})`);
+    if (exists) anyModify = true;
+    const suffix = exists
+      ? ' — APPEND-only / surgical edit: every existing test, function, export, comment, and require statement in this file MUST still exist verbatim in your final diff. The bounded file context below is the source of truth; if a line is there, it MUST survive.'
+      : '';
+    lines.push(`${i + 1}. ${p} (${action})${suffix}`);
+  }
+  if (anyModify) {
+    lines.push('Self-check before you stop: open every MODIFY EXISTING path you edited and confirm that no pre-existing test, function, export, or comment was removed. If you removed any, restore it now. The autonomous loop will reject and roll back any patch that deletes pre-existing tests.');
   }
   return lines.join('\n');
 }
@@ -110,12 +118,12 @@ function buildWorktreePrompt({ task, requested_paths, rootDir }) {
     '  - You MUST produce changes for EVERY path listed under Requested paths. Partial output will be rejected by the requested_paths coverage gate and retried.',
     '  - If a requested path already exists in the worktree, MODIFY it in-place. If it does not exist, CREATE it. Do not invent additional paths.',
     'Hard constraints:',
+    '  - APPEND-ONLY for existing files: when a requested path is marked MODIFY EXISTING, you MUST preserve every pre-existing test, function, export, comment, and require statement verbatim. Only APPEND new content (e.g. add new tests at the end of the file) or surgically change the specific lines the task names. If the task says "Replace line X with Y" you change exactly that line and nothing else. The autonomous loop tracks regressions and will roll back any patch that removes pre-existing tests, functions, or exports.',
     '  - Do NOT touch any path outside the explicit requested_paths.',
     '  - Do NOT run git, gh, npm publish, deploy, migration, or any push/merge/release command.',
     '  - Do NOT print secrets or raw environment values.',
     '  - Do NOT delete .git, .ralph, or anything under those directories.',
     '  - If the requested paths reference an existing file, treat the bounded file context below as the source of truth; do not invent contents you did not read.',
-    '  - When modifying an existing file in requested_paths, NEVER delete or replace existing tests, functions, exports, or comments unless the task explicitly asks you to. Only APPEND new content (e.g. add new tests at the end of the test file), or change the specific lines the task names. The autonomous loop tracks regressions and will roll back any patch that removes pre-existing tests.',
     buildRequestedPathsSection({ rootDir, requested_paths }),
     `Task: ${String(task || '').slice(0, 4000)}`,
     file_context ? `Bounded file context:\n${file_context}` : 'Bounded file context: (none supplied)',
