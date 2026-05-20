@@ -19,6 +19,22 @@ const { buildDefaultGithubPrClient } = require('./github-pr-client');
 const { buildPrBody } = require('./pr-body-generator');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
 const { consumeApprovedResume } = require('./resume-after-security-stop');
+const { reviewPullRequest: defaultReviewPullRequest } = require('./pr-reviewer');
+
+// Phase 4 #4: opt-in PR_REVIEW phase. When RALPH_PR_REVIEW_ENABLED=1, the
+// daemon inserts a PR_REVIEW phase between PR creation and DONE. The phase
+// calls reviewPullRequest() (Phase 4 #3) and records the review in the
+// story audit; in v1 it always transitions to DONE regardless of verdict,
+// keeping the review observational so existing fullauto flows are not
+// gated on reviewer availability. A follow-up (Phase 4 #4.1) will post the
+// review to GitHub; #4.2 will branch verdict=request_changes back into
+// FIX_LOOP. This v1 only delivers the loop-shape change + audit trail.
+function prReviewEnabled(env = process.env) {
+  const raw = env && env.RALPH_PR_REVIEW_ENABLED;
+  if (raw == null) return false;
+  const normalized = String(raw).toLowerCase().trim();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
 
 const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
 const FALLBACK_FAILURE_REASONS = new Set([
@@ -589,26 +605,94 @@ function advancePrPhase(story, { rootDir, now, env = process.env, githubClient, 
     });
   }
 
-  const updated = updateStoryForPhase(story, LOOP_PHASES.DONE, {
+  // Phase 4 #4: when RALPH_PR_REVIEW_ENABLED is set and we have a PR number,
+  // transition to the new PR_REVIEW phase so the next tick can call the
+  // reviewer. Otherwise preserve the existing PR → DONE behavior.
+  const reviewEnabled = prReviewEnabled(env);
+  // Reviewer needs an actual PR number — null/undefined/0 skip the phase.
+  const hasPrNumber = pr && pr.pr_number != null && Number.isInteger(pr.pr_number) && pr.pr_number > 0;
+  const nextPhase = (reviewEnabled && hasPrNumber) ? LOOP_PHASES.PR_REVIEW : LOOP_PHASES.DONE;
+  const nextEvent = (reviewEnabled && hasPrNumber) ? 'pr_created_pending_review' : 'pr_created_story_completed';
+
+  const updated = updateStoryForPhase(story, nextPhase, {
     blocked_reason: null,
     retry_after_at: null,
     last_pr_result: pr,
     pr_url: pr.pr_url || null,
     pr_number: pr.pr_number || null
-  }, { rootDir, now, event: 'pr_created_story_completed' });
+  }, { rootDir, now, event: nextEvent });
 
   return baseResult({
     ok: true,
     reason: null,
     story_id: story.story_id,
     from_phase: 'PR',
-    to_phase: LOOP_PHASES.DONE,
+    to_phase: nextPhase,
     story: updated.summary,
     pr,
     approval_id: story.current_approval_id,
     execution_connected: pr.execution_connected === true,
     commands_executed: pr.commands_executed || [],
     pr_allowed: true,
+    next_action: nextPhase === LOOP_PHASES.PR_REVIEW ? 'review_pull_request_then_complete' : 'story_complete'
+  });
+}
+
+function advancePrReviewPhase(story, { rootDir, now, env = process.env, pr_reviewer } = {}) {
+  const reviewer = pr_reviewer || defaultReviewPullRequest;
+  const prNumber = story.pr_number;
+  // Defensive: should not happen because advancePrPhase only enters PR_REVIEW
+  // when pr_number is present, but guard anyway for resumed/imported stories.
+  if (prNumber == null) {
+    const updated = updateStoryForPhase(story, LOOP_PHASES.DONE, {
+      blocked_reason: null,
+      last_review_result: { ok: false, reason: 'pr_number_missing_skipped_review' }
+    }, { rootDir, now, event: 'pr_review_skipped_missing_pr_number' });
+    return baseResult({
+      ok: true,
+      reason: 'pr_number_missing_skipped_review',
+      story_id: story.story_id,
+      from_phase: LOOP_PHASES.PR_REVIEW,
+      to_phase: LOOP_PHASES.DONE,
+      story: updated.summary,
+      next_action: 'story_complete'
+    });
+  }
+
+  const review = reviewer({ pr_number: prNumber, rootDir, env, now: () => now });
+
+  // The reviewer can fail for environmental reasons (gh down, OpenRouter
+  // outage, malformed reply after retries). In v1 we treat those as
+  // "review not performed" — the story still completes, with the failure
+  // recorded in the audit so dashboards can surface it.
+  const reviewOk = review && review.ok === true;
+  const summarySnapshot = reviewOk ? {
+    ok: true,
+    verdict: review.verdict,
+    summary: review.summary,
+    issue_count: Array.isArray(review.issues) ? review.issues.length : 0,
+    cost_usd: review.cost_usd || 0,
+    reviewer_model: review.reviewer_model || null,
+    diff_truncated: review.diff_truncated === true
+  } : {
+    ok: false,
+    reason: (review && review.reason) || 'reviewer_unavailable'
+  };
+
+  const updated = updateStoryForPhase(story, LOOP_PHASES.DONE, {
+    blocked_reason: null,
+    retry_after_at: null,
+    last_review_result: summarySnapshot
+  }, { rootDir, now, event: reviewOk ? `pr_review_completed_verdict_${review.verdict}` : 'pr_review_failed_story_still_completed' });
+
+  return baseResult({
+    ok: true,
+    reason: reviewOk ? null : summarySnapshot.reason,
+    story_id: story.story_id,
+    from_phase: LOOP_PHASES.PR_REVIEW,
+    to_phase: LOOP_PHASES.DONE,
+    story: updated.summary,
+    review: summarySnapshot,
     next_action: 'story_complete'
   });
 }
@@ -668,6 +752,7 @@ function tickAutonomousLoopWired(options = {}) {
 
   if (story.current_phase === 'PUSH') return advancePushPhase(story, { ...options, rootDir, now, env, timeout_ms });
   if (story.current_phase === 'PR') return advancePrPhase(story, { ...options, rootDir, now, env });
+  if (story.current_phase === LOOP_PHASES.PR_REVIEW) return advancePrReviewPhase(story, { ...options, rootDir, now, env });
 
   const result = tickAutonomousLoop(options);
   const afterFallback = maybeFallbackAfterOpenCodeFailure(result, { rootDir, now, allow_runtime_code_fallback });
@@ -686,6 +771,8 @@ module.exports = {
   resumeApprovalToExecutionPhase,
   advancePushPhase,
   advancePrPhase,
+  advancePrReviewPhase,
+  prReviewEnabled,
   baseBranchForStory,
   resolveRemoteHeadDefaultBranch,
   resetBaseBranchCacheForTests,
