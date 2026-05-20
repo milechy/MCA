@@ -458,3 +458,63 @@ test('runSubmitIdea prints error JSON to stderr and exits 3 on createStory failu
   const errJson = JSON.parse(stderr.find((s) => s.startsWith('{')) || '{}');
   expect(errJson).toMatchObject({ ok: false, reason: 'disk_full', stage: 'story_queue_create' });
 });
+
+test('Phase 4 #2: runSubmitIdea prints fullauto-expired warning when loadMode reports expired fullauto', async () => {
+  const stderr = [];
+  const stdout = [];
+  let exitCode = null;
+  await runSubmitIdea({
+    argv: ['--yes', 'expired idea'],
+    stdin: '',
+    stderr: (msg) => stderr.push(msg),
+    stdout: (msg) => stdout.push(msg),
+    exit: (code) => { exitCode = code; },
+    refineIdea: () => ({ ok: false }),
+    createStory: () => ({ ok: false }),
+    now: new Date('2030-01-01T00:00:00.000Z'),
+    loadMode: () => ({ mode: 'fullauto', effective_until: '2029-12-31T23:59:59.000Z' })
+  });
+  expect(exitCode).toBe(2);
+  const allStderr = stderr.join('');
+  expect(allStderr).toContain('fullauto EXPIRED');
+});
+
+test('Phase 4 #2: runSubmitIdea prints approval-mode warning when loadMode reports approval', async () => {
+  const stderr = [];
+  const stdout = [];
+  let exitCode = null;
+  await runSubmitIdea({
+    argv: ['--yes', 'approval idea'],
+    stdin: '',
+    stderr: (msg) => stderr.push(msg),
+    stdout: (msg) => stdout.push(msg),
+    exit: (code) => { exitCode = code; },
+    refineIdea: () => ({ ok: true, story_spec: { title: 'T', difficulty: 'easy', recommended_executor: 'e', requested_paths: ['a.js'], requirement: 'FILE 1 (CREATE): a' }, planner_cost_usd: 0, planner_model: 'm' }),
+    createStory: () => ({ ok: true }),
+    now: new Date(),
+    loadMode: () => ({ mode: 'approval' })
+  });
+  expect(exitCode).toBe(0);
+  const allStderr = stderr.join('');
+  expect(allStderr).toContain('Ralph mode: approval');
+});
+
+test('Phase 4 #2: runSubmitIdea prints fullauto time-remaining when not expired', async () => {
+  const stderr = [];
+  const stdout = [];
+  let exitCode = null;
+  await runSubmitIdea({
+    argv: ['--yes', 'fresh idea'],
+    stdin: '',
+    stderr: (msg) => stderr.push(msg),
+    stdout: (msg) => stdout.push(msg),
+    exit: (code) => { exitCode = code; },
+    refineIdea: () => ({ ok: true, story_spec: { title: 'T', difficulty: 'easy', recommended_executor: 'e', requested_paths: ['b.js'], requirement: 'FILE 1 (CREATE): b' }, planner_cost_usd: 0, planner_model: 'm' }),
+    createStory: () => ({ ok: true }),
+    now: new Date('2026-01-01T00:00:00.000Z'),
+    loadMode: () => ({ mode: 'fullauto', effective_until: '2026-01-01T02:30:00.000Z' })
+  });
+  expect(exitCode).toBe(0);
+  const allStderr = stderr.join('');
+  expect(allStderr).toContain('expires in 2h 30m');
+});
