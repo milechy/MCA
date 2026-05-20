@@ -12,7 +12,9 @@ const {
   ensurePushApprovalAfterCommit,
   resumeApprovalToExecutionPhase,
   advancePushPhase,
-  advancePrPhase
+  advancePrPhase,
+  advancePrReviewPhase,
+  prReviewEnabled
 } = require('../../src/ralph/autonomous-loop-wired');
 
 function tmpRoot() {
@@ -613,4 +615,252 @@ test('Phase 4 #1: PR approval creation passes a generated body (not empty) using
   expect(capturedBody).toContain('## Changed files');
   // It must NOT be the legacy default string.
   expect(capturedBody).not.toContain('Created by controlled Telegram OpenCode flow');
+});
+
+// -- Phase 4 #4: PR_REVIEW phase ----------------------------------------
+
+test('Phase 4 #4: prReviewEnabled reads RALPH_PR_REVIEW_ENABLED truthy values', () => {
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: '1' })).toBe(true);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: 'true' })).toBe(true);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: 'TRUE' })).toBe(true);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: 'yes' })).toBe(true);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: 'on' })).toBe(true);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: '0' })).toBe(false);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: 'false' })).toBe(false);
+  expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: '' })).toBe(false);
+  expect(prReviewEnabled({})).toBe(false);
+  expect(prReviewEnabled()).toBe(false);
+});
+
+test('Phase 4 #4: advancePrPhase transitions to PR_REVIEW when RALPH_PR_REVIEW_ENABLED=1 and pr_number is set', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: 'PR',
+    current_approval_id: 'APR-PR-RV',
+    current_commit_sha: 'abc123',
+    current_branch: 'feature/rv',
+    repository_full_name: 'milechy/MCA'
+  });
+
+  const result = advancePrPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date('2026-05-12T12:06:00.000Z'),
+    env: { RALPH_PR_REVIEW_ENABLED: '1' },
+    pr_runner: () => ({
+      ok: true,
+      stage: 'opencode_pr',
+      approval_id: 'APR-PR-RV',
+      commit_sha: 'abc123',
+      head_branch: 'feature/rv',
+      base_branch: 'main',
+      pr_url: 'https://github.com/milechy/MCA/pull/300',
+      pr_number: 300,
+      execution_connected: true,
+      pr_allowed: true,
+      commands_executed: ['github.createPullRequest'],
+      pr_created: true
+    })
+  });
+
+  expect(result).toMatchObject({
+    ok: true,
+    to_phase: LOOP_PHASES.PR_REVIEW,
+    next_action: 'review_pull_request_then_complete',
+    pr: { pr_number: 300 }
+  });
+  expect(readStory(rootDir, 'STORY-WIRED')).toMatchObject({
+    status: STORY_STATUSES.RUNNING,
+    current_phase: LOOP_PHASES.PR_REVIEW,
+    pr_number: 300
+  });
+});
+
+test('Phase 4 #4: advancePrPhase stays at DONE when env var is unset (default behavior preserved)', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: 'PR',
+    current_approval_id: 'APR-PR-NORV',
+    current_commit_sha: 'abc123',
+    current_branch: 'feature/norv',
+    repository_full_name: 'milechy/MCA'
+  });
+
+  const result = advancePrPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    env: {}, // RALPH_PR_REVIEW_ENABLED absent
+    pr_runner: () => ({
+      ok: true,
+      pr_url: 'https://github.com/milechy/MCA/pull/301',
+      pr_number: 301,
+      pr_created: true,
+      execution_connected: true,
+      pr_allowed: true,
+      commands_executed: []
+    })
+  });
+
+  expect(result).toMatchObject({ to_phase: LOOP_PHASES.DONE, next_action: 'story_complete' });
+  expect(readStory(rootDir, 'STORY-WIRED').current_phase).toBe(LOOP_PHASES.DONE);
+});
+
+test('Phase 4 #4: advancePrPhase falls back to DONE when env enabled but pr_number is missing', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: 'PR',
+    current_approval_id: 'APR-PR-NONUM',
+    current_commit_sha: 'abc123',
+    current_branch: 'feature/nonum',
+    repository_full_name: 'milechy/MCA'
+  });
+
+  const result = advancePrPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    env: { RALPH_PR_REVIEW_ENABLED: '1' },
+    pr_runner: () => ({
+      ok: true,
+      pr_url: 'https://github.com/milechy/MCA/pull/foo',
+      pr_number: null,
+      pr_created: true,
+      execution_connected: true,
+      pr_allowed: true,
+      commands_executed: []
+    })
+  });
+
+  // Without a pr_number the reviewer cannot do its job, so skip review and complete.
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+});
+
+// Helper: seed a story already at PR_REVIEW with a pr_number set via updateStory
+// (createStory does not accept the dynamic pr_number / pr_url fields).
+function seedAtPrReview(rootDir, { pr_number, extras = {} } = {}) {
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: LOOP_PHASES.PR_REVIEW,
+    ...extras
+  });
+  if (pr_number != null) {
+    updateStory('STORY-WIRED', { pr_number, pr_url: `https://github.com/milechy/MCA/pull/${pr_number}` }, { rootDir, now: new Date(), event: 'seed_pr_number_for_test' });
+  }
+}
+
+test('Phase 4 #4: advancePrReviewPhase records approve verdict and transitions PR_REVIEW → DONE', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 99 });
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 99,
+      verdict: 'approve',
+      issues: [],
+      summary: 'LGTM — clean small change.',
+      cost_usd: 0.012,
+      reviewer_model: 'openrouter/anthropic/claude-sonnet-4.6'
+    })
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.from_phase).toBe(LOOP_PHASES.PR_REVIEW);
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.next_action).toBe('story_complete');
+  expect(result.review).toMatchObject({ ok: true, verdict: 'approve', issue_count: 0 });
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.current_phase).toBe(LOOP_PHASES.DONE);
+  expect(persisted.last_review_result).toMatchObject({ ok: true, verdict: 'approve' });
+  const lastAudit = persisted.audit[persisted.audit.length - 1];
+  expect(lastAudit.event).toBe('pr_review_completed_verdict_approve');
+});
+
+test('Phase 4 #4: advancePrReviewPhase records request_changes verdict but still transitions to DONE (v1 observational)', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 101 });
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 101,
+      verdict: 'request_changes',
+      issues: [{ file: 'src/x.js', line: 7, severity: 'blocker', message: 'secret leak' }],
+      summary: 'blocker present',
+      cost_usd: 0.01,
+      reviewer_model: 'openrouter/anthropic/claude-sonnet-4.6'
+    })
+  });
+
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.review).toMatchObject({ verdict: 'request_changes', issue_count: 1 });
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result.verdict).toBe('request_changes');
+  expect(persisted.audit[persisted.audit.length - 1].event).toBe('pr_review_completed_verdict_request_changes');
+});
+
+test('Phase 4 #4: advancePrReviewPhase tolerates reviewer failure — story still completes with reason in audit', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 102 });
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    pr_reviewer: () => ({ ok: false, reason: 'gh_pr_view_failed' })
+  });
+
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.reason).toBe('gh_pr_view_failed');
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result).toMatchObject({ ok: false, reason: 'gh_pr_view_failed' });
+  expect(persisted.audit[persisted.audit.length - 1].event).toBe('pr_review_failed_story_still_completed');
+});
+
+test('Phase 4 #4: advancePrReviewPhase skips review when pr_number is missing on the story', () => {
+  const rootDir = tmpRoot();
+  seed(rootDir, {
+    status: STORY_STATUSES.RUNNING,
+    current_phase: LOOP_PHASES.PR_REVIEW
+    // no pr_number
+  });
+
+  let reviewerCalled = false;
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    pr_reviewer: () => { reviewerCalled = true; return { ok: true, verdict: 'approve', issues: [], summary: 's', cost_usd: 0 }; }
+  });
+
+  expect(reviewerCalled).toBe(false);
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.reason).toBe('pr_number_missing_skipped_review');
+});
+
+test('Phase 4 #4: tickAutonomousLoopWired dispatches PR_REVIEW phase to advancePrReviewPhase', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 555 });
+
+  const result = tickAutonomousLoopWired({
+    rootDir,
+    story_id: 'STORY-WIRED',
+    now: new Date(),
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 555,
+      verdict: 'comment',
+      issues: [{ file: 'a.js', severity: 'nit', message: 'tiny polish' }],
+      summary: 'Mostly good, one nit.',
+      cost_usd: 0.005,
+      reviewer_model: 'openrouter/anthropic/claude-sonnet-4.6'
+    })
+  });
+
+  expect(result.from_phase).toBe(LOOP_PHASES.PR_REVIEW);
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.review).toMatchObject({ verdict: 'comment', issue_count: 1 });
 });
