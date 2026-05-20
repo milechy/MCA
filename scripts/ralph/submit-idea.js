@@ -2,6 +2,7 @@
 
 const { refineIdea, DEFAULT_PLANNER_MODEL } = require('../../src/ralph/idea-refiner');
 const { createStory } = require('../../src/ralph/story-queue');
+const { loadMode: defaultLoadMode } = require('../../src/ralph/mode-manager');
 
 function readStdinSync() {
   const fs = require('node:fs');
@@ -58,8 +59,36 @@ function buildStoryId(now = new Date()) {
   return `STORY-IDEA-${stamp}-${rand}`;
 }
 
-async function runSubmitIdea({ argv, stdin, stderr, stdout, exit, refineIdea, createStory, now }) {
+async function runSubmitIdea({ argv, stdin, stderr, stdout, exit, refineIdea, createStory, now, loadMode = defaultLoadMode }) {
   const args = parseArgs(argv);
+
+  // Phase 4 #2: surface mode + expiry so the operator notices stuck-daemon risk BEFORE submitting.
+  try {
+    const modeState = loadMode(args.root);
+    const nowMs = (now && now.getTime ? now.getTime() : Date.now());
+    if (modeState && modeState.mode === 'fullauto') {
+      const expiresMs = modeState.effective_until ? new Date(modeState.effective_until).getTime() : null;
+      if (expiresMs && expiresMs < nowMs) {
+        stderr(`⚠ Ralph mode: fullauto EXPIRED at ${modeState.effective_until}. The daemon will stop at the first approval gate.\n`);
+        stderr(` Fix: node src/ralph/cli.js mode fullauto-request 1 2 && node src/ralph/cli.js mode fullauto-confirm <token> 1\n`);
+      } else if (expiresMs) {
+        const remainingMin = Math.max(0, Math.floor((expiresMs - nowMs) / 60000));
+        if (remainingMin < 60) {
+          stderr(`⚠ Ralph mode: fullauto (expires in ${remainingMin} min). Extend before the daemon stops at approval.\n`);
+        } else {
+          const remainingHr = Math.floor(remainingMin / 60);
+          const restMin = remainingMin % 60;
+          stderr(`Ralph mode: fullauto (expires in ${remainingHr}h ${restMin}m).\n`);
+        }
+      } else {
+        stderr(`Ralph mode: fullauto (no expiry recorded).\n`);
+      }
+    } else {
+      stderr(`⚠ Ralph mode: approval. The daemon will require manual approval after each step. Run mode fullauto-request to switch.\n`);
+    }
+  } catch (_err) {
+    // Mode file unreadable — non-fatal; just stay silent.
+  }
 
   // Determine idea source: positional args first, then stdin if argv empty
   let idea = args.idea;
@@ -183,5 +212,6 @@ module.exports = {
   parseArgs,
   buildStoryId,
   runSubmitIdea,
-  main
+  main,
+  defaultLoadMode
 };
