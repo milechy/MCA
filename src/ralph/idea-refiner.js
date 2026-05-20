@@ -2,7 +2,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { recordKimiCall } = require('./kimi-cost-tracker');
 
-const PLANNER_PROMPT_TEMPLATE = `You are a planning agent for an autonomous code-writing pipeline. Your job: take a vague human idea and produce a tight JSON story spec.
+const PLANNER_PROMPT_TEMPLATE = `You are a PLANNING agent for an autonomous code-writing pipeline. Your job: take a vague human idea and produce a tight JSON story spec.
+
+⚠️ CRITICAL — PLANNING ONLY:
+- DO NOT write, edit, create, or delete any file. Do NOT use file-write tools, shell tools, or any side-effect tool. A different executor agent will implement the spec later. If you write files yourself, the executor cannot do its job and the patch is rejected.
+- Your ONLY output is the JSON object below. Nothing else. No prose, no markdown fence, no "here is the file I created", no apology.
+- If the idea says "create file X" / "modify file X" / etc., treat that as a description of what the EXECUTOR should do. You describe it in the JSON; you do NOT do it.
 
 User idea:
 {IDEA}
@@ -176,6 +181,30 @@ function validateStorySpec(parsed) {
   return true;
 }
 
+// Phase 4 #2.1: when the planner is invoked with --dir=rootDir, an unruly
+// model can use opencode's file-write tool to literally create the files
+// the idea describes — leaving orphan files in the project worktree that
+// then break the executor's CREATE-vs-MODIFY-EXISTING classification.
+// Phase 4 PR_REVIEW smoke caught this with idea text 'Create a new file
+// docs/...'. Defense-in-depth: (1) prompt explicitly forbids file writes,
+// (2) point --dir at a throwaway tmpdir so any rogue writes are isolated
+// and discarded.
+function makePlannerSandboxDir(now = new Date()) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const stamp = now.toISOString().replace(/[-:.]/g, '').slice(0, 15);
+  return fs.mkdtempSync(path.join(os.tmpdir(), `ralph-planner-${stamp}-`));
+}
+
+function cleanupPlannerSandboxDir(dir) {
+  if (!dir) return;
+  try {
+    const fs = require('node:fs');
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (_err) { /* best-effort */ }
+}
+
 function refineIdea({
   idea,
   rootDir,
@@ -183,7 +212,10 @@ function refineIdea({
   plannerModel = DEFAULT_PLANNER_MODEL,
   maxRetries = DEFAULT_MAX_RETRIES,
   spawn = require('node:child_process').spawnSync,
-  now = () => new Date()
+  now = () => new Date(),
+  // Phase 4 #2.1: injectable for tests — production uses tmpdir.
+  makeSandboxDir = makePlannerSandboxDir,
+  cleanupSandboxDir = cleanupPlannerSandboxDir
 } = {}) {
   const trimmedIdea = typeof idea === 'string' ? idea.trim() : '';
   if (trimmedIdea.length === 0 || trimmedIdea.length > 2000) {
@@ -196,8 +228,15 @@ function refineIdea({
   let lastStderrPreview = '';
   let lastExitCode = null;
 
+  // Phase 4 #2.1: isolated --dir so a rogue planner cannot pollute the
+  // project worktree by writing files via opencode tools. The planner
+  // only needs repo *context*, which is already inlined into the prompt
+  // via buildRepoContext above.
+  const plannerSandbox = makeSandboxDir(now());
+
   const maxAttempts = maxRetries + 1;
 
+  try {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) {
       prompt = 'PREVIOUS RESPONSE WAS INVALID JSON. Return ONLY valid JSON this time.\n' + prompt;
@@ -206,11 +245,11 @@ function refineIdea({
 
     // Phase 3 #2 review: align with src/ralph/opencode-kimi-dispatcher.js's
     // invocation pattern — `--dir <cwd> <prompt>` as the trailing args.
-    // The original draft used `--print` which is not a documented opencode
-    // flag and would have caused planner_dispatch_failed in production.
-    // The `--dir` argument anchors opencode at the project root rather
-    // than process.cwd, matching how the executor dispatcher works.
-    const result = spawn('opencode', ['run', '--model', plannerModel, '--format', 'json', '--dir', rootDir, prompt], {
+    // Phase 4 #2.1: --dir points at an isolated tmpdir (plannerSandbox),
+    // not rootDir. The planner only emits JSON; it must never write files
+    // into the project tree. The sandbox is rm'd after the call returns
+    // (best-effort, see cleanupSandboxDir).
+    const result = spawn('opencode', ['run', '--model', plannerModel, '--format', 'json', '--dir', plannerSandbox, prompt], {
       encoding: 'utf8',
       timeout: 120000,
       env
@@ -297,6 +336,9 @@ function refineIdea({
     last_raw_preview: lastRawPreview,
     retry_count: retryCount
   };
+  } finally {
+    cleanupSandboxDir(plannerSandbox);
+  }
 }
 
 module.exports = {
@@ -306,5 +348,7 @@ module.exports = {
   refineIdea,
   buildRepoContext,
   extractPlannerJson,
-  stripCodeFence
+  stripCodeFence,
+  makePlannerSandboxDir,
+  cleanupPlannerSandboxDir
 };
