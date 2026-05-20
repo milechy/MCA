@@ -591,8 +591,13 @@ test('Phase 2 #4: buildWorktreePrompt with empty requested_paths still produces 
 test('Phase 2 #4.1: buildWorktreePrompt forbids deleting existing tests / functions when modifying', () => {
   const rootDir = tmpRoot();
   const prompt = buildWorktreePrompt({ task: 'modify the file', requested_paths: ['tests/example.spec.js'], rootDir });
-  expect(prompt).toContain('NEVER delete or replace existing tests');
+  // Phase 3 #5.1 strengthened wording: now phrased as "APPEND-ONLY for existing files"
+  // and "MUST preserve every pre-existing test, function, export, comment". The behavioral
+  // contract (forbid deletion of pre-existing tests/functions) is unchanged.
+  expect(prompt).toContain('APPEND-ONLY for existing files');
+  expect(prompt).toContain('MUST preserve every pre-existing test');
   expect(prompt).toContain('Only APPEND new content');
+  expect(prompt).toContain('roll back any patch that removes pre-existing tests');
 });
 
 test('Phase 2 #5: dispatchOpenCodeKimi refuses dispatch when daily budget is exceeded', () => {
@@ -792,4 +797,56 @@ test('Phase 3 #5: dispatchOpenCodeKimi honors story.executor_model when it IS in
 
   expect(result.ok).toBe(true);
   expect(seenModel).toBe('openrouter/anthropic/claude-sonnet-4.6');
+});
+
+test('Phase 3 #5.1: buildRequestedPathsSection inlines preserve-existing hint next to MODIFY EXISTING entries', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-dispatcher-phase351-'));
+  fs.mkdirSync(path.join(rootDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'src', 'existing.js'), '// existing\n');
+
+  const section = buildRequestedPathsSection({
+    rootDir,
+    requested_paths: ['src/existing.js', 'src/new.js']
+  });
+
+  // MODIFY EXISTING entry should carry an inline reminder so it cannot be missed.
+  expect(section).toMatch(/1\. src\/existing\.js \(MODIFY EXISTING\).*APPEND-only/);
+  expect(section).toContain('every existing test, function, export, comment, and require statement in this file MUST still exist verbatim');
+  // CREATE entries should NOT carry the preserve hint (it would be confusing).
+  expect(section).toContain('2. src/new.js (CREATE)');
+  expect(section).not.toMatch(/2\. src\/new\.js \(CREATE\) — APPEND-only/);
+  // Self-check footer appears when at least one MODIFY EXISTING is present.
+  expect(section).toContain('Self-check before you stop');
+});
+
+test('Phase 3 #5.1: buildRequestedPathsSection omits Self-check footer when only CREATE entries', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-kimi-dispatcher-phase351-create-'));
+  const section = buildRequestedPathsSection({
+    rootDir,
+    requested_paths: ['src/new-a.js', 'src/new-b.js']
+  });
+  expect(section).toContain('1. src/new-a.js (CREATE)');
+  expect(section).toContain('2. src/new-b.js (CREATE)');
+  expect(section).not.toContain('Self-check before you stop');
+});
+
+test('Phase 3 #5.1: buildWorktreePrompt promotes APPEND-ONLY rule to the first hard constraint', () => {
+  const rootDir = tmpRoot();
+  fs.mkdirSync(path.join(rootDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'src', 'a.js'), '// a\n');
+
+  const prompt = buildWorktreePrompt({
+    task: 'modify src/a.js',
+    requested_paths: ['src/a.js'],
+    rootDir
+  });
+
+  const hardConstraintsIdx = prompt.indexOf('Hard constraints:');
+  const appendOnlyIdx = prompt.indexOf('APPEND-ONLY for existing files');
+  const noTouchOutsideIdx = prompt.indexOf('Do NOT touch any path outside');
+
+  expect(hardConstraintsIdx).toBeGreaterThan(-1);
+  expect(appendOnlyIdx).toBeGreaterThan(hardConstraintsIdx);
+  // APPEND-ONLY must come BEFORE the other hard constraints so Kimi reads it first.
+  expect(appendOnlyIdx).toBeLessThan(noTouchOutsideIdx);
 });
