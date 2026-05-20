@@ -8,7 +8,9 @@ const {
   DEFAULT_PLANNER_MODEL,
   DEFAULT_MAX_RETRIES,
   refineIdea,
-  buildRepoContext
+  buildRepoContext,
+  extractPlannerJson,
+  stripCodeFence
 } = require('../../src/ralph/idea-refiner');
 
 function tmpRoot() {
@@ -437,4 +439,104 @@ test('Phase 3 #2 review: validateStorySpec accepts case variations of FILE 1', (
   const noFileResult = refineIdea({ idea: 'x', rootDir: tmpRoot(), spawn: makeSpawnSync(noFile) });
   expect(noFileResult.ok).toBe(false);
   expect(noFileResult.reason).toBe('planner_invalid_response');
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 E2E fix: extractPlannerJson + stripCodeFence
+// ---------------------------------------------------------------------------
+
+test('Phase 3 E2E: stripCodeFence strips ```json fences', () => {
+  expect(stripCodeFence('```json\n{"a":1}\n```')).toBe('{"a":1}');
+  expect(stripCodeFence('```\n{"a":1}\n```')).toBe('{"a":1}');
+  expect(stripCodeFence('{"a":1}')).toBe('{"a":1}');
+  expect(stripCodeFence('  ```json\n{"a":1}\n```  ')).toBe('{"a":1}');
+});
+
+test('Phase 3 E2E: stripCodeFence is a no-op when there is no fence', () => {
+  expect(stripCodeFence('plain text')).toBe('plain text');
+  expect(stripCodeFence('')).toBe('');
+  expect(stripCodeFence(null)).toBe('');
+  expect(stripCodeFence(undefined)).toBe('');
+});
+
+test('Phase 3 E2E: extractPlannerJson handles pure JSON (legacy unit-test shape)', () => {
+  const stdout = JSON.stringify({ title: 'X', foo: 'bar' });
+  const result = extractPlannerJson(stdout);
+  expect(result).toEqual({ title: 'X', foo: 'bar' });
+});
+
+test('Phase 3 E2E: extractPlannerJson handles opencode NDJSON streaming envelope', () => {
+  // Real shape observed from `opencode run --format json` against Claude.
+  const lines = [
+    JSON.stringify({ type: 'step_start', timestamp: 1, sessionID: 'ses_1', part: { id: 'p1', type: 'step-start' } }),
+    JSON.stringify({
+      type: 'text',
+      timestamp: 2,
+      part: {
+        id: 'p2',
+        type: 'text',
+        text: '```json\n{\n  "title": "From stream",\n  "value": 42\n}\n```'
+      }
+    }),
+    JSON.stringify({ type: 'step_finish', timestamp: 3, part: { id: 'p3' } })
+  ];
+  const stdout = lines.join('\n') + '\n';
+  const result = extractPlannerJson(stdout);
+  expect(result).toEqual({ title: 'From stream', value: 42 });
+});
+
+test('Phase 3 E2E: extractPlannerJson concatenates text from multiple text events', () => {
+  // Some opencode runs split the assistant message across multiple text deltas.
+  const lines = [
+    JSON.stringify({ type: 'text', part: { type: 'text', text: '```json\n{"title":' } }),
+    JSON.stringify({ type: 'text', part: { type: 'text', text: '"split","n":1}\n```' } })
+  ];
+  const stdout = lines.join('\n');
+  const result = extractPlannerJson(stdout);
+  expect(result).toEqual({ title: 'split', n: 1 });
+});
+
+test('Phase 3 E2E: extractPlannerJson returns null on empty / non-parsable / no-text input', () => {
+  expect(extractPlannerJson('')).toBe(null);
+  expect(extractPlannerJson(null)).toBe(null);
+  expect(extractPlannerJson(undefined)).toBe(null);
+  // NDJSON with only step events, no text → null
+  const onlySteps = [
+    JSON.stringify({ type: 'step_start', part: {} }),
+    JSON.stringify({ type: 'step_finish', part: {} })
+  ].join('\n');
+  expect(extractPlannerJson(onlySteps)).toBe(null);
+  // Text event with unparsable JSON inside the fence → null
+  const bad = JSON.stringify({ type: 'text', part: { type: 'text', text: '```json\nnot json at all\n```' } });
+  expect(extractPlannerJson(bad)).toBe(null);
+});
+
+test('Phase 3 E2E: refineIdea works against real opencode streaming envelope (regression for planner_invalid_response)', () => {
+  // This is the bug that the Phase 3 E2E smoke uncovered: opencode emits
+  // NDJSON, not pure JSON, so the previous JSON.parse(stdout) failed.
+  const validSpec = {
+    title: 'Streaming test',
+    requirement: 'FILE 1 (CREATE): docs/streamed.md\nCreate a doc with one line.',
+    requested_paths: ['docs/streamed.md'],
+    difficulty: 'trivial',
+    recommended_executor: 'openrouter/moonshotai/kimi-k2.6',
+    reasoning: 'Trivial single-file creation.'
+  };
+  const lines = [
+    JSON.stringify({ type: 'step_start', part: { id: 'p1' } }),
+    JSON.stringify({
+      type: 'text',
+      part: { id: 'p2', type: 'text', text: '```json\n' + JSON.stringify(validSpec, null, 2) + '\n```' }
+    }),
+    JSON.stringify({ type: 'step_finish', part: { id: 'p3' } })
+  ];
+  const stdout = lines.join('\n');
+  const result = refineIdea({
+    idea: 'create a streamed doc',
+    rootDir: tmpRoot(),
+    spawn: makeSpawnSync(stdout)
+  });
+  expect(result.ok).toBe(true);
+  expect(result.story_spec.title).toBe('Streaming test');
+  expect(result.story_spec.requested_paths).toEqual(['docs/streamed.md']);
 });
