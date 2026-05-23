@@ -1,10 +1,71 @@
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 const { readApproval } = require('../ralph/approval-manager');
 const { calculatePatchHash } = require('./opencode-patch-approval');
 const { changedFilesFromTouched, gitChangedFiles } = require('./opencode-apply');
 
 const DEFAULT_TIMEOUT_MS = 180000;
 const SECRET_LIKE_PATTERN = /(?:\b\d{8,}:[A-Za-z0-9_-]{20,}\b|ghp_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9+/]{32,}={0,2})/g;
+
+// Phase 5 #2: known transient gate-failure signatures. When the daemon ran
+// scripts/gates/run-all.sh during the Phase 4 PR_REVIEW smoke v2, ralph-tests
+// failed once with stderr containing "error: Could not access './**'"
+// repeated 15×. A manual rerun of the same patch + same suite passed cleanly,
+// and an exhaustive trace of every git subprocess across the suite (333 git
+// calls) showed no command passing './**' as a pathspec. The shape strongly
+// suggests a subprocess race / shell-glob oddity that is not deterministically
+// reproducible.
+//
+// Until we capture a reproducer, this pattern allows the operator to opt in
+// (RALPH_GATE_RETRY_ON_FLAKE=1) to a SINGLE retry when the failure stderr
+// matches a known flake signature. Genuine failures (real test/build/secret
+// errors) do not match, so they will not be retried.
+const KNOWN_TRANSIENT_FLAKE_PATTERNS = Object.freeze([
+  /could not access\s+'[^']*\*\*[^']*'/i
+]);
+
+function isTransientGateFlake({ stdout, stderr } = {}) {
+  const text = `${stdout || ''}\n${stderr || ''}`;
+  return KNOWN_TRANSIENT_FLAKE_PATTERNS.some((re) => re.test(text));
+}
+
+// Phase 5 #2: when gates fail we previously kept only oneLine(stdout)/oneLine(stderr)
+// — 600 chars each, newlines collapsed, no way to grep for the 15th "Could not
+// access" or to see what failed. saveFullGateLog persists the raw streams to
+// .ralph/logs/gate-failures/<approval_id>-<timestamp>.log so a post-mortem can
+// see the actual sequence of errors and the surrounding context. Best-effort:
+// failures here are swallowed (we never want gate-log persistence to itself
+// fail the loop).
+function gateFailureLogDir(rootDir) {
+  return path.join(rootDir, '.ralph', 'logs', 'gate-failures');
+}
+
+function saveFullGateLog({ rootDir, approval_id, now, stdout, stderr, exit_code, attempt = 1 } = {}) {
+  if (!rootDir || !approval_id) return null;
+  try {
+    const dir = gateFailureLogDir(rootDir);
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = (now instanceof Date ? now : new Date()).toISOString().replace(/[:.]/g, '-');
+    const filename = `${approval_id}-${stamp}-attempt${attempt}.log`;
+    const filePath = path.join(dir, filename);
+    const lines = [
+      `# Gate failure log`,
+      `# approval_id: ${approval_id}`,
+      `# attempt: ${attempt}`,
+      `# at: ${(now instanceof Date ? now : new Date()).toISOString()}`,
+      `# exit_code: ${exit_code}`,
+      `# ---- STDOUT ----`,
+      String(stdout || ''),
+      `# ---- STDERR ----`,
+      String(stderr || '')
+    ].join('\n');
+    fs.writeFileSync(filePath, lines, 'utf8');
+    return path.relative(rootDir, filePath);
+  } catch (_err) {
+    return null;
+  }
+}
 
 function oneLine(value, maxLength = 600) {
   const normalized = String(value || '')
@@ -93,27 +154,95 @@ function opencodeGatesPreflight({ rootDir = process.cwd(), approval_id, patch_ha
   };
 }
 
-function runOpenCodeAppliedPatchGates({ rootDir = process.cwd(), approval_id, patch_hash, timeout_ms = DEFAULT_TIMEOUT_MS, now = () => new Date() } = {}) {
+function runOpenCodeAppliedPatchGates({
+  rootDir = process.cwd(),
+  approval_id,
+  patch_hash,
+  timeout_ms = DEFAULT_TIMEOUT_MS,
+  now = () => new Date(),
+  // Phase 5 #2: injectable for tests; production keeps the real child_process.
+  spawn = spawnSync,
+  env = process.env
+} = {}) {
   const preflight = opencodeGatesPreflight({ rootDir, approval_id, patch_hash });
   if (!preflight.ok) return { ...preflight, stage: 'opencode_gates' };
 
-  const startedAt = now().toISOString();
-  const result = spawnSync('scripts/gates/run-all.sh', [], {
-    cwd: rootDir,
-    encoding: 'utf8',
-    timeout: timeout_ms,
-    maxBuffer: 1024 * 1024
-  });
-  const finishedAt = now().toISOString();
-  const exitCode = typeof result.status === 'number' ? result.status : null;
-  const timedOut = result.error && result.error.code === 'ETIMEDOUT';
-  const ok = exitCode === 0 && !timedOut;
+  const runOnce = (attempt) => {
+    const startedAt = now().toISOString();
+    const result = spawn('scripts/gates/run-all.sh', [], {
+      cwd: rootDir,
+      encoding: 'utf8',
+      timeout: timeout_ms,
+      maxBuffer: 1024 * 1024
+    });
+    const finishedAt = now().toISOString();
+    const exitCode = typeof result.status === 'number' ? result.status : null;
+    const timedOut = result.error && result.error.code === 'ETIMEDOUT';
+    const ok = exitCode === 0 && !timedOut;
+    return { result, startedAt, finishedAt, exitCode, timedOut, ok, attempt };
+  };
+
+  let attempt = 1;
+  let run = runOnce(attempt);
+
+  // Phase 5 #2: opt-in retry on known transient flakes. RALPH_GATE_RETRY_ON_FLAKE=1
+  // turns this on. The retry triggers ONLY when:
+  //   (a) the first run failed (ok === false),
+  //   (b) the failure was NOT a timeout (transient timeouts have a different
+  //       retry path elsewhere),
+  //   (c) the stderr/stdout matches a known-flake pattern in
+  //       KNOWN_TRANSIENT_FLAKE_PATTERNS, and
+  //   (d) the parsed failed_gate is null (a structured FAILED_GATE=<name> line
+  //       means we know which gate failed, so the failure is genuine, not a
+  //       transient — never retry in that case).
+  // Genuine failures do not match the flake patterns, so they short-circuit
+  // here and surface normally.
+  let retried = false;
+  let firstAttemptLogPath = null;
+  if (
+    !run.ok &&
+    !run.timedOut &&
+    env.RALPH_GATE_RETRY_ON_FLAKE === '1' &&
+    parseFailedGateName(run.result.stdout, run.result.stderr) === null &&
+    isTransientGateFlake({ stdout: run.result.stdout, stderr: run.result.stderr })
+  ) {
+    firstAttemptLogPath = saveFullGateLog({
+      rootDir,
+      approval_id: preflight.approval_id,
+      now: now(),
+      stdout: run.result.stdout,
+      stderr: run.result.stderr,
+      exit_code: run.exitCode,
+      attempt
+    });
+    attempt += 1;
+    run = runOnce(attempt);
+    retried = true;
+  }
+
+  const { result, startedAt, finishedAt, exitCode, timedOut, ok } = run;
   const repositoryFilesModified = changedFilesFromTouched(preflight.files_touched, rootDir);
   // Phase 1 #7 fix: scripts/gates/run-all.sh now emits a structured
   // [gate] FAILED_GATE=<name> line when any sub-gate fails. Parse it so the
   // wired loop's failure summary can report failed_gate by name rather than
   // null, and operator dashboards can group gate failures by gate.
   const failedGate = ok ? null : parseFailedGateName(result.stdout, result.stderr);
+
+  // Phase 5 #2: on any non-ok outcome, persist the full streams so a
+  // post-mortem can see the actual sequence — oneLine() in the summary
+  // collapses newlines and truncates at 600 chars, hiding most of the
+  // information needed to diagnose a real failure.
+  const fullLogPath = !ok
+    ? saveFullGateLog({
+        rootDir,
+        approval_id: preflight.approval_id,
+        now: now(),
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: exitCode,
+        attempt
+      })
+    : null;
 
   return {
     ok,
@@ -131,6 +260,12 @@ function runOpenCodeAppliedPatchGates({ rootDir = process.cwd(), approval_id, pa
     duration_ms: durationMs(startedAt, finishedAt),
     stdout_preview: oneLine(result.stdout),
     stderr_preview: oneLine(result.stderr || result.error?.message || ''),
+    // Phase 5 #2: full streams written to disk for post-mortem. Null when the
+    // gate passed (no failure to investigate) or the writes themselves failed.
+    full_log_path: fullLogPath,
+    first_attempt_log_path: firstAttemptLogPath,
+    retried_on_flake: retried,
+    attempts: attempt,
     execution_connected: true,
     gates_started: true,
     commands_executed: ['scripts/gates/run-all.sh'],
@@ -161,4 +296,12 @@ function parseFailedGateName(stdout, stderr) {
   return null;
 }
 
-module.exports = { opencodeGatesPreflight, runOpenCodeAppliedPatchGates, parseFailedGateName, oneLine };
+module.exports = {
+  opencodeGatesPreflight,
+  runOpenCodeAppliedPatchGates,
+  parseFailedGateName,
+  oneLine,
+  isTransientGateFlake,
+  saveFullGateLog,
+  KNOWN_TRANSIENT_FLAKE_PATTERNS
+};
