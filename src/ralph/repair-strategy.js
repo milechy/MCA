@@ -79,19 +79,77 @@ function textMatchesAny(text, patterns) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+// Phase 5 #1: gate-name -> failure-type mapping. Used PRIMARILY (before any
+// text matching) so that when a multi-gate runner like scripts/gates/run-all.sh
+// fails on gate A, we don't misclassify based on stdout mentions of OTHER
+// (passing) gates. The previous logic concatenated the entire stdout into a
+// joinedFailureText and substring-matched on it; this caused e.g. a
+// `ralph-tests` failure to be misclassified as SECRET_SCAN because the
+// stdout still contained `[gate] passed: pre-secret-scan`, which contains
+// the substring `secret-scan` and triggered immediate_escalation. Phase 4
+// PR_REVIEW smoke v2 hit this exact bug. The table is ordered: more specific
+// patterns first.
+const GATE_NAME_TO_FAILURE_TYPE = Object.freeze([
+  { match: /secret[-_]?scan|pre[-_]?secret|post[-_]?secret/, type: FAILURE_TYPES.SECRET_SCAN },
+  { match: /rls[-_]?policy|rls[-_]?disable|row[-_]?level[-_]?security/, type: FAILURE_TYPES.RLS_DISABLE },
+  { match: /(^|[-_])prod(uction)?[-_]?db|db[-_]?policy/, type: FAILURE_TYPES.PRODUCTION_DB },
+  { match: /security[-_]?policy/, type: FAILURE_TYPES.SECURITY_POLICY },
+  { match: /typecheck|tsc[-_]?gate|type[-_]?gate/, type: FAILURE_TYPES.TYPECHECK },
+  { match: /(^|[-_])build([-_]|$)/, type: FAILURE_TYPES.BUILD },
+  { match: /supabase|migration/, type: FAILURE_TYPES.MIGRATION },
+  { match: /playwright|(^|[-_])e2e([-_]|$)/, type: FAILURE_TYPES.E2E },
+  { match: /(^|[-_])test([-_]|s)?($|[-_])/, type: FAILURE_TYPES.TEST }
+]);
+
+function classifyByFailedGate(gate) {
+  if (!gate) return null;
+  const g = String(gate).toLowerCase();
+  for (const { match, type } of GATE_NAME_TO_FAILURE_TYPE) {
+    if (match.test(g)) return type;
+  }
+  return null;
+}
+
 function classifyFailure(failure = {}) {
-  const text = joinedFailureText(failure).toLowerCase();
-  const gate = String(failure.failed_gate || failure.id || '').toLowerCase();
   const reason = String(failure.reason || '').toLowerCase();
-  if (reason.includes('timeout') || text.includes('timed out') || text.includes('timeout')) return FAILURE_TYPES.TIMEOUT;
-  if (gate.includes('secret') || text.includes('secret-scan') || text.includes('potential secret')) return FAILURE_TYPES.SECRET_SCAN;
-  if (textMatchesAny(text, [
+  // Timeout: check reason and stderr explicitly. The loop / dispatcher set
+  // reason='*_timeout' or stderr includes 'ETIMEDOUT'/'timed out' for genuine
+  // timeouts; we trust those signals before falling through to gate-name.
+  const stderr = String(failure.stderr_preview || failure.stderr || '').toLowerCase();
+  if (reason.includes('timeout') || reason.includes('timed out')) return FAILURE_TYPES.TIMEOUT;
+  if (stderr.includes('etimedout') || /\btimed\s+out\b/.test(stderr) || /\btimeout\b/.test(stderr)) {
+    return FAILURE_TYPES.TIMEOUT;
+  }
+
+  // Phase 5 #1: PRIMARY signal — the structured failed_gate / id field.
+  // This is the ONLY field that names *which* gate actually failed (set by
+  // gate-runner / opencode-gates / autonomous-loop). If it gives a verdict,
+  // trust it and do not look at stdout, which can contain passing-gate logs.
+  const byGate = classifyByFailedGate(failure.failed_gate || failure.id);
+  if (byGate) return byGate;
+
+  // SECONDARY signal — focused text matching. Limited to fields that genuinely
+  // describe THIS failure (reason + stderr + commands), NOT stdout_preview
+  // (which carries forward output from earlier-passing gates in a multi-gate
+  // runner). The patterns are tightened to phrases that imply an *active*
+  // failure, not just a gate name mention.
+  const focusedText = [
+    failure.reason,
+    failure.stderr_preview,
+    failure.stderr,
+    ...(Array.isArray(failure.commands_executed) ? failure.commands_executed : [])
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  if (focusedText.includes('potential secret') || focusedText.includes('secret detected') || /\bsecret[-_ ]?leak\b/.test(focusedText)) {
+    return FAILURE_TYPES.SECRET_SCAN;
+  }
+  if (textMatchesAny(focusedText, [
     /disable\s+rls/,
     /alter\s+table\s+[^;]+disable\s+row\s+level\s+security/,
     /row\s+level\s+security\s+disabled/,
     /rls\s+disable/
   ])) return FAILURE_TYPES.RLS_DISABLE;
-  if (textMatchesAny(text, [
+  if (textMatchesAny(focusedText, [
     /production\s+db/,
     /prod\s+db/,
     /drop\s+table/,
@@ -100,12 +158,12 @@ function classifyFailure(failure = {}) {
     /delete\s+from\s+[^\s]+\s*(where\s+1\s*=\s*1)?/,
     /destructive\s+(db|database|migration)/
   ])) return FAILURE_TYPES.PRODUCTION_DB;
-  if (text.includes('security policy') || text.includes('forbidden') || text.includes('policy violation')) return FAILURE_TYPES.SECURITY_POLICY;
-  if (gate.includes('type') || text.includes('typecheck') || text.includes('tsc') || text.includes('typescript')) return FAILURE_TYPES.TYPECHECK;
-  if (gate.includes('build') || text.includes('npm run build') || text.includes('build failed')) return FAILURE_TYPES.BUILD;
-  if (gate.includes('supabase') || gate.includes('migration') || text.includes('migration') || text.includes('supabase db')) return FAILURE_TYPES.MIGRATION;
-  if (gate.includes('playwright') || gate.includes('e2e') || text.includes('playwright') || text.includes('browser')) return FAILURE_TYPES.E2E;
-  if (gate.includes('test') || text.includes('test failed') || text.includes('expect(') || text.includes('assertion')) return FAILURE_TYPES.TEST;
+  if (focusedText.includes('security policy') || focusedText.includes('policy violation')) return FAILURE_TYPES.SECURITY_POLICY;
+  if (focusedText.includes('typecheck') || /\btsc\b/.test(focusedText) || focusedText.includes('typescript error')) return FAILURE_TYPES.TYPECHECK;
+  if (focusedText.includes('npm run build') || focusedText.includes('build failed')) return FAILURE_TYPES.BUILD;
+  if (focusedText.includes('migration failed') || focusedText.includes('supabase db error') || focusedText.includes('supabase db ')) return FAILURE_TYPES.MIGRATION;
+  if (focusedText.includes('playwright') || focusedText.includes('browser error')) return FAILURE_TYPES.E2E;
+  if (focusedText.includes('test failed') || focusedText.includes('expect(') || focusedText.includes('assertion')) return FAILURE_TYPES.TEST;
   return FAILURE_TYPES.UNKNOWN;
 }
 
@@ -191,8 +249,10 @@ function appendRepairHistory(story = {}, repair_event = {}) {
 module.exports = {
   FAILURE_TYPES,
   FAILURE_TYPE_ATTEMPT_CAPS,
+  GATE_NAME_TO_FAILURE_TYPE,
   redactText,
   extractTargetFiles,
+  classifyByFailedGate,
   classifyFailure,
   attemptCapForFailureType,
   shouldEscalateImmediately,
