@@ -217,3 +217,110 @@ test('extractTargetFiles ignores unsafe paths', () => {
   const files = extractTargetFiles({ repository_files_modified: ['/tmp/nope', '../bad', 'src/ok.js'] }, { requested_paths: ['tests/ok.spec.js'] });
   expect(files).toEqual(['src/ok.js', 'tests/ok.spec.js']);
 });
+
+// ============================================================
+// Phase 5 #1: classifier field-aware (substring false-positive fix)
+// ============================================================
+
+const { classifyByFailedGate, shouldEscalateImmediately } = require('../../src/ralph/repair-strategy');
+
+test('Phase 5 #1: classifyByFailedGate handles canonical gate names from scripts/gates', () => {
+  expect(classifyByFailedGate('pre-secret-scan')).toBe(FAILURE_TYPES.SECRET_SCAN);
+  expect(classifyByFailedGate('post-secret-scan')).toBe(FAILURE_TYPES.SECRET_SCAN);
+  expect(classifyByFailedGate('ralph-tests')).toBe(FAILURE_TYPES.TEST);
+  expect(classifyByFailedGate('telegram-tests')).toBe(FAILURE_TYPES.TEST);
+  expect(classifyByFailedGate('supabase-local')).toBe(FAILURE_TYPES.MIGRATION);
+  expect(classifyByFailedGate('playwright-e2e')).toBe(FAILURE_TYPES.E2E);
+  expect(classifyByFailedGate('typecheck')).toBe(FAILURE_TYPES.TYPECHECK);
+  expect(classifyByFailedGate('build')).toBe(FAILURE_TYPES.BUILD);
+  expect(classifyByFailedGate('rls-policy')).toBe(FAILURE_TYPES.RLS_DISABLE);
+  expect(classifyByFailedGate('db-policy')).toBe(FAILURE_TYPES.PRODUCTION_DB);
+  expect(classifyByFailedGate('security-policy')).toBe(FAILURE_TYPES.SECURITY_POLICY);
+});
+
+test('Phase 5 #1: classifyByFailedGate returns null for unknown or empty gate names', () => {
+  expect(classifyByFailedGate(null)).toBe(null);
+  expect(classifyByFailedGate('')).toBe(null);
+  expect(classifyByFailedGate(undefined)).toBe(null);
+  expect(classifyByFailedGate('unrelated-gate-name')).toBe(null);
+});
+
+test('Phase 5 #1: regression — ralph-tests failure is NOT misclassified when stdout mentions earlier passing secret-scan gate', () => {
+  // Exact shape captured from Phase 4 PR_REVIEW smoke v2 daemon log: the
+  // pre-secret-scan gate PASSED, then ralph-tests FAILED, and the joined
+  // stdout contained "[gate] passed: pre-secret-scan" which the OLD
+  // classifier substring-matched as SECRET_SCAN → immediate_escalation.
+  const failure = {
+    failed_gate: 'ralph-tests',
+    stage: 'opencode_gates',
+    reason: 'opencode_gates_failed',
+    command: 'scripts/gates/run-all.sh',
+    stdout_preview: '[gate] start: pre-secret-scan [secret-scan] passed [gate] passed: pre-secret-scan [gate] start: ralph-tests [ralph-tests] running npm run test:ralph ...',
+    stderr_preview: 'error: Could not access \'./**\'',
+    exit_code: 1
+  };
+  expect(classifyFailure(failure)).toBe(FAILURE_TYPES.TEST);
+  expect(shouldEscalateImmediately(classifyFailure(failure))).toBe(false);
+});
+
+test('Phase 5 #1: regression — ralph-tests stdout mentioning passing supabase-local gate does NOT classify as MIGRATION', () => {
+  const failure = {
+    failed_gate: 'ralph-tests',
+    reason: 'opencode_gates_failed',
+    stdout_preview: '[gate] passed: pre-secret-scan [gate] passed: supabase-local (SKIPPED) [gate] start: ralph-tests [ralph-tests] FAIL',
+    stderr_preview: 'test failed: 1 of 589 tests failed'
+  };
+  expect(classifyFailure(failure)).toBe(FAILURE_TYPES.TEST);
+  expect(shouldEscalateImmediately(classifyFailure(failure))).toBe(false);
+});
+
+test('Phase 5 #1: a real secret-scan gate failure still classifies as SECRET_SCAN and escalates', () => {
+  // Sanity: the field-aware classifier must NOT regress on actual secret
+  // exposure. failed_gate='pre-secret-scan' should still escalate immediately.
+  const failure = {
+    failed_gate: 'pre-secret-scan',
+    stderr_preview: 'potential secret detected at src/foo.js:12',
+    reason: 'gate_failed'
+  };
+  expect(classifyFailure(failure)).toBe(FAILURE_TYPES.SECRET_SCAN);
+  expect(shouldEscalateImmediately(classifyFailure(failure))).toBe(true);
+});
+
+test('Phase 5 #1: when failed_gate is missing, fall back to focused text (stderr + reason) — NOT stdout', () => {
+  // stdout contains a stale "potential secret detected" string from an
+  // earlier passing gate. With failed_gate missing, the OLD classifier
+  // would have matched that and escalated. The NEW classifier only looks
+  // at stderr + reason in the fallback, so it ignores stdout-only leaks.
+  const failure = {
+    failed_gate: '',
+    stage: 'opencode_gates',
+    reason: 'opencode_gates_failed',
+    stdout_preview: 'earlier gate said: potential secret detected (resolved)',
+    stderr_preview: 'tests/foo.spec.js:42 expect(actual).toBe(expected) — assertion failed'
+  };
+  expect(classifyFailure(failure)).toBe(FAILURE_TYPES.TEST);
+});
+
+test('Phase 5 #1: focused-text fallback still escalates a real secret reported in stderr', () => {
+  // The fallback path must still escalate when stderr genuinely reports
+  // a secret detection. (failed_gate is missing so we go through fallback.)
+  const failure = {
+    failed_gate: null,
+    stderr_preview: 'pre-secret-scan: potential secret detected at .env:1 — gh_pat_...',
+    reason: 'gate_failed'
+  };
+  expect(classifyFailure(failure)).toBe(FAILURE_TYPES.SECRET_SCAN);
+  expect(shouldEscalateImmediately(classifyFailure(failure))).toBe(true);
+});
+
+test('Phase 5 #1: timeout signal in reason or stderr beats failed_gate (loop-level timeout)', () => {
+  // A loop-level timeout can fire before any gate; trust the timeout signal.
+  expect(classifyFailure({ failed_gate: 'ralph-tests', reason: 'gate_timeout' })).toBe(FAILURE_TYPES.TIMEOUT);
+  expect(classifyFailure({ failed_gate: 'ralph-tests', reason: '', stderr_preview: 'process timed out after 600s' })).toBe(FAILURE_TYPES.TIMEOUT);
+  expect(classifyFailure({ failed_gate: 'ralph-tests', stderr_preview: 'ETIMEDOUT connecting to ...' })).toBe(FAILURE_TYPES.TIMEOUT);
+});
+
+test('Phase 5 #1: empty failure object classifies as UNKNOWN (not silently as some category)', () => {
+  expect(classifyFailure({})).toBe(FAILURE_TYPES.UNKNOWN);
+  expect(classifyFailure(undefined)).toBe(FAILURE_TYPES.UNKNOWN);
+});
