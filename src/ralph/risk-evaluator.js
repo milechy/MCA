@@ -74,22 +74,50 @@ function touchesSecrets(plan) {
   return text.includes('secret') || text.includes('service_role') || text.includes('api key') || text.includes('token');
 }
 
+// Phase 5 #1.5: substring patterns for destructive-operation detection had a
+// false-positive on `'truncate'` — it matched the word `truncated` in legitimate
+// contexts (e.g. "diff was truncated for prompt budget" inside a Phase 5 #3
+// story spec). The story got upgraded to RISK_5_DESTRUCTIVE_OR_SECRET and was
+// immediately escalated before any Kimi dispatch could happen.
+//
+// Patterns are now classified into:
+//   - STRING patterns: kept as plain text.includes() checks. These already
+//     contain enough context to be specific (e.g. 'drop table', 'delete from').
+//   - REGEX patterns: for any pattern whose bare-word form is too ambiguous,
+//     we require a word boundary + a SQL-adjacent context word. The classic
+//     example is TRUNCATE — we want to match `TRUNCATE TABLE foo` /
+//     `truncate only bar` (real destructive ops) but NOT `truncated`,
+//     `truncation`, `truncate the diff`, etc. Same posture for any future
+//     pattern that has the same bare-word risk.
+const DESTRUCTIVE_STRING_PATTERNS = Object.freeze([
+  'drop table',
+  'drop column',
+  'delete from',
+  'disable row level security',
+  'alter table disable row level security',
+  'service_role',
+  'secret exposure',
+  'git reset --hard',
+  'force push',
+  'main branch direct push'
+]);
+
+const DESTRUCTIVE_REGEX_PATTERNS = Object.freeze([
+  // Matches SQL TRUNCATE syntax variants but not the English word "truncate(d)".
+  //   ✅ truncate table foo, truncate only bar, truncate "schema"."tbl",
+  //      truncate `tbl`, truncate cascade, truncate restart identity
+  //   ❌ truncated, truncation, "truncate the diff", "diff was truncated"
+  // The optional `\\?` before the quote character allows for JSON-escaped
+  // strings (planText pipes the plan through JSON.stringify which escapes
+  // embedded `"` as `\"`).
+  /\btruncate\s+(?:table\b|only\b|cascade\b|restart\b|\\?["'`]|[a-z_][a-z0-9_]*\.[a-z_])/i
+]);
+
 function isDestructive(plan) {
   const text = planText(plan);
-  const destructivePatterns = [
-    'drop table',
-    'drop column',
-    'truncate',
-    'delete from',
-    'disable row level security',
-    'alter table disable row level security',
-    'service_role',
-    'secret exposure',
-    'git reset --hard',
-    'force push',
-    'main branch direct push'
-  ];
-  return destructivePatterns.some((pattern) => text.includes(pattern));
+  if (DESTRUCTIVE_STRING_PATTERNS.some((pattern) => text.includes(pattern))) return true;
+  if (DESTRUCTIVE_REGEX_PATTERNS.some((re) => re.test(text))) return true;
+  return false;
 }
 
 // Phase 2 #2: compute the content-based risk (the pre-existing substring
