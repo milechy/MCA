@@ -473,3 +473,69 @@ test('Phase 2 #2.5: content_risk = 2 (touchesAuthOrRls returns false) does not t
   // path-based (not a "downgrade" because no content risk to suppress)
   expect(risk.label).toBe('RISK_2_SCRIPT');
 });
+
+// ============================================================
+// Phase 5 #1.5: substring false-positives on the destructive-keyword list
+// ============================================================
+
+const { isDestructive } = require('../../src/ralph/risk-evaluator');
+
+test('Phase 5 #1.5: isDestructive still detects real TRUNCATE SQL variants', () => {
+  // The destructive intent (TRUNCATE TABLE etc.) must remain Risk 5.
+  expect(isDestructive({ title: 'Drop migration', requirement: 'TRUNCATE TABLE users;' })).toBe(true);
+  expect(isDestructive({ title: 't', requirement: 'truncate table public.events cascade;' })).toBe(true);
+  expect(isDestructive({ title: 't', requirement: 'TRUNCATE ONLY orders RESTART IDENTITY;' })).toBe(true);
+  expect(isDestructive({ title: 't', requirement: 'truncate "public"."events";' })).toBe(true);
+  expect(isDestructive({ title: 't', requirement: 'truncate `events`;' })).toBe(true);
+});
+
+test('Phase 5 #1.5: isDestructive does NOT misfire on the English word "truncated" / "truncate the diff"', () => {
+  // The regression: Phase 5 #3 story used the phrase "diff was truncated for
+  // prompt budget" inside its requirement. That tripped a bare 'truncate'
+  // substring match and escalated the story before any dispatch.
+  expect(isDestructive({ title: 'PR review post', requirement: 'diff was truncated for prompt budget' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'output is truncated when log lines exceed 600 chars' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'truncate the diff so it fits the context window' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'see diff_truncated field on the review result' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'TRUNCATION_BUFFER_BYTES = 600' })).toBe(false);
+});
+
+test('Phase 5 #1.5: evaluateRisk produces RISK_5 for true TRUNCATE TABLE, not for "truncated"', () => {
+  // End-to-end: the risk evaluator must classify accordingly.
+  const realDestructive = { title: 'cleanup', requirement: 'TRUNCATE TABLE orders;' };
+  const falseAlarm = { title: 'Phase 5 #3: gh pr review post', requirement: 'diff was truncated for prompt budget' };
+
+  expect(evaluateRisk(realDestructive).score).toBe(5);
+  expect(evaluateRisk(falseAlarm).score).toBeLessThan(5);
+});
+
+test('Phase 5 #1.5: all pre-existing destructive STRING patterns still trigger Risk 5', () => {
+  // Regression guard for the other keywords (drop table, force push, etc.).
+  // The list moved from one array to two (STRING + REGEX); make sure none of
+  // the original strings was dropped or accidentally changed.
+  const realCases = [
+    'DROP TABLE customers',
+    'DROP COLUMN total FROM orders',
+    'DELETE FROM users WHERE 1=1',
+    'DISABLE ROW LEVEL SECURITY on accounts',
+    'ALTER TABLE accounts DISABLE ROW LEVEL SECURITY',
+    'use the service_role key to bypass RLS',
+    'secret exposure in commit log',
+    'git reset --hard HEAD~5',
+    'force push to main',
+    'main branch direct push'
+  ];
+  for (const requirement of realCases) {
+    expect(isDestructive({ title: 't', requirement })).toBe(true);
+  }
+});
+
+test('Phase 5 #1.5: bare-word "truncate" without SQL context never matches', () => {
+  // The most direct regression: the exact substring "truncate" appearing
+  // alone in a sentence (no TABLE/ONLY/quoted identifier following) must NOT
+  // classify as destructive.
+  expect(isDestructive({ title: 't', requirement: 'truncate' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'we may truncate output' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'truncate.' })).toBe(false);
+  expect(isDestructive({ title: 't', requirement: 'truncate it' })).toBe(false);
+});
