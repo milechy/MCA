@@ -246,6 +246,63 @@ function reviewPullRequest({
   };
 }
 
+function formatReviewBody(result) {
+  // Render a reviewPullRequest() result into a markdown PR comment body.
+  // Always includes: verdict header, summary, issue bullet list, cost.
+  // Returns a string suitable for `gh pr review --body <text>`.
+  if (!result || !result.ok) {
+    return '## Phase 4 PR_REVIEW\n\n_review failed: ' + ((result && result.reason) || 'unknown') + '_';
+  }
+  const verdictLabel = result.verdict === 'approve' ? '✅ approve' : result.verdict === 'request_changes' ? '❌ request_changes' : '💬 comment';
+  const lines = [];
+  lines.push('## Phase 4 PR_REVIEW: ' + verdictLabel);
+  lines.push('');
+  lines.push('**Reviewer**: ' + (result.reviewer_model || 'unknown'));
+  lines.push('**Cost**: $' + ((result.cost_usd || 0).toFixed(4)));
+  if (result.diff_truncated) lines.push('_diff was truncated for prompt budget_');
+  lines.push('');
+  lines.push('### Summary');
+  lines.push(String(result.summary || '_(no summary)_'));
+  lines.push('');
+  lines.push('### Issues (' + (result.issues || []).length + ')');
+  if (!result.issues || result.issues.length === 0) {
+    lines.push('_(none)_');
+  } else {
+    for (const issue of result.issues) {
+      const sev = issue.severity ? '`' + issue.severity + '`' : '';
+      const loc = issue.file ? ('`' + issue.file + (issue.line ? ':' + issue.line : '') + '`') : '';
+      lines.push('- ' + sev + ' ' + loc + ' — ' + String(issue.message || ''));
+    }
+  }
+  lines.push('');
+  lines.push('_🤖 Autonomous review via Ralph PR_REVIEW phase_');
+  return lines.join('\n');
+}
+
+function postReviewToPR({ pr_number, result, env = process.env, spawn = spawnSync } = {}) {
+  // Maps the reviewPullRequest verdict to `gh pr review` action and posts.
+  // Opt-in: requires env.RALPH_PR_REVIEW_POST_COMMENT === '1'. Returns
+  // { ok, posted, action, reason? }. Never throws — posting failures are
+  // surfaced as { ok: false, reason: 'gh_review_failed', ... }.
+  if (env.RALPH_PR_REVIEW_POST_COMMENT !== '1') {
+    return { ok: true, posted: false, action: null, reason: 'post_comment_disabled' };
+  }
+  if (!result || result.ok !== true) {
+    return { ok: false, posted: false, action: null, reason: 'review_result_invalid' };
+  }
+  if (pr_number == null || !Number.isFinite(Number(pr_number))) {
+    return { ok: false, posted: false, action: null, reason: 'pr_number_required' };
+  }
+  const action = result.verdict === 'approve' ? '--approve' : result.verdict === 'request_changes' ? '--request-changes' : '--comment';
+  const body = formatReviewBody(result);
+  const cleanEnv = { PATH: env.PATH || '', HOME: env.HOME || '', GH_TOKEN: env.GH_TOKEN || env.GITHUB_TOKEN || '', GITHUB_TOKEN: env.GITHUB_TOKEN || env.GH_TOKEN || '' };
+  const r = spawn('gh', ['pr', 'review', String(pr_number), action, '--body', body], { encoding: 'utf8', timeout: 30000, env: cleanEnv });
+  if (r.error || r.status !== 0) {
+    return { ok: false, posted: false, action, reason: 'gh_review_failed', stderr_preview: String(r.stderr || '').slice(0, 300) };
+  }
+  return { ok: true, posted: true, action };
+}
+
 module.exports = {
   DEFAULT_REVIEWER_MODEL,
   DEFAULT_MAX_RETRIES,
@@ -258,5 +315,7 @@ module.exports = {
   validateReviewerOutput,
   fetchPrMetadata,
   fetchPrDiff,
-  reviewPullRequest
+  reviewPullRequest,
+  formatReviewBody,
+  postReviewToPR
 };
