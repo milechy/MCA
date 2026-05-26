@@ -1099,3 +1099,121 @@ test('Phase 5 #4: approve verdict + auto-repair flag still completes (no false r
     expect(result.review_repair_dispatched).toBe(false);
   }
 });
+
+// ============================================================
+// Phase 8 #0: postReviewToPR is wired into advancePrReviewPhase
+// ============================================================
+//
+// Phase 5 #3 (#163) created postReviewToPR() but never wired it into the
+// daemon. Phase 7 #4 smoke v4 (PR #175) recorded verdict=approve in
+// story.last_review_result but no comment was posted to the actual PR.
+// Phase 8 #0 closes that gap: advancePrReviewPhase now calls the poster
+// after the review completes. The poster honors RALPH_PR_REVIEW_POST_COMMENT
+// itself (no-op when unset) and never throws — the loop must not be
+// gated on a successful post.
+
+test('Phase 8 #0: advancePrReviewPhase calls the post-review hook with the review result and pr_number', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 800 });
+
+  let postedArgs = null;
+  const fakePoster = (args) => {
+    postedArgs = args;
+    return { ok: true, posted: true, action: '--comment' };
+  };
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date('2026-05-27T00:00:00Z'),
+    env: { RALPH_PR_REVIEW_POST_COMMENT: '1' },
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 800,
+      verdict: 'approve',
+      issues: [],
+      summary: 'LGTM',
+      cost_usd: 0.003,
+      reviewer_model: 'openrouter/anthropic/claude-sonnet-4.6'
+    }),
+    pr_review_poster: fakePoster
+  });
+
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(postedArgs).toBeTruthy();
+  expect(postedArgs.pr_number).toBe(800);
+  expect(postedArgs.result).toMatchObject({ ok: true, verdict: 'approve', summary: 'LGTM' });
+  expect(postedArgs.env).toMatchObject({ RALPH_PR_REVIEW_POST_COMMENT: '1' });
+
+  // The post outcome is attached to the persisted summarySnapshot for
+  // dashboards.
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result.post).toMatchObject({ ok: true, posted: true, action: '--comment' });
+});
+
+test('Phase 8 #0: post failure does NOT block the loop — story still completes with verdict recorded', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 801 });
+
+  let postCalls = 0;
+  const failingPoster = () => {
+    postCalls += 1;
+    return { ok: false, posted: false, reason: 'gh_review_failed', stderr_preview: 'gh: unauthorized' };
+  };
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date('2026-05-27T00:01:00Z'),
+    env: { RALPH_PR_REVIEW_POST_COMMENT: '1' },
+    pr_reviewer: () => ({ ok: true, pr_number: 801, verdict: 'comment', issues: [], summary: 's', cost_usd: 0.002 }),
+    pr_review_poster: failingPoster
+  });
+
+  expect(postCalls).toBe(1);
+  // Loop MUST still complete — verdict is recorded, post failure surfaced for diagnostics.
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result.verdict).toBe('comment');
+  expect(persisted.last_review_result.post).toMatchObject({ ok: false, reason: 'gh_review_failed' });
+});
+
+test('Phase 8 #0: poster throwing is caught — story.last_review_result.post records post_review_threw', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 802 });
+
+  const throwingPoster = () => { throw new Error('boom'); };
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date('2026-05-27T00:02:00Z'),
+    env: { RALPH_PR_REVIEW_POST_COMMENT: '1' },
+    pr_reviewer: () => ({ ok: true, pr_number: 802, verdict: 'approve', issues: [], summary: 's', cost_usd: 0.001 }),
+    pr_review_poster: throwingPoster
+  });
+
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result.post).toMatchObject({ ok: false, reason: 'post_review_threw' });
+});
+
+test('Phase 8 #0: poster is NOT called when the review itself failed (no verdict to post)', () => {
+  // If reviewPullRequest returns ok:false, there's no verdict to post. The
+  // poster must not be called at all — otherwise it would send a garbage
+  // comment to the PR.
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 803 });
+
+  let postCalls = 0;
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date('2026-05-27T00:03:00Z'),
+    env: { RALPH_PR_REVIEW_POST_COMMENT: '1' },
+    pr_reviewer: () => ({ ok: false, reason: 'reviewer_invalid_response' }),
+    pr_review_poster: () => { postCalls += 1; return { ok: true, posted: true }; }
+  });
+
+  expect(postCalls).toBe(0);
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result.ok).toBe(false);
+  expect(persisted.last_review_result.post).toBeUndefined();
+});
