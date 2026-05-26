@@ -24,16 +24,65 @@ const { reviewPullRequest: defaultReviewPullRequest } = require('./pr-reviewer')
 // Phase 4 #4: opt-in PR_REVIEW phase. When RALPH_PR_REVIEW_ENABLED=1, the
 // daemon inserts a PR_REVIEW phase between PR creation and DONE. The phase
 // calls reviewPullRequest() (Phase 4 #3) and records the review in the
-// story audit; in v1 it always transitions to DONE regardless of verdict,
-// keeping the review observational so existing fullauto flows are not
-// gated on reviewer availability. A follow-up (Phase 4 #4.1) will post the
-// review to GitHub; #4.2 will branch verdict=request_changes back into
-// FIX_LOOP. This v1 only delivers the loop-shape change + audit trail.
+// story audit.
+// Phase 5 #4: when RALPH_PR_REVIEW_AUTO_REPAIR=1 and the reviewer verdict is
+// request_changes, branch back into FIX_LOOP with the reviewer's issues
+// translated into a repair instruction. Bounded by a separate attempt
+// counter (story.review_repair_attempts vs the gate-failure attempts) so a
+// review-driven loop cannot exhaust the gate-repair budget.
 function prReviewEnabled(env = process.env) {
   const raw = env && env.RALPH_PR_REVIEW_ENABLED;
   if (raw == null) return false;
   const normalized = String(raw).toLowerCase().trim();
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function prReviewAutoRepairEnabled(env = process.env) {
+  const raw = env && env.RALPH_PR_REVIEW_AUTO_REPAIR;
+  if (raw == null) return false;
+  const normalized = String(raw).toLowerCase().trim();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+// Phase 5 #4: hard cap on review-driven re-dispatches. We don't share with
+// story.max_attempts (which is the GATE-failure budget) because a single
+// review pass can already exhaust the gate budget; reusing that counter
+// would either lock the repair out entirely or risk infinite ping-pong
+// between gates and reviewer.
+const DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP = 1;
+
+// Phase 5 #4: translate a request_changes reviewer verdict into a Kimi-
+// friendly repair instruction. Only blocker / warn issues are forwarded
+// (nits are intentionally dropped from the auto-repair path — they are
+// observational and should not trigger work). Returns null when the
+// review has no actionable issues, which signals the caller to skip the
+// auto-repair branch and complete normally.
+function buildReviewRepairInstruction(review) {
+  if (!review || review.ok !== true) return null;
+  if (review.verdict !== 'request_changes') return null;
+  const issues = Array.isArray(review.issues) ? review.issues : [];
+  const actionable = issues.filter((issue) => issue && (issue.severity === 'blocker' || issue.severity === 'warn'));
+  if (actionable.length === 0) return null;
+  const lines = [
+    'The autonomous PR reviewer requested changes on the open PR for this story.',
+    '',
+    `Reviewer summary: ${String(review.summary || '(no summary)').slice(0, 600)}`,
+    '',
+    'Address the following issues. Preserve all pre-existing tests, functions, exports, and comments verbatim — only change the lines specifically required by each issue.',
+    '',
+    'Issues to fix:'
+  ];
+  for (const issue of actionable.slice(0, 15)) {
+    const loc = issue.file ? `${issue.file}${issue.line ? ':' + issue.line : ''}` : '(unspecified file)';
+    const msg = String(issue.message || '').slice(0, 400).replace(/[\r\n\t]+/g, ' ');
+    lines.push(`- [${issue.severity}] ${loc} — ${msg}`);
+  }
+  if (actionable.length > 15) {
+    lines.push(`- (+${actionable.length - 15} more issues truncated; address the most severe first)`);
+  }
+  lines.push('');
+  lines.push('Land these as a follow-up commit on the same branch. Do NOT delete the existing tests added in the original story.');
+  return lines.join('\n');
 }
 
 const WIRED_LOOP_VERSION = 'autonomous_loop_wired_v0_1';
@@ -679,21 +728,66 @@ function advancePrReviewPhase(story, { rootDir, now, env = process.env, pr_revie
     reason: (review && review.reason) || 'reviewer_unavailable'
   };
 
-  const updated = updateStoryForPhase(story, LOOP_PHASES.DONE, {
-    blocked_reason: null,
-    retry_after_at: null,
-    last_review_result: summarySnapshot
-  }, { rootDir, now, event: reviewOk ? `pr_review_completed_verdict_${review.verdict}` : 'pr_review_failed_story_still_completed' });
+  // Phase 5 #4: branch on verdict=request_changes when the auto-repair flag
+  // is set. Three escape hatches keep this safe:
+  //   (a) auto-repair must be explicitly opted in via env;
+  //   (b) buildReviewRepairInstruction returns null when there are no
+  //       actionable (blocker/warn) issues — nit-only reviews still go to
+  //       DONE so we don't burn budget on stylistic preferences;
+  //   (c) review_repair_attempts is bounded by DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP
+  //       so a stubborn reviewer cannot create an infinite loop.
+  const autoRepairOn = prReviewAutoRepairEnabled(env);
+  const repairInstruction = reviewOk && autoRepairOn
+    ? buildReviewRepairInstruction(review)
+    : null;
+  const priorRepairAttempts = Number.isInteger(story.review_repair_attempts) ? story.review_repair_attempts : 0;
+  const repairCap = Number.isInteger(story.review_repair_cap) ? story.review_repair_cap : DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP;
+  const wantsRepair = reviewOk
+    && autoRepairOn
+    && review.verdict === 'request_changes'
+    && repairInstruction != null
+    && priorRepairAttempts < repairCap;
+
+  const nextPhase = wantsRepair ? LOOP_PHASES.FIX_LOOP : LOOP_PHASES.DONE;
+
+  // When we go to FIX_LOOP, populate last_repair_instruction so the existing
+  // FIX_LOOP machinery (autonomous-loop.js::taskForStory) picks it up and
+  // appends it to the next opencode dispatch task. Increment the bounded
+  // review-repair counter so we cap re-dispatches.
+  const updateFields = wantsRepair
+    ? {
+        blocked_reason: null,
+        retry_after_at: null,
+        last_review_result: summarySnapshot,
+        last_repair_instruction: repairInstruction,
+        review_repair_attempts: priorRepairAttempts + 1,
+        review_repair_cap: repairCap
+      }
+    : {
+        blocked_reason: null,
+        retry_after_at: null,
+        last_review_result: summarySnapshot
+      };
+
+  const event = !reviewOk
+    ? 'pr_review_failed_story_still_completed'
+    : wantsRepair
+      ? `pr_review_requested_changes_fix_loop_dispatched_attempt_${priorRepairAttempts + 1}`
+      : `pr_review_completed_verdict_${review.verdict}`;
+
+  const updated = updateStoryForPhase(story, nextPhase, updateFields, { rootDir, now, event });
 
   return baseResult({
     ok: true,
     reason: reviewOk ? null : summarySnapshot.reason,
     story_id: story.story_id,
     from_phase: LOOP_PHASES.PR_REVIEW,
-    to_phase: LOOP_PHASES.DONE,
+    to_phase: nextPhase,
     story: updated.summary,
     review: summarySnapshot,
-    next_action: 'story_complete'
+    review_repair_dispatched: wantsRepair,
+    review_repair_attempts: wantsRepair ? priorRepairAttempts + 1 : priorRepairAttempts,
+    next_action: wantsRepair ? 'dispatch_opencode_fix_candidate_patch_via_nemoclaw' : 'story_complete'
   });
 }
 
@@ -773,6 +867,9 @@ module.exports = {
   advancePrPhase,
   advancePrReviewPhase,
   prReviewEnabled,
+  prReviewAutoRepairEnabled,
+  buildReviewRepairInstruction,
+  DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP,
   baseBranchForStory,
   resolveRemoteHeadDefaultBranch,
   resetBaseBranchCacheForTests,

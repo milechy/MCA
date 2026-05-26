@@ -864,3 +864,209 @@ test('Phase 4 #4: tickAutonomousLoopWired dispatches PR_REVIEW phase to advanceP
   expect(result.to_phase).toBe(LOOP_PHASES.DONE);
   expect(result.review).toMatchObject({ verdict: 'comment', issue_count: 1 });
 });
+
+// ============================================================
+// Phase 5 #4: FIX_LOOP from verdict=request_changes
+// ============================================================
+
+const {
+  buildReviewRepairInstruction,
+  prReviewAutoRepairEnabled,
+  DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP
+} = require('../../src/ralph/autonomous-loop-wired');
+
+test('Phase 5 #4: buildReviewRepairInstruction includes summary + blocker/warn issues', () => {
+  const instr = buildReviewRepairInstruction({
+    ok: true,
+    verdict: 'request_changes',
+    summary: 'two real problems',
+    issues: [
+      { severity: 'blocker', file: 'src/a.js', line: 12, message: 'secret leaked' },
+      { severity: 'warn', file: 'src/b.js', message: 'race condition risk' },
+      { severity: 'nit', file: 'src/c.js', message: 'naming preference' }
+    ]
+  });
+  expect(typeof instr).toBe('string');
+  expect(instr).toContain('two real problems');
+  expect(instr).toContain('[blocker] src/a.js:12 — secret leaked');
+  expect(instr).toContain('[warn] src/b.js — race condition risk');
+  // Nits MUST be dropped: not actionable enough to burn the executor budget.
+  expect(instr).not.toContain('naming preference');
+  // Must preserve the APPEND-only contract for Kimi.
+  expect(instr).toContain('Preserve all pre-existing tests');
+});
+
+test('Phase 5 #4: buildReviewRepairInstruction returns null when there are no actionable issues', () => {
+  // verdict not request_changes → null (we should not repair on approve/comment).
+  expect(buildReviewRepairInstruction({ ok: true, verdict: 'approve', issues: [{ severity: 'blocker', message: 'x' }] })).toBeNull();
+  expect(buildReviewRepairInstruction({ ok: true, verdict: 'comment', issues: [{ severity: 'warn', message: 'x' }] })).toBeNull();
+  // request_changes but only nits → null (don't burn budget on style preferences).
+  expect(buildReviewRepairInstruction({
+    ok: true, verdict: 'request_changes', summary: 's',
+    issues: [{ severity: 'nit', message: 'naming' }]
+  })).toBeNull();
+  // Empty issues → null.
+  expect(buildReviewRepairInstruction({ ok: true, verdict: 'request_changes', summary: 's', issues: [] })).toBeNull();
+  // Failed review → null.
+  expect(buildReviewRepairInstruction({ ok: false, reason: 'reviewer_unavailable' })).toBeNull();
+  // Null / missing → null (no throw).
+  expect(buildReviewRepairInstruction(null)).toBeNull();
+  expect(buildReviewRepairInstruction(undefined)).toBeNull();
+});
+
+test('Phase 5 #4: prReviewAutoRepairEnabled honors common truthy / falsy spellings', () => {
+  expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: '1' })).toBe(true);
+  expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: 'true' })).toBe(true);
+  expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: 'YES' })).toBe(true);
+  expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: 'on' })).toBe(true);
+  expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: '' })).toBe(false);
+  expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: '0' })).toBe(false);
+  expect(prReviewAutoRepairEnabled({})).toBe(false);
+  expect(prReviewAutoRepairEnabled()).toBe(false);
+});
+
+test('Phase 5 #4: advancePrReviewPhase request_changes + RALPH_PR_REVIEW_AUTO_REPAIR=1 transitions to FIX_LOOP', () => {
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 700 });
+
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    env: { RALPH_PR_REVIEW_AUTO_REPAIR: '1' },
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 700,
+      verdict: 'request_changes',
+      issues: [
+        { severity: 'blocker', file: 'src/x.js', line: 7, message: 'secret leak' },
+        { severity: 'warn', file: 'src/y.js', message: 'use of deprecated api' }
+      ],
+      summary: 'two real issues',
+      cost_usd: 0.012,
+      reviewer_model: 'openrouter/anthropic/claude-sonnet-4.6'
+    })
+  });
+
+  expect(result.from_phase).toBe(LOOP_PHASES.PR_REVIEW);
+  expect(result.to_phase).toBe(LOOP_PHASES.FIX_LOOP);
+  expect(result.review_repair_dispatched).toBe(true);
+  expect(result.review_repair_attempts).toBe(1);
+
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_review_result.verdict).toBe('request_changes');
+  // The existing FIX_LOOP machinery (taskForStory in autonomous-loop.js) reads
+  // last_repair_instruction; we must populate it so the next opencode dispatch
+  // picks up the reviewer's issues automatically.
+  expect(persisted.last_repair_instruction).toContain('Reviewer summary');
+  expect(persisted.last_repair_instruction).toContain('secret leak');
+  expect(persisted.last_repair_instruction).toContain('use of deprecated api');
+  expect(persisted.review_repair_attempts).toBe(1);
+  expect(persisted.audit[persisted.audit.length - 1].event).toBe('pr_review_requested_changes_fix_loop_dispatched_attempt_1');
+});
+
+test('Phase 5 #4: advancePrReviewPhase request_changes WITHOUT auto-repair flag still goes to DONE (Phase 4 #4 behavior preserved)', () => {
+  // This is the regression guard for the Phase 4 #4 contract: when the
+  // operator has NOT opted in to auto-repair, the loop must complete
+  // observationally regardless of verdict. Previously was Phase 4 #4's
+  // own test "records request_changes verdict but still transitions to DONE".
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 701 });
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    env: {}, // explicitly no auto-repair flag
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 701,
+      verdict: 'request_changes',
+      issues: [{ severity: 'blocker', file: 'src/x.js', line: 7, message: 'real issue' }],
+      summary: 'has blockers',
+      cost_usd: 0.01
+    })
+  });
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.review_repair_dispatched).toBe(false);
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  expect(persisted.last_repair_instruction).toBeFalsy();
+});
+
+test('Phase 5 #4: advancePrReviewPhase respects the review_repair_cap — does NOT loop forever', () => {
+  // Even with auto-repair on, after review_repair_attempts hits the cap
+  // we must complete with DONE rather than re-dispatch indefinitely.
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 702 });
+  // createStory filters unknown story-schema fields, so inject the counter
+  // via updateStory (which accepts arbitrary patch keys for tests).
+  updateStory('STORY-WIRED', {
+    review_repair_attempts: DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP,
+    review_repair_cap: DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP
+  }, { rootDir, now: new Date(), event: 'seed_review_repair_attempts_for_test' });
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    env: { RALPH_PR_REVIEW_AUTO_REPAIR: '1' },
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 702,
+      verdict: 'request_changes',
+      issues: [{ severity: 'blocker', file: 'src/x.js', message: 'still bad' }],
+      summary: 'second pass still failing',
+      cost_usd: 0.01
+    })
+  });
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.review_repair_dispatched).toBe(false);
+  const persisted = readStory(rootDir, 'STORY-WIRED');
+  // Counter stays at the cap (not reset, not incremented past).
+  expect(persisted.review_repair_attempts).toBe(DEFAULT_REVIEW_REPAIR_ATTEMPT_CAP);
+});
+
+test('Phase 5 #4: advancePrReviewPhase nit-only request_changes review does NOT dispatch repair (budget protection)', () => {
+  // If a reviewer asks for changes but ALL issues are 'nit', we should not
+  // burn executor budget on stylistic preferences. buildReviewRepairInstruction
+  // returns null → wantsRepair=false → DONE.
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 703 });
+  const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+    rootDir,
+    now: new Date(),
+    env: { RALPH_PR_REVIEW_AUTO_REPAIR: '1' },
+    pr_reviewer: () => ({
+      ok: true,
+      pr_number: 703,
+      verdict: 'request_changes',
+      issues: [
+        { severity: 'nit', file: 'src/x.js', message: 'rename variable' },
+        { severity: 'nit', file: 'src/y.js', message: 'extract helper' }
+      ],
+      summary: 'two style nits',
+      cost_usd: 0.008
+    })
+  });
+  expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+  expect(result.review_repair_dispatched).toBe(false);
+});
+
+test('Phase 5 #4: approve verdict + auto-repair flag still completes (no false repair dispatch)', () => {
+  // Sanity guard: the auto-repair path must only fire on request_changes,
+  // never on approve/comment.
+  const rootDir = tmpRoot();
+  seedAtPrReview(rootDir, { pr_number: 704 });
+  for (const verdict of ['approve', 'comment']) {
+    const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
+      rootDir,
+      now: new Date(),
+      env: { RALPH_PR_REVIEW_AUTO_REPAIR: '1' },
+      pr_reviewer: () => ({
+        ok: true,
+        pr_number: 704,
+        verdict,
+        issues: [{ severity: 'blocker', file: 'src/x.js', message: 'spurious blocker for test' }],
+        summary: 'verdict mismatch sanity case',
+        cost_usd: 0.005
+      })
+    });
+    expect(result.to_phase).toBe(LOOP_PHASES.DONE);
+    expect(result.review_repair_dispatched).toBe(false);
+  }
+});
