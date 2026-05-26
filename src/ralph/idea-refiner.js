@@ -249,7 +249,19 @@ function refineIdea({
     // not rootDir. The planner only emits JSON; it must never write files
     // into the project tree. The sandbox is rm'd after the call returns
     // (best-effort, see cleanupSandboxDir).
+    // Phase 6 #3: belt-and-suspenders — also set spawnSync cwd to the
+    // sandbox. opencode's --dir is a workspace hint, but if any nested
+    // shell/Bash tool the agent uses resolves a relative path against
+    // process.cwd() (the spawned child's cwd, inherited from the parent),
+    // we want THAT to also be the sandbox. Without cwd:, the child runs
+    // in whatever cwd the daemon/submit-idea was launched from — almost
+    // always the project root — and a rogue Write/Bash tool would land
+    // its file there. Phase 5 #7 smoke saw an orphan whose actual cause
+    // was the FIX_LOOP rollback gap (fixed in #167), but this hardens the
+    // planner path against any future opencode/agent-tool change that
+    // could reopen the same window.
     const result = spawn('opencode', ['run', '--model', plannerModel, '--format', 'json', '--dir', plannerSandbox, prompt], {
+      cwd: plannerSandbox,
       encoding: 'utf8',
       timeout: 120000,
       env
