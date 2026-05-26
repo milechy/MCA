@@ -15,7 +15,9 @@ const {
   validateReviewerOutput,
   fetchPrMetadata,
   fetchPrDiff,
-  reviewPullRequest
+  reviewPullRequest,
+  formatReviewBody,
+  postReviewToPR
 } = require('../../src/ralph/pr-reviewer');
 
 function tmpRoot() {
@@ -345,4 +347,121 @@ test('reviewPullRequest rejects a verdict-vs-issues mismatch (approve with block
     maxRetries: 0
   });
   expect(result).toMatchObject({ ok: false, reason: 'reviewer_invalid_response' });
+});
+
+// -- formatReviewBody -------------------------------------------------------
+
+test('formatReviewBody renders failed review without result.ok', () => {
+  const out = formatReviewBody({ ok: false, reason: 'broken' });
+  expect(out).toContain('Phase 4 PR_REVIEW');
+  expect(out).toContain('broken');
+});
+
+test('formatReviewBody renders approve with no issues', () => {
+  const result = {
+    ok: true, verdict: 'approve', issues: [], summary: 'Clean.',
+    cost_usd: 0.0123, reviewer_model: 'claude-test', diff_truncated: false
+  };
+  const out = formatReviewBody(result);
+  expect(out).toContain('✅ approve');
+  expect(out).toContain('Clean.');
+  expect(out).toContain('$0.0123');
+  expect(out).toContain('claude-test');
+  expect(out).toContain('_(none)_');
+});
+
+test('formatReviewBody renders request_changes with issue list', () => {
+  const result = {
+    ok: true, verdict: 'request_changes',
+    issues: [{ file: 'src/a.js', line: 4, severity: 'blocker', message: 'bad' }],
+    summary: 'Oops.', cost_usd: 0, reviewer_model: 'm'
+  };
+  const out = formatReviewBody(result);
+  expect(out).toContain('❌ request_changes');
+  expect(out).toContain('`blocker` `src/a.js:4` — bad');
+});
+
+test('formatReviewBody renders comment verdict', () => {
+  const out = formatReviewBody({ ok: true, verdict: 'comment', issues: [], summary: 's' });
+  expect(out).toContain('💬 comment');
+});
+
+// -- postReviewToPR ---------------------------------------------------------
+
+test('postReviewToPR returns posted=false when env flag is absent', () => {
+  const r = postReviewToPR({ pr_number: 1, result: { ok: true }, env: {} });
+  expect(r).toEqual({ ok: true, posted: false, action: null, reason: 'post_comment_disabled' });
+});
+
+test('postReviewToPR returns review_result_invalid when result.ok !== true', () => {
+  const r = postReviewToPR({ pr_number: 1, result: { ok: false }, env: { RALPH_PR_REVIEW_POST_COMMENT: '1' } });
+  expect(r).toEqual({ ok: false, posted: false, action: null, reason: 'review_result_invalid' });
+});
+
+test('postReviewToPR returns pr_number_required on missing pr_number', () => {
+  const r = postReviewToPR({ pr_number: null, result: { ok: true, verdict: 'approve', issues: [], summary: 's' }, env: { RALPH_PR_REVIEW_POST_COMMENT: '1' } });
+  expect(r).toEqual({ ok: false, posted: false, action: null, reason: 'pr_number_required' });
+});
+
+test('postReviewToPR calls gh pr review with --approve on approve verdict', () => {
+  let capturedArgs;
+  const spawn = (cmd, args) => {
+    if (cmd === 'gh') capturedArgs = args;
+    return { status: 0, stdout: '' };
+  };
+  const result = { ok: true, verdict: 'approve', issues: [], summary: 'LGTM', cost_usd: 0 };
+  const r = postReviewToPR({ pr_number: 42, result, env: { RALPH_PR_REVIEW_POST_COMMENT: '1', PATH: '/bin', HOME: '/tmp' }, spawn });
+  expect(r).toEqual({ ok: true, posted: true, action: '--approve' });
+  expect(capturedArgs[0]).toBe('pr');
+  expect(capturedArgs[1]).toBe('review');
+  expect(capturedArgs[2]).toBe('42');
+  expect(capturedArgs[3]).toBe('--approve');
+});
+
+test('postReviewToPR calls gh pr review with --request-changes on request_changes verdict', () => {
+  let capturedArgs;
+  const spawn = (cmd, args) => {
+    if (cmd === 'gh') capturedArgs = args;
+    return { status: 0, stdout: '' };
+  };
+  const result = { ok: true, verdict: 'request_changes', issues: [], summary: 'bad', cost_usd: 0 };
+  const r = postReviewToPR({ pr_number: 5, result, env: { RALPH_PR_REVIEW_POST_COMMENT: '1', PATH: '/bin', HOME: '/tmp' }, spawn });
+  expect(r).toEqual({ ok: true, posted: true, action: '--request-changes' });
+  expect(capturedArgs[3]).toBe('--request-changes');
+});
+
+test('postReviewToPR calls gh pr review with --comment on comment verdict', () => {
+  let capturedArgs;
+  const spawn = (cmd, args) => {
+    if (cmd === 'gh') capturedArgs = args;
+    return { status: 0, stdout: '' };
+  };
+  const result = { ok: true, verdict: 'comment', issues: [], summary: 'nits', cost_usd: 0 };
+  const r = postReviewToPR({ pr_number: 5, result, env: { RALPH_PR_REVIEW_POST_COMMENT: '1', PATH: '/bin', HOME: '/tmp' }, spawn });
+  expect(r).toEqual({ ok: true, posted: true, action: '--comment' });
+  expect(capturedArgs[3]).toBe('--comment');
+});
+
+test('postReviewToPR surfaces gh failure as gh_review_failed', () => {
+  const spawn = () => ({ status: 1, stderr: 'error: no PR found' });
+  const r = postReviewToPR({ pr_number: 99, result: { ok: true, verdict: 'approve', issues: [], summary: 's' }, env: { RALPH_PR_REVIEW_POST_COMMENT: '1', PATH: '/bin', HOME: '/tmp' }, spawn });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toBe('gh_review_failed');
+  expect(r.action).toBe('--approve');
+});
+
+test('postReviewToPR passes GH_TOKEN and GITHUB_TOKEN via env', () => {
+  let capturedOpts;
+  const spawn = (cmd, args, opts) => {
+    if (cmd === 'gh') capturedOpts = opts;
+    return { status: 0, stdout: '' };
+  };
+  postReviewToPR({
+    pr_number: 1,
+    result: { ok: true, verdict: 'approve', issues: [], summary: 's' },
+    env: { RALPH_PR_REVIEW_POST_COMMENT: '1', PATH: '/bin', HOME: '/tmp', GH_TOKEN: 'tk' },
+    spawn
+  });
+  expect(capturedOpts.env.GH_TOKEN).toBe('tk');
+  expect(capturedOpts.env.GITHUB_TOKEN).toBe('tk');
 });
