@@ -635,3 +635,60 @@ test('Phase 4 #2.1: cleanupPlannerSandboxDir is a no-op on null/undefined/missin
   cleanupPlannerSandboxDir(undefined);
   cleanupPlannerSandboxDir('/nonexistent/path/that/does/not/exist/' + Math.random());
 });
+
+// ============================================================
+// Phase 6 #3: defense-in-depth — spawnSync cwd is the sandbox too
+// ============================================================
+//
+// Phase 4 #2.1 set opencode's --dir to a throwaway tmpdir. That covers
+// opencode-aware path resolution. But opencode is an agent shell — the
+// planner Claude can invoke Bash/Write/etc tools. If any of those tools
+// resolve relative paths against process.cwd() (the spawned child's cwd,
+// which inherits from the parent), and the parent cwd is the project
+// root, a rogue write lands in the project worktree. Phase 5 #7 smoke
+// saw an orphan there; the real cause was traced to the FIX_LOOP
+// rollback gap (fixed in #167), but #3 pins the planner side so any
+// future opencode-tool change can't reopen the same window.
+
+test('Phase 6 #3: refineIdea spawns opencode with cwd set to the sandbox dir (not the parent cwd)', () => {
+  let seenOpts = null;
+  const spawn = (cmd, args, opts) => {
+    seenOpts = opts;
+    return { stdout: makeValidStdout(), stderr: '', status: 0, error: null };
+  };
+  const fakeSandbox = '/tmp/ralph-planner-cwd-test-' + Math.random().toString(36).slice(2);
+  refineIdea({
+    idea: 'whatever',
+    rootDir: tmpRoot(),
+    spawn,
+    makeSandboxDir: () => fakeSandbox,
+    cleanupSandboxDir: () => {}
+  });
+  expect(seenOpts).toBeTruthy();
+  expect(seenOpts.cwd).toBe(fakeSandbox);
+  // Critically: cwd must NOT be the parent process's cwd / rootDir.
+  expect(seenOpts.cwd).not.toBe(process.cwd());
+});
+
+test('Phase 6 #3: spawnSync cwd === --dir for the planner (both point at the same sandbox)', () => {
+  let seenArgs = null;
+  let seenOpts = null;
+  const spawn = (cmd, args, opts) => {
+    seenArgs = args;
+    seenOpts = opts;
+    return { stdout: makeValidStdout(), stderr: '', status: 0, error: null };
+  };
+  const fakeSandbox = '/tmp/ralph-planner-symmetry-test';
+  refineIdea({
+    idea: 'symmetry',
+    rootDir: tmpRoot(),
+    spawn,
+    makeSandboxDir: () => fakeSandbox,
+    cleanupSandboxDir: () => {}
+  });
+  // Args layout: ['run', '--model', <model>, '--format', 'json', '--dir', <sandbox>, <prompt>]
+  const dirArgIndex = seenArgs.indexOf('--dir');
+  expect(dirArgIndex).toBeGreaterThan(-1);
+  expect(seenArgs[dirArgIndex + 1]).toBe(fakeSandbox);
+  expect(seenOpts.cwd).toBe(seenArgs[dirArgIndex + 1]);
+});
