@@ -347,9 +347,16 @@ test('advancePrPhase marks story DONE after approved PR creation succeeds', () =
     repository_full_name: 'milechy/MCA'
   });
 
+  // Phase 7 #4 hermeticity fix: this test asserts the "no PR_REVIEW phase"
+  // happy path (DONE after PR creation). With RALPH_PR_REVIEW_ENABLED=1 in
+  // the ambient env (set by the daemon when launching gates), advancePrPhase
+  // would route through PR_REVIEW. Pass an explicit env: {} to keep the
+  // test hermetic — operators reading the daemon's ambient state shouldn't
+  // change the meaning of this unit test.
   const result = advancePrPhase(readStory(rootDir, 'STORY-WIRED'), {
     rootDir,
     now: new Date('2026-05-12T12:06:00.000Z'),
+    env: {},
     pr_runner: () => ({
       ok: true,
       stage: 'opencode_pr',
@@ -629,7 +636,18 @@ test('Phase 4 #4: prReviewEnabled reads RALPH_PR_REVIEW_ENABLED truthy values', 
   expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: 'false' })).toBe(false);
   expect(prReviewEnabled({ RALPH_PR_REVIEW_ENABLED: '' })).toBe(false);
   expect(prReviewEnabled({})).toBe(false);
-  expect(prReviewEnabled()).toBe(false);
+  // Phase 7 #4 hermeticity fix: previously called prReviewEnabled() to test
+  // the "no arg" default. That makes the test depend on the AMBIENT
+  // process.env — fine in a clean shell, broken when the daemon launches
+  // gates with RALPH_PR_REVIEW_ENABLED=1 set on its child env (which it
+  // does in production). Explicitly pass a cleaned env so the test exercises
+  // the documented "missing flag" semantic regardless of how the runner is
+  // invoked. (The default-param behavior itself is still covered by the
+  // `prReviewEnabled(undefined)` branch in the function — see the env-arg
+  // tests above.)
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.RALPH_PR_REVIEW_ENABLED;
+  expect(prReviewEnabled(cleanEnv)).toBe(false);
 });
 
 test('Phase 4 #4: advancePrPhase transitions to PR_REVIEW when RALPH_PR_REVIEW_ENABLED=1 and pr_number is set', () => {
@@ -783,9 +801,15 @@ test('Phase 4 #4: advancePrReviewPhase records request_changes verdict but still
   const rootDir = tmpRoot();
   seedAtPrReview(rootDir, { pr_number: 101 });
 
+  // Phase 7 #4 hermeticity fix: this test asserts Phase 4 #4's pre-Phase 5
+  // #4 behavior — observational, always DONE regardless of verdict. Phase
+  // 5 #4 added the auto-repair branch keyed on RALPH_PR_REVIEW_AUTO_REPAIR.
+  // The daemon sets that flag in production gates, which would flip this
+  // test to FIX_LOOP. Pass explicit env: {} to lock in the v1 semantic.
   const result = advancePrReviewPhase(readStory(rootDir, 'STORY-WIRED'), {
     rootDir,
     now: new Date(),
+    env: {},
     pr_reviewer: () => ({
       ok: true,
       pr_number: 101,
@@ -922,7 +946,12 @@ test('Phase 5 #4: prReviewAutoRepairEnabled honors common truthy / falsy spellin
   expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: '' })).toBe(false);
   expect(prReviewAutoRepairEnabled({ RALPH_PR_REVIEW_AUTO_REPAIR: '0' })).toBe(false);
   expect(prReviewAutoRepairEnabled({})).toBe(false);
-  expect(prReviewAutoRepairEnabled()).toBe(false);
+  // Phase 7 #4 hermeticity fix: same rationale as prReviewEnabled — see
+  // the matching comment near tests/ralph/autonomous-loop-wired.spec.js:632.
+  // Avoid relying on ambient process.env which the daemon sets in production.
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.RALPH_PR_REVIEW_AUTO_REPAIR;
+  expect(prReviewAutoRepairEnabled(cleanEnv)).toBe(false);
 });
 
 test('Phase 5 #4: advancePrReviewPhase request_changes + RALPH_PR_REVIEW_AUTO_REPAIR=1 transitions to FIX_LOOP', () => {
