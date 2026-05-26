@@ -47,9 +47,28 @@ function calculatePlanHash(plan) {
 }
 
 function calculateDiffHash(cwd = process.cwd()) {
+  // Phase 7 #2: silence stderr. When cwd is a non-git directory (common in
+  // test tmpdirs created via fs.mkdtempSync without `git init`), git emits
+  // `error: Could not access './**'` to stderr while exiting non-zero. The
+  // outer caller (approval-manager::safePreExecDiffHash) catches the throw
+  // and returns a sentinel hash — so the throw itself is harmless — but the
+  // raw stderr leaks into the parent process stderr, polluting:
+  //   (1) `npm run test:ralph` output during ralph-test gates,
+  //   (2) daemon failure summaries (Phase 5 #2 retry-on-flake matched on
+  //       this exact substring, wasting retry cycles),
+  //   (3) operator-facing audit logs.
+  // Phase 6 #5 smoke v2 + Phase 7 #1 instrumentation traced the issue to
+  // this exact line; Phase 5 #2 traced 333 git invocations across a full
+  // ralph-test run and could not find a `./**` argv match because the arg
+  // IS the magic-pathspec `:(exclude).ralph/**` — git's pathspec parser
+  // shortens it to `./**` in the error message when no repo is found.
+  // The fix is just to discard stderr; the throw still propagates so the
+  // safePreExecDiffHash try/catch still triggers the sentinel-hash fallback
+  // for non-repo cwds.
   const diff = execFileSync('git', ['diff', '--binary', '--full-index', '--', '.', ...RALPH_RUNTIME_DIFF_EXCLUDES], {
     cwd,
-    encoding: 'utf8'
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore']
   });
   return sha256(diff);
 }
