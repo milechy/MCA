@@ -112,7 +112,28 @@ function summarizeStory(story) {
   };
 }
 
-function buildStatusSummary({ rootDir, now, listStories, loadMode, readDailySpend, dailyBudgetCap } = {}) {
+// Phase 6 #6: wire the stuck-watchdog into the status summary so `ralph status`
+// surfaces stuck stories + mode_expired_blocking at the top of the operator
+// view. Phase 5 #5 created the detector, Phase 6 #2 wired it into the daemon
+// cycle log; this last hop puts it on the operator's primary dashboard.
+function buildWatchdogSnapshot(detectStuck, rootDir, nowDate, cycleIntervalMs) {
+  const fn = detectStuck || ((opts) => require('./stuck-watchdog').detectStuckStories(opts));
+  try {
+    const result = fn({ rootDir, now: nowDate, cycleIntervalMs });
+    if (!result || result.ok !== true) {
+      return { ok: false, stuck: [], mode_expired_blocking: false, error: 'watchdog_failed' };
+    }
+    return {
+      ok: true,
+      stuck: Array.isArray(result.stuck) ? result.stuck : [],
+      mode_expired_blocking: result.mode_expired_blocking === true
+    };
+  } catch (_err) {
+    return { ok: false, stuck: [], mode_expired_blocking: false, error: 'watchdog_threw' };
+  }
+}
+
+function buildStatusSummary({ rootDir, now, listStories, loadMode, readDailySpend, dailyBudgetCap, detectStuckStories, cycleIntervalMs = 60000 } = {}) {
   const nowDate = now instanceof Date ? now : new Date();
   if (!rootDir) {
     return { ok: false, reason: 'rootdir_required', checked_at: nowDate.toISOString() };
@@ -137,6 +158,8 @@ function buildStatusSummary({ rootDir, now, listStories, loadMode, readDailySpen
 
   const mode = buildModeSnapshot(loadMode, rootDir, nowDate);
   const cost = buildCostSnapshot(readDailySpend, dailyBudgetCap, rootDir, nowDate);
+  // Phase 6 #6: include watchdog snapshot for operator dashboards.
+  const watchdog = buildWatchdogSnapshot(detectStuckStories, rootDir, nowDate, cycleIntervalMs);
 
   return {
     ok: true,
@@ -144,7 +167,8 @@ function buildStatusSummary({ rootDir, now, listStories, loadMode, readDailySpen
     counts,
     stories: summarizedStories,
     mode,
-    cost
+    cost,
+    watchdog
   };
 }
 
@@ -188,6 +212,26 @@ function formatStatusSummaryTable(summary) {
   const c = summary.counts || emptyCounts();
   lines.push(`Counts: ${c.queued} queued | ${c.running} running | ${c.waiting_approval} waiting | ${c.completed} done | ${c.failed} failed | ${c.stopped} stopped (total ${c.total})`);
   lines.push('');
+
+  // Phase 6 #6: surface watchdog findings ABOVE the per-story list so the
+  // operator's eye lands on stuck/blocked items first.
+  const wd = summary.watchdog || {};
+  if (wd.mode_expired_blocking === true) {
+    lines.push('⚠️  WATCHDOG: fullauto mode expired AND approval-pending stories are stuck.');
+    lines.push('   → run: node src/ralph/cli.js mode fullauto-request <user> <hours>');
+    lines.push('   → then: node src/ralph/cli.js mode fullauto-confirm <token> <user>');
+    lines.push('');
+  }
+  if (Array.isArray(wd.stuck) && wd.stuck.length > 0) {
+    lines.push(`Stuck: ${wd.stuck.length} stor${wd.stuck.length === 1 ? 'y' : 'ies'} flagged by watchdog`);
+    for (const s of wd.stuck.slice(0, 10)) {
+      const phase = s.current_phase || 'UNKNOWN';
+      const cycles = Number.isFinite(s.cycles_in_phase) ? s.cycles_in_phase : '?';
+      const action = s.suggested_action || 'human_escalation';
+      lines.push(`  ${s.story_id} [${phase}] ${cycles} cycles → ${action}`);
+    }
+    lines.push('');
+  }
 
   if (!summary.stories || summary.stories.length === 0) {
     lines.push('Stories: (none queued)');
