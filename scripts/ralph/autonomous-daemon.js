@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { schedulerTick } = require('../../src/ralph/autonomous-scheduler');
 const { isOverBudget } = require('../../src/ralph/kimi-cost-tracker');
+const { detectStuckStories } = require('../../src/ralph/stuck-watchdog');
 const { tickIssueSupplier, supplierOptionsFromEnv } = require('../../src/ralph/github-issue-supplier');
 
 function parseBool(value) {
@@ -102,7 +103,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function daemonStatus(cycle, result, options, supplier = null, budget = null) {
+function daemonStatus(cycle, result, options, supplier = null, budget = null, watchdog = null) {
   return {
     ok: result.ok === true && (supplier === null || supplier.ok === true),
     stage: 'ralph_autonomous_daemon_cycle',
@@ -115,6 +116,7 @@ function daemonStatus(cycle, result, options, supplier = null, budget = null) {
     issue_supplier: supplier,
     budget,
     scheduler: result,
+    watchdog,
     execution_connected: result.execution_connected === true,
     commands_executed: result.commands_executed || [],
     repository_files_modified: result.repository_files_modified || [],
@@ -209,6 +211,20 @@ async function runDaemon(options = parseArgs()) {
       now
     });
 
+    // Phase 6 #2: stuck-watchdog detection. Runs once per cycle, in parallel
+    // semantics with the budget guard — the watchdog never blocks the
+    // scheduler; it only enriches the cycle's JSON output so the operator
+    // can see stuck stories in the log. Opt-out via RALPH_WATCHDOG_ENABLED=0.
+    let watchdog = null;
+    const watchdogEnabled = process.env.RALPH_WATCHDOG_ENABLED !== '0';
+    if (watchdogEnabled) {
+      try {
+        watchdog = detectStuckStories({ rootDir: options.rootDir, now, cycleIntervalMs: options.interval_ms });
+      } catch (_err) {
+        watchdog = { ok: false, reason: 'watchdog_error', stuck: [], mode_expired_blocking: false, checked_at: now.toISOString() };
+      }
+    }
+
     let result;
     if (budget.paused) {
       // Synthetic paused-cycle result. No scheduler invocation.
@@ -231,7 +247,7 @@ async function runDaemon(options = parseArgs()) {
         env: process.env
       });
     }
-    const status = daemonStatus(cycle, result, options, supplier, budget);
+    const status = daemonStatus(cycle, result, options, supplier, budget, watchdog);
     outputs.push(status);
     console.log(JSON.stringify(status, null, 2));
 

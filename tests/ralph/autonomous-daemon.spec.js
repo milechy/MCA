@@ -325,3 +325,42 @@ test('Phase 2 #5.x: runDaemon emits budget_paused status without invoking schedu
     else process.env.RALPH_KIMI_DAILY_BUDGET_USD = prevCap;
   }
 });
+
+test('Phase 6 #2: daemonStatus includes watchdog field when provided', () => {
+  const status = daemonStatus(1, {
+    ok: true, stage: 's', execution_connected: false, commands_executed: [], repository_files_modified: [], next_action: 'n'
+  }, { interval_ms: 60000, limit: 1, ticks_per_story: 1, pre_secret_scan_ok: false }, null, null, {
+    ok: true, stuck: [{ story_id: 'STUCK-1', current_phase: 'OPENCODE_RUNNING', status: 'running', cycles_in_phase: 7, suggested_action: 'restart_dispatch' }], mode_expired_blocking: false, checked_at: new Date().toISOString()
+  });
+  expect(status.watchdog).toMatchObject({ ok: true, stuck: [{ story_id: 'STUCK-1' }], mode_expired_blocking: false });
+});
+
+test('Phase 6 #2: runDaemon includes watchdog in cycle output when enabled', async () => {
+  const rootDir = tmpRoot();
+  const created = createStory({ story_id: 'STORY-WATCHDOG', requirement: 'Watchdog test', mode: 'fullauto', target_env: 'local' }, { rootDir, now: new Date('2026-05-08T18:00:00.000Z') });
+  expect(created.ok).toBe(true);
+
+  const result = await runDaemon({ rootDir, once: true, interval_ms: 1000, max_cycles: 1, limit: 1, ticks_per_story: 1, pre_secret_scan_ok: true });
+  expect(result.outputs.length).toBeGreaterThanOrEqual(1);
+  const firstStatus = result.outputs[0];
+  expect(firstStatus).toHaveProperty('watchdog');
+  expect(firstStatus.watchdog).toMatchObject({ ok: true, stuck: expect.any(Array), mode_expired_blocking: expect.any(Boolean) });
+});
+
+test('Phase 6 #2: runDaemon skips watchdog when RALPH_WATCHDOG_ENABLED=0', async () => {
+  const rootDir = tmpRoot();
+  const created = createStory({ story_id: 'STORY-NO-WATCHDOG', requirement: 'No watchdog test', mode: 'fullauto', target_env: 'local' }, { rootDir, now: new Date('2026-05-08T18:00:00.000Z') });
+  expect(created.ok).toBe(true);
+
+  const prev = process.env.RALPH_WATCHDOG_ENABLED;
+  process.env.RALPH_WATCHDOG_ENABLED = '0';
+  try {
+    const result = await runDaemon({ rootDir, once: true, interval_ms: 1000, max_cycles: 1, limit: 1, ticks_per_story: 1, pre_secret_scan_ok: true });
+    expect(result.outputs.length).toBeGreaterThanOrEqual(1);
+    const firstStatus = result.outputs[0];
+    expect(firstStatus.watchdog).toBeNull();
+  } finally {
+    if (prev === undefined) delete process.env.RALPH_WATCHDOG_ENABLED;
+    else process.env.RALPH_WATCHDOG_ENABLED = prev;
+  }
+});
