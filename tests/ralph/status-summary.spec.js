@@ -306,3 +306,123 @@ test('Phase 5 #6: runStatus reads real .ralph/stories/*.json and surfaces them',
   expect(parsed.counts.running).toBe(1);
   expect(parsed.stories[0].story_id).toBe('STORY-A');
 });
+
+// ============================================================
+// Phase 6 #6: surface stuck-watchdog findings in ralph status CLI
+// ============================================================
+
+test('Phase 6 #6: buildStatusSummary includes a watchdog snapshot by default (injectable for tests)', () => {
+  const summary = buildStatusSummary({
+    rootDir: '/tmp',
+    now: new Date('2026-05-26T03:00:00Z'),
+    listStories: () => [],
+    loadMode: () => ({ mode: 'approval' }),
+    readDailySpend: () => ({ cost_usd: 0 }),
+    dailyBudgetCap: () => 5,
+    detectStuckStories: () => ({ ok: true, stuck: [], mode_expired_blocking: false, checked_at: '2026-05-26T03:00:00Z' })
+  });
+  expect(summary.watchdog).toBeTruthy();
+  expect(summary.watchdog.ok).toBe(true);
+  expect(summary.watchdog.stuck).toEqual([]);
+  expect(summary.watchdog.mode_expired_blocking).toBe(false);
+});
+
+test('Phase 6 #6: buildStatusSummary surfaces stuck stories from the watchdog', () => {
+  const summary = buildStatusSummary({
+    rootDir: '/tmp',
+    now: new Date('2026-05-26T03:00:00Z'),
+    listStories: () => [],
+    loadMode: () => ({ mode: 'approval' }),
+    readDailySpend: () => ({ cost_usd: 0 }),
+    dailyBudgetCap: () => 5,
+    detectStuckStories: () => ({
+      ok: true,
+      stuck: [
+        { story_id: 'S-STUCK', current_phase: 'OPENCODE_RUNNING', status: 'running', cycles_in_phase: 8, updated_at: '2026-05-26T02:52:00Z', suggested_action: 'restart_dispatch' }
+      ],
+      mode_expired_blocking: false
+    })
+  });
+  expect(summary.watchdog.stuck).toHaveLength(1);
+  expect(summary.watchdog.stuck[0].story_id).toBe('S-STUCK');
+  expect(summary.watchdog.stuck[0].suggested_action).toBe('restart_dispatch');
+});
+
+test('Phase 6 #6: buildStatusSummary tolerates detectStuckStories throwing — watchdog.ok=false', () => {
+  const summary = buildStatusSummary({
+    rootDir: '/tmp',
+    now: new Date(),
+    listStories: () => [],
+    loadMode: () => ({ mode: 'approval' }),
+    readDailySpend: () => ({ cost_usd: 0 }),
+    dailyBudgetCap: () => 5,
+    detectStuckStories: () => { throw new Error('boom'); }
+  });
+  expect(summary.ok).toBe(true);
+  expect(summary.watchdog.ok).toBe(false);
+  expect(summary.watchdog.error).toBe('watchdog_threw');
+});
+
+test('Phase 6 #6: formatStatusSummaryTable renders Stuck: section when watchdog has flagged stories', () => {
+  const summary = {
+    ok: true,
+    checked_at: '2026-05-26T00:00:00.000Z',
+    counts: { queued: 0, running: 1, waiting_approval: 0, completed: 0, failed: 0, stopped: 0, total: 1 },
+    stories: [
+      { story_id: 'S-RUN', status: 'running', current_phase: 'OPENCODE_RUNNING', attempts: 0, max_attempts: 3 }
+    ],
+    mode: { mode: 'approval', expired: false },
+    cost: { daily_spend: 0, daily_cap: 5, fraction: 0, paused_at_cap: false },
+    watchdog: {
+      ok: true,
+      stuck: [
+        { story_id: 'S-RUN', current_phase: 'OPENCODE_RUNNING', cycles_in_phase: 8, suggested_action: 'restart_dispatch' }
+      ],
+      mode_expired_blocking: false
+    }
+  };
+  const text = formatStatusSummaryTable(summary);
+  expect(text).toContain('Stuck: 1 story flagged by watchdog');
+  expect(text).toContain('S-RUN');
+  expect(text).toContain('8 cycles');
+  expect(text).toContain('restart_dispatch');
+});
+
+test('Phase 6 #6: formatStatusSummaryTable renders the EXPIRED_BLOCKING warning prominently when set', () => {
+  const summary = {
+    ok: true,
+    checked_at: '2026-05-26T00:00:00.000Z',
+    counts: { queued: 0, running: 0, waiting_approval: 1, completed: 0, failed: 0, stopped: 0, total: 1 },
+    stories: [
+      { story_id: 'S-WAIT', status: 'waiting_approval', current_phase: 'PUSH_APPROVAL_PENDING', attempts: 0, max_attempts: 3 }
+    ],
+    mode: { mode: 'fullauto', expired: true, effective_until: '2026-05-25T00:00:00Z' },
+    cost: { daily_spend: 0, daily_cap: 5, fraction: 0, paused_at_cap: false },
+    watchdog: {
+      ok: true,
+      stuck: [
+        { story_id: 'S-WAIT', current_phase: 'PUSH_APPROVAL_PENDING', cycles_in_phase: 10, suggested_action: 'extend_fullauto_mode' }
+      ],
+      mode_expired_blocking: true
+    }
+  };
+  const text = formatStatusSummaryTable(summary);
+  expect(text).toContain('WATCHDOG: fullauto mode expired');
+  expect(text).toContain('node src/ralph/cli.js mode fullauto-request');
+  expect(text).toContain('extend_fullauto_mode');
+});
+
+test('Phase 6 #6: formatStatusSummaryTable omits Stuck section when watchdog has no findings', () => {
+  const summary = {
+    ok: true,
+    checked_at: '2026-05-26T00:00:00.000Z',
+    counts: { queued: 0, running: 0, waiting_approval: 0, completed: 0, failed: 0, stopped: 0, total: 0 },
+    stories: [],
+    mode: { mode: 'approval', expired: false },
+    cost: { daily_spend: 0, daily_cap: 5, fraction: 0, paused_at_cap: false },
+    watchdog: { ok: true, stuck: [], mode_expired_blocking: false }
+  };
+  const text = formatStatusSummaryTable(summary);
+  expect(text).not.toContain('Stuck:');
+  expect(text).not.toContain('WATCHDOG:');
+});
