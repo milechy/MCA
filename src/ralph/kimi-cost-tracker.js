@@ -39,7 +39,12 @@ const MODEL_PRICING = Object.freeze({
   // Sonnet at equivalent JSON-spec quality. R1.x (reasoning): tested as
   // reviewer alternative — verdict correct, issue detection shallower.
   'openrouter/deepseek/deepseek-chat': { input: 0.00000027, output: 0.0000011, label: 'deepseek-v3-chat' },
-  'openrouter/deepseek/deepseek-r1': { input: 0.00000055, output: 0.00000219, label: 'deepseek-r1' }
+  'openrouter/deepseek/deepseek-r1': { input: 0.00000055, output: 0.00000219, label: 'deepseek-r1' },
+
+  // Phase 8 #4: Qwen3-Coder — medium-difficulty executor tier between Kimi
+  // (trivial/easy) and Sonnet (hard). Coder-specialized, strong MODIFY
+  // EXISTING discipline, ~5× cheaper than Sonnet. Pricing as of 2026-05.
+  'openrouter/qwen/qwen3-coder': { input: 0.00000060, output: 0.00000180, label: 'qwen3-coder' }
 });
 
 function pricingForModel(model) {
