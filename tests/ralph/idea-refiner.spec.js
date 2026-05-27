@@ -47,7 +47,10 @@ test('PLANNER_PROMPT_TEMPLATE is a non-empty string containing placeholders', ()
 });
 
 test('DEFAULT_PLANNER_MODEL has expected value', () => {
-  expect(DEFAULT_PLANNER_MODEL).toBe('openrouter/anthropic/claude-sonnet-4.6');
+  // Phase 8 #2: switched from Claude Sonnet 4.6 to DeepSeek V3 (chat).
+  // See the comment on DEFAULT_PLANNER_MODEL in src/ralph/idea-refiner.js
+  // for the smoke comparison data and rationale.
+  expect(DEFAULT_PLANNER_MODEL).toBe('openrouter/deepseek/deepseek-chat');
 });
 
 test('DEFAULT_MAX_RETRIES has expected value', () => {
