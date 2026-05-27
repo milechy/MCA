@@ -2,6 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { recordKimiCall } = require('./kimi-cost-tracker');
 
+const DEFAULT_REPO_CONTEXT_CAP = 6000;
+
 const PLANNER_PROMPT_TEMPLATE = `You are a PLANNING agent for an autonomous code-writing pipeline. Your job: take a vague human idea and produce a tight JSON story spec.
 
 ⚠️ CRITICAL — PLANNING ONLY:
@@ -44,7 +46,7 @@ function buildRepoContext(rootDir) {
   try {
     const parts = [];
     let totalLength = 0;
-    const cap = 6000;
+    const cap = DEFAULT_REPO_CONTEXT_CAP;
 
     function addSection(header, content) {
       const section = `--- ${header} ---\n${content}\n`;
@@ -354,6 +356,7 @@ function refineIdea({
 }
 
 module.exports = {
+  DEFAULT_REPO_CONTEXT_CAP,
   PLANNER_PROMPT_TEMPLATE,
   DEFAULT_PLANNER_MODEL,
   DEFAULT_MAX_RETRIES,

@@ -692,3 +692,30 @@ test('Phase 6 #3: spawnSync cwd === --dir for the planner (both point at the sam
   expect(seenArgs[dirArgIndex + 1]).toBe(fakeSandbox);
   expect(seenOpts.cwd).toBe(seenArgs[dirArgIndex + 1]);
 });
+
+// ============================================================
+// DEFAULT_REPO_CONTEXT_CAP export + cap regression tests
+// ============================================================
+
+test('DEFAULT_REPO_CONTEXT_CAP is exported and equals 6000', () => {
+  const { DEFAULT_REPO_CONTEXT_CAP } = require('../../src/ralph/idea-refiner');
+  expect(DEFAULT_REPO_CONTEXT_CAP).toStrictEqual(6000);
+});
+
+test('buildRepoContext output length does not exceed DEFAULT_REPO_CONTEXT_CAP', () => {
+  const { DEFAULT_REPO_CONTEXT_CAP } = require('../../src/ralph/idea-refiner');
+  const rootDir = tmpRoot();
+  // Write enough content so the cap logic is actually exercised.
+  fs.writeFileSync(path.join(rootDir, 'README.md'), 'x'.repeat(3000), 'utf8');
+  fs.writeFileSync(path.join(rootDir, 'CLAUDE.md'), 'y'.repeat(3000), 'utf8');
+  const result = buildRepoContext(rootDir);
+  expect(result.length).toBeLessThanOrEqual(DEFAULT_REPO_CONTEXT_CAP);
+});
+
+test('PLANNER_PROMPT_TEMPLATE and refineIdea exports still exist', () => {
+  const { PLANNER_PROMPT_TEMPLATE: tpl, refineIdea: fn } = require('../../src/ralph/idea-refiner');
+  expect(tpl).not.toBeUndefined();
+  expect(tpl).not.toBeNull();
+  expect(fn).not.toBeUndefined();
+  expect(fn).not.toBeNull();
+});
