@@ -216,3 +216,32 @@ test('Phase 3 #1: recordKimiCall records pricing_source = fallback_kimi_rates fo
   expect(r.ok).toBe(true);
   expect(r.entry.pricing_source).toBe('fallback_kimi_rates');
 });
+
+// ============================================================
+// Phase 8 #2: DeepSeek family pricing entries (planner default switch)
+// ============================================================
+
+test('Phase 8 #2: MODEL_PRICING contains DeepSeek V3 (chat) and R1 entries with sane rates', () => {
+  const v3 = MODEL_PRICING['openrouter/deepseek/deepseek-chat'];
+  const r1 = MODEL_PRICING['openrouter/deepseek/deepseek-r1'];
+  expect(v3).toBeDefined();
+  expect(r1).toBeDefined();
+  // Sanity: input ≤ output, both positive, and DeepSeek V3 cheaper than Kimi
+  // K2.6 input rate ($0.20/1M) — that's the threshold below which we said the
+  // planner switch is worth it. (Kimi rate: 0.0000002 = $0.20/1M.)
+  expect(v3.input).toBeLessThanOrEqual(v3.output);
+  expect(v3.input).toBeGreaterThan(0);
+  // DeepSeek V3 input rate should be well below Sonnet 4.6's ($3/1M = 0.000003).
+  expect(v3.input).toBeLessThan(0.000001);
+  // DeepSeek R1 is a reasoning model — slightly pricier than V3 but still cheap.
+  expect(r1.input).toBeGreaterThan(0);
+  expect(r1.input).toBeLessThan(0.000005);
+});
+
+test('Phase 8 #2: pricingForModel returns DeepSeek rates (NOT fallback) for DeepSeek slugs', () => {
+  const v3 = pricingForModel('openrouter/deepseek/deepseek-chat');
+  expect(v3.label).toBe('deepseek-v3-chat');
+  expect(v3.label).not.toBe('fallback_kimi_rates');
+  const r1 = pricingForModel('openrouter/deepseek/deepseek-r1');
+  expect(r1.label).toBe('deepseek-r1');
+});

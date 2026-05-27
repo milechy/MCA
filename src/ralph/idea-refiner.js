@@ -37,7 +37,16 @@ Return ONLY valid JSON with this exact shape:
   "reasoning": "string"
 }`;
 
-const DEFAULT_PLANNER_MODEL = 'openrouter/anthropic/claude-sonnet-4.6';
+// Phase 8 #2: switched default planner from Claude Sonnet 4.6 to DeepSeek V3
+// (openrouter/deepseek/deepseek-chat). Phase 8 smoke (2026-05-27) confirmed:
+//   - Sonnet 4.6:   $0.013/call, ~20s latency, valid JSON spec
+//   - DeepSeek V3:  $0.0005/call (26× cheaper), 5.7s (3× faster), valid JSON
+// The planner's job (idea → structured spec) is well within DeepSeek's
+// capability ceiling. Operators can override per-call via --planner-model
+// or per-story via story.planner_model. Reviewer remains on Sonnet for
+// depth of feedback (DeepSeek R1.x smoke found verdict correct but issue
+// detection shallower than Sonnet).
+const DEFAULT_PLANNER_MODEL = 'openrouter/deepseek/deepseek-chat';
 const DEFAULT_MAX_RETRIES = 1;
 
 const VALID_DIFFICULTIES = new Set(['trivial', 'easy', 'medium', 'hard', 'architectural']);

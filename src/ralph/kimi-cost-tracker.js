@@ -31,7 +31,15 @@ const MODEL_PRICING = Object.freeze({
   'openrouter/openai/gpt-5-mini': { input: 0.0000015, output: 0.000006, label: 'gpt-5-mini' },
 
   // Google Gemini on OpenRouter
-  'openrouter/google/gemini-3.0-pro': { input: 0.0000035, output: 0.0000105, label: 'gemini-3.0-pro' }
+  'openrouter/google/gemini-3.0-pro': { input: 0.0000035, output: 0.0000105, label: 'gemini-3.0-pro' },
+
+  // Phase 8 #2: DeepSeek family — extremely cheap, capable planner/reviewer.
+  // Pricing reflects OpenRouter listed rates as of 2026-05 (verify quarterly).
+  // V3 (chat): planner default after Phase 8 smoke proved 26× cheaper than
+  // Sonnet at equivalent JSON-spec quality. R1.x (reasoning): tested as
+  // reviewer alternative — verdict correct, issue detection shallower.
+  'openrouter/deepseek/deepseek-chat': { input: 0.00000027, output: 0.0000011, label: 'deepseek-v3-chat' },
+  'openrouter/deepseek/deepseek-r1': { input: 0.00000055, output: 0.00000219, label: 'deepseek-r1' }
 });
 
 function pricingForModel(model) {
