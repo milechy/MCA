@@ -83,3 +83,121 @@ test('routeExecutor with zero prompt_chars still returns a cost > 0 (default out
   });
   expect(result.estimated_cost_usd).toBeGreaterThan(0);
 });
+
+// ============================================================
+// Phase 8 #4: difficulty-based executor router
+// ============================================================
+//
+// When no explicit story.executor_model is set, route by story.difficulty:
+//   trivial / easy → Kimi K2.6 (cost wins)
+//   medium → Qwen3-Coder (mid-tier)
+//   hard → Claude Sonnet 4.6 (Phase 8 #1 proved $0.42/PR for real refactor)
+//   architectural → GPT-5 (best architectural judgment)
+//
+// Explicit story.executor_model ALWAYS wins. Tier models that aren't in
+// MODEL_PRICING fall back to Kimi with reason='difficulty_tier_model_missing'.
+
+const { modelForDifficulty, DIFFICULTY_TIER_MODELS } = require('../../src/ralph/executor-router');
+
+test('Phase 8 #4: modelForDifficulty maps each canonical difficulty to its tier model', () => {
+  expect(modelForDifficulty('trivial')).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(modelForDifficulty('easy')).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(modelForDifficulty('medium')).toBe('openrouter/qwen/qwen3-coder');
+  expect(modelForDifficulty('hard')).toBe('openrouter/anthropic/claude-sonnet-4.6');
+  expect(modelForDifficulty('architectural')).toBe('openrouter/openai/gpt-5');
+});
+
+test('Phase 8 #4: modelForDifficulty handles case-insensitive + trim, returns null for unknown', () => {
+  expect(modelForDifficulty('  HARD  ')).toBe('openrouter/anthropic/claude-sonnet-4.6');
+  expect(modelForDifficulty('Easy')).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(modelForDifficulty('LEGENDARY')).toBe(null);
+  expect(modelForDifficulty(null)).toBe(null);
+  expect(modelForDifficulty(undefined)).toBe(null);
+  expect(modelForDifficulty('')).toBe(null);
+  expect(modelForDifficulty(42)).toBe(null);  // non-string
+});
+
+test('Phase 8 #4: DIFFICULTY_TIER_MODELS is frozen so future code cannot mutate the ladder', () => {
+  expect(Object.isFrozen(DIFFICULTY_TIER_MODELS)).toBe(true);
+});
+
+test('Phase 8 #4: routeExecutor uses difficulty tier when no explicit executor_model', () => {
+  const r = routeExecutor({
+    story: { difficulty: 'hard' }, // no executor_model
+    prompt_chars: 100
+  });
+  expect(r.ok).toBe(true);
+  expect(r.executor_model).toBe('openrouter/anthropic/claude-sonnet-4.6');
+  expect(r.fallback_applied).toBe(false);
+  expect(r.routing_source).toBe('difficulty_tier');
+  expect(r.difficulty_tier).toBe('hard');
+  expect(r.reason).toBe('difficulty_tier_hard');
+});
+
+test('Phase 8 #4: routeExecutor routes trivial/easy to Kimi via tier (not via no-difficulty fallback)', () => {
+  for (const difficulty of ['trivial', 'easy']) {
+    const r = routeExecutor({ story: { difficulty }, prompt_chars: 100 });
+    expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+    expect(r.routing_source).toBe('difficulty_tier');
+    expect(r.difficulty_tier).toBe(difficulty);
+    // tier-routing to Kimi is the intended path, not a fallback.
+    expect(r.fallback_applied).toBe(false);
+    expect(r.ok).toBe(true);
+  }
+});
+
+test('Phase 8 #4: routeExecutor routes medium and architectural to their tier models', () => {
+  const medium = routeExecutor({ story: { difficulty: 'medium' }, prompt_chars: 50 });
+  expect(medium.executor_model).toBe('openrouter/qwen/qwen3-coder');
+  expect(medium.routing_source).toBe('difficulty_tier');
+
+  const arch = routeExecutor({ story: { difficulty: 'architectural' }, prompt_chars: 50 });
+  expect(arch.executor_model).toBe('openrouter/openai/gpt-5');
+  expect(arch.routing_source).toBe('difficulty_tier');
+});
+
+test('Phase 8 #4: routeExecutor — story.executor_model ALWAYS wins over difficulty tier', () => {
+  // Story says hard (would route to Sonnet) but operator overrode with Kimi.
+  const r = routeExecutor({
+    story: {
+      executor_model: 'openrouter/moonshotai/kimi-k2.6',
+      difficulty: 'hard'
+    },
+    prompt_chars: 50
+  });
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.routing_source).toBe('story_explicit');
+  expect(r.fallback_applied).toBe(false);
+});
+
+test('Phase 8 #4: routeExecutor — unknown difficulty falls through to no-difficulty Kimi path', () => {
+  const r = routeExecutor({
+    story: { difficulty: 'godmode' }, // not in the ladder
+    prompt_chars: 50
+  });
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.routing_source).toBe('fallback_no_difficulty');
+  expect(r.fallback_applied).toBe(true);
+  expect(r.reason).toBe('no_executor_specified');
+});
+
+test('Phase 8 #4: routeExecutor without story falls through to Kimi (no crash on missing fields)', () => {
+  const r = routeExecutor({ prompt_chars: 0 });
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.routing_source).toBe('fallback_no_difficulty');
+  expect(r.ok).toBe(true);
+});
+
+test('Phase 8 #4: explicit unallowlisted executor_model still drops back to Kimi (allowlist preserved)', () => {
+  const r = routeExecutor({
+    story: {
+      executor_model: 'openrouter/totally/made-up-model-v99',
+      difficulty: 'hard'  // even with a valid tier, explicit-but-unallowed STILL falls back
+    },
+    prompt_chars: 50
+  });
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.routing_source).toBe('fallback_unallowed_explicit');
+  expect(r.reason).toBe('executor_model_not_allowed');
+  expect(r.ok).toBe(false);
+});
