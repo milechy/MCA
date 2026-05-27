@@ -102,7 +102,9 @@ const { modelForDifficulty, DIFFICULTY_TIER_MODELS } = require('../../src/ralph/
 test('Phase 8 #4: modelForDifficulty maps each canonical difficulty to its tier model', () => {
   expect(modelForDifficulty('trivial')).toBe('openrouter/moonshotai/kimi-k2.6');
   expect(modelForDifficulty('easy')).toBe('openrouter/moonshotai/kimi-k2.6');
-  expect(modelForDifficulty('medium')).toBe('openrouter/qwen/qwen3-coder');
+  // Phase 8 #5b: medium swapped Qwen3-Coder → Haiku 4.5 after live smoke
+  // (task #24) showed Qwen failed 3/3 attempts on multi-file MODIFY EXISTING.
+  expect(modelForDifficulty('medium')).toBe('openrouter/anthropic/claude-haiku-4.5');
   expect(modelForDifficulty('hard')).toBe('openrouter/anthropic/claude-sonnet-4.6');
   expect(modelForDifficulty('architectural')).toBe('openrouter/openai/gpt-5');
 });
@@ -148,7 +150,8 @@ test('Phase 8 #4: routeExecutor routes trivial/easy to Kimi via tier (not via no
 
 test('Phase 8 #4: routeExecutor routes medium and architectural to their tier models', () => {
   const medium = routeExecutor({ story: { difficulty: 'medium' }, prompt_chars: 50 });
-  expect(medium.executor_model).toBe('openrouter/qwen/qwen3-coder');
+  // Phase 8 #5b: medium now routes to Haiku 4.5 (was Qwen3-Coder; see smoke #24).
+  expect(medium.executor_model).toBe('openrouter/anthropic/claude-haiku-4.5');
   expect(medium.routing_source).toBe('difficulty_tier');
 
   const arch = routeExecutor({ story: { difficulty: 'architectural' }, prompt_chars: 50 });

@@ -17,10 +17,16 @@ const FALLBACK_EXECUTOR_MODEL = 'openrouter/moonshotai/kimi-k2.6';
 const DIFFICULTY_TIER_MODELS = Object.freeze({
   trivial: 'openrouter/moonshotai/kimi-k2.6',
   easy: 'openrouter/moonshotai/kimi-k2.6',
-  // Qwen3-Coder: mid-tier coder model, strong MODIFY EXISTING discipline,
-  // ~5× cheaper than Sonnet. Phase 8 smoke not run for it yet — operator
-  // can override if quality is insufficient.
-  medium: 'openrouter/qwen/qwen3-coder',
+  // Phase 8 #5b: medium was Qwen3-Coder, but the live smoke (#24, 2026-05-27)
+  // failed all 3 attempts with `requested_paths_coverage_incomplete`. Qwen
+  // wrote source-only output (skipped the requested test file) AND emitted
+  // Python-dict syntax inside a JS module.exports — destroying the original
+  // export shape. Cost wasted: $0.103 across 3 retries. Replacing with
+  // Claude Haiku 4.5 ($1/$5 per 1M) until a better-priced model proves
+  // multi-file MODIFY EXISTING discipline in a live smoke. Qwen3-Coder is
+  // kept in MODEL_PRICING so it can still be picked via explicit
+  // story.executor_model when an operator wants to experiment.
+  medium: 'openrouter/anthropic/claude-haiku-4.5',
   // Claude Sonnet 4.6: Phase 8 #1 (PR #177) proved end-to-end real-work
   // refactor capability at $0.42/PR including planner+reviewer.
   hard: 'openrouter/anthropic/claude-sonnet-4.6',
