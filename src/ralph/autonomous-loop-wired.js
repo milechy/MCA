@@ -19,7 +19,7 @@ const { buildDefaultGithubPrClient } = require('./github-pr-client');
 const { buildPrBody } = require('./pr-body-generator');
 const { maybeAutoApproveForFullauto } = require('./fullauto-auto-approver');
 const { consumeApprovedResume } = require('./resume-after-security-stop');
-const { reviewPullRequest: defaultReviewPullRequest } = require('./pr-reviewer');
+const { reviewPullRequest: defaultReviewPullRequest, postReviewToPR: defaultPostReviewToPR } = require('./pr-reviewer');
 
 // Phase 4 #4: opt-in PR_REVIEW phase. When RALPH_PR_REVIEW_ENABLED=1, the
 // daemon inserts a PR_REVIEW phase between PR creation and DONE. The phase
@@ -687,8 +687,12 @@ function advancePrPhase(story, { rootDir, now, env = process.env, githubClient, 
   });
 }
 
-function advancePrReviewPhase(story, { rootDir, now, env = process.env, pr_reviewer } = {}) {
+function advancePrReviewPhase(story, { rootDir, now, env = process.env, pr_reviewer, pr_review_poster } = {}) {
   const reviewer = pr_reviewer || defaultReviewPullRequest;
+  // Phase 8 #0: postReviewToPR is injectable for tests; in production it
+  // shells out to `gh pr review`. Default is the real implementation;
+  // tests pass a fake to avoid hitting GitHub.
+  const reviewPoster = pr_review_poster || defaultPostReviewToPR;
   const prNumber = story.pr_number;
   // Defensive: should not happen because advancePrPhase only enters PR_REVIEW
   // when pr_number is present, but guard anyway for resumed/imported stories.
@@ -727,6 +731,24 @@ function advancePrReviewPhase(story, { rootDir, now, env = process.env, pr_revie
     ok: false,
     reason: (review && review.reason) || 'reviewer_unavailable'
   };
+
+  // Phase 8 #0: post the reviewer's verdict to the actual GitHub PR via
+  // `gh pr review`. Phase 5 #3 (#163) created postReviewToPR but never wired
+  // it into the daemon, so Phase 7 #4 smoke v4 (PR #175) recorded the
+  // verdict in story.last_review_result but the PR itself had no comment.
+  // postReviewToPR honors its own opt-in env (RALPH_PR_REVIEW_POST_COMMENT)
+  // and is no-throw on any error; we attach the result to the summary for
+  // observability and DO NOT block the loop on post failures (the verdict
+  // is still recorded in audit + story.last_review_result either way).
+  let post = null;
+  if (reviewOk) {
+    try {
+      post = reviewPoster({ pr_number: prNumber, result: review, env });
+    } catch (_err) {
+      post = { ok: false, posted: false, reason: 'post_review_threw' };
+    }
+    summarySnapshot.post = post;
+  }
 
   // Phase 5 #4: branch on verdict=request_changes when the auto-repair flag
   // is set. Three escape hatches keep this safe:
