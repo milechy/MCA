@@ -271,35 +271,34 @@ jobs:
             --body-file /tmp/pr_body.md)
           echo "PR opened: $PR_URL"
 
-          # Phase 9 #6 + #6b: enable auto-merge so the PR squash-merges itself.
-          # Strategy:
-          #   1. Try `gh pr merge --auto` first. With branch protection +
-          #      required checks present, this enables GitHub's auto-merge
-          #      mechanism (PR merges automatically when all required checks
-          #      go green). Forward-compatible: works untouched the day we
-          #      add a required CI check.
-          #   2. If --auto returns the "Pull request is in clean status"
-          #      GraphQL error — i.e. there's nothing to wait for, the repo
-          #      has no required checks — fall back to an immediate merge.
-          #      That's what we want today (no required checks).
-          #   3. Any other failure → emit a workflow warning and leave the
-          #      PR open for manual review (don't fail the job since the PR
-          #      is already created and Aider already commented).
+          # Phase 9 #6 / #6b / #6c: enable auto-merge so the PR squash-merges
+          # itself.  History:
+          #   #6:  call `gh pr merge --auto`. Failed silently with "clean status"
+          #        when repo had no required checks (PR #216 evidence).
+          #   #6b: detect "clean status" string in stderr, fall back to immediate
+          #        merge. Worked for PR #218, #221, #223+, etc.
+          #   #6c: GitHub returns *two* different GraphQL messages for the same
+          #        logical "no required checks" condition: "Pull request is in
+          #        clean status" AND "Protected branch rules not configured for
+          #        this branch". PR #222 (range) and #226 (zip) hit the second
+          #        variant and got stuck open.
+          # Simplification: stop trying to discriminate by error message. Any
+          # --auto failure → immediately attempt a plain merge. If THAT fails
+          # too, leave the PR open and warn.
           #
           # Opt-out via repo variable AIDER_AUTO_MERGE=0 (operator escape
           # hatch for issues they want to review by hand).
           if [ "${{ vars.AIDER_AUTO_MERGE || '1' }}" = "1" ]; then
-            MERGE_LOG=$(mktemp)
-            if gh pr merge "$PR_URL" --auto --squash --delete-branch 2>"$MERGE_LOG"; then
+            if gh pr merge "$PR_URL" --auto --squash --delete-branch 2>/tmp/auto_err.log; then
               echo "auto-merge enabled — will merge when checks pass"
             else
-              if grep -q 'clean status' "$MERGE_LOG"; then
-                echo "no required checks — immediate-merging instead of --auto"
-                gh pr merge "$PR_URL" --squash --delete-branch || \
-                  echo "::warning::immediate-merge fallback also failed; PR left open"
+              echo "auto-merge unavailable; trying immediate merge"
+              cat /tmp/auto_err.log
+              if gh pr merge "$PR_URL" --squash --delete-branch 2>/tmp/imm_err.log; then
+                echo "immediate-merge succeeded"
               else
-                echo "::warning::auto-merge failed for unexpected reason; PR left open for manual review"
-                cat "$MERGE_LOG"
+                echo "::warning::both --auto and immediate merge failed; PR left open"
+                cat /tmp/imm_err.log
               fi
             fi
           else
