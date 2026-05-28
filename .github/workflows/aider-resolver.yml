@@ -271,19 +271,37 @@ jobs:
             --body-file /tmp/pr_body.md)
           echo "PR opened: $PR_URL"
 
-          # Phase 9 #6: enable auto-merge so the PR squash-merges itself once
-          # required branch-protection checks pass. With no required checks on
-          # this repo today, it merges effectively immediately — but the
-          # `--auto` flag keeps us forward-compatible: if we add a required CI
-          # check later (e.g. ralph spec suite, secret scan), it'll start
-          # waiting for that gate automatically without a workflow change.
+          # Phase 9 #6 + #6b: enable auto-merge so the PR squash-merges itself.
+          # Strategy:
+          #   1. Try `gh pr merge --auto` first. With branch protection +
+          #      required checks present, this enables GitHub's auto-merge
+          #      mechanism (PR merges automatically when all required checks
+          #      go green). Forward-compatible: works untouched the day we
+          #      add a required CI check.
+          #   2. If --auto returns the "Pull request is in clean status"
+          #      GraphQL error — i.e. there's nothing to wait for, the repo
+          #      has no required checks — fall back to an immediate merge.
+          #      That's what we want today (no required checks).
+          #   3. Any other failure → emit a workflow warning and leave the
+          #      PR open for manual review (don't fail the job since the PR
+          #      is already created and Aider already commented).
           #
-          # Opt-out via repo variable AIDER_AUTO_MERGE=0 (operator escape hatch
-          # for issues where they want to review the PR by hand). Default is
-          # on because that's the entire point of having an autonomous loop.
+          # Opt-out via repo variable AIDER_AUTO_MERGE=0 (operator escape
+          # hatch for issues they want to review by hand).
           if [ "${{ vars.AIDER_AUTO_MERGE || '1' }}" = "1" ]; then
-            gh pr merge "$PR_URL" --auto --squash --delete-branch || \
-              echo "::warning::auto-merge enable failed; PR left open for manual review"
+            MERGE_LOG=$(mktemp)
+            if gh pr merge "$PR_URL" --auto --squash --delete-branch 2>"$MERGE_LOG"; then
+              echo "auto-merge enabled — will merge when checks pass"
+            else
+              if grep -q 'clean status' "$MERGE_LOG"; then
+                echo "no required checks — immediate-merging instead of --auto"
+                gh pr merge "$PR_URL" --squash --delete-branch || \
+                  echo "::warning::immediate-merge fallback also failed; PR left open"
+              else
+                echo "::warning::auto-merge failed for unexpected reason; PR left open for manual review"
+                cat "$MERGE_LOG"
+              fi
+            fi
           else
             echo "AIDER_AUTO_MERGE=0 — leaving PR open for manual review."
           fi
