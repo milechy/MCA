@@ -264,8 +264,26 @@ jobs:
             echo ""
             echo "Paths extracted from issue body: \`${{ steps.paths.outputs.csv }}\`"
           } > /tmp/pr_body.md
-          gh pr create \
+          PR_URL=$(gh pr create \
             --base  "$DEFAULT_BRANCH" \
             --head  "$BR" \
             --title "Auto-fix #${ISSUE_NUMBER}: $(jq -r '.issue.title' "$GITHUB_EVENT_PATH")" \
-            --body-file /tmp/pr_body.md
+            --body-file /tmp/pr_body.md)
+          echo "PR opened: $PR_URL"
+
+          # Phase 9 #6: enable auto-merge so the PR squash-merges itself once
+          # required branch-protection checks pass. With no required checks on
+          # this repo today, it merges effectively immediately — but the
+          # `--auto` flag keeps us forward-compatible: if we add a required CI
+          # check later (e.g. ralph spec suite, secret scan), it'll start
+          # waiting for that gate automatically without a workflow change.
+          #
+          # Opt-out via repo variable AIDER_AUTO_MERGE=0 (operator escape hatch
+          # for issues where they want to review the PR by hand). Default is
+          # on because that's the entire point of having an autonomous loop.
+          if [ "${{ vars.AIDER_AUTO_MERGE || '1' }}" = "1" ]; then
+            gh pr merge "$PR_URL" --auto --squash --delete-branch || \
+              echo "::warning::auto-merge enable failed; PR left open for manual review"
+          else
+            echo "AIDER_AUTO_MERGE=0 — leaving PR open for manual review."
+          fi
