@@ -43,7 +43,13 @@ permissions:
 
 jobs:
   call-openhands-resolver:
-    uses: OpenHands/OpenHands/.github/workflows/openhands-resolver.yml@main
+    # 2026-05-28: the actual reusable workflow lives in OpenHands-Web (NOT
+    # the main OpenHands repo). Confirmed via gh api against
+    # OpenHands/OpenHands-Web/.github/workflows/openhands-resolver.yml — the
+    # main OpenHands repo no longer hosts a resolver workflow (only
+    # issue-opened.yml, py-tests.yml etc.). The first PoC run failed
+    # immediately with "workflow file issue" because of this path mistake.
+    uses: OpenHands/OpenHands-Web/.github/workflows/openhands-resolver.yml@main
     with:
       macro: ${{ vars.OPENHANDS_MACRO || '@openhands-agent' }}
       max_iterations: ${{ fromJson(vars.OPENHANDS_MAX_ITER || 30) }}
