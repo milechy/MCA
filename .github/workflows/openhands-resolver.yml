@@ -1,0 +1,58 @@
+# Phase 9 #1: OpenHands Resolver PoC.
+#
+# Issue に `fix-me` ラベルを付ける or `@openhands-agent` でコメントすると、
+# OpenHands の Reusable workflow が走り、Action runner 上で issue を解決して
+# PR を開く。Ralph の laptop daemon と違い、完全 event-driven なので 24h 連続
+# 稼働問題が消える(無料枠 Actions 月 2000 分の範囲で)。
+#
+# 必要な repo settings:
+#   Secrets:
+#     PAT_TOKEN     — Fine-grained PAT (Contents/PRs/Issues/Workflows RW)
+#     PAT_USERNAME  — PAT を発行した GitHub アカウント名
+#     LLM_API_KEY   — OpenRouter API key (auth.json から流し込み済み)
+#     LLM_BASE_URL  — https://openrouter.ai/api/v1
+#   Variables:
+#     LLM_MODEL            — 既定: openrouter/anthropic/claude-haiku-4.5
+#     OPENHANDS_MAX_ITER   — 既定: 30 (cost セーブのため Ralph の Phase 8 #4
+#                            ladder の medium と揃えた)
+#
+# 比較指標 (Ralph Haiku smoke #26 との対比):
+#   - 完走: Ralph は branch issue で escalation、Resolver はどうか
+#   - patch 品質: Ralph は requested_paths のみ、Resolver は repo 自由探索
+#   - 所要時間: Ralph は ~7 分、Resolver は max_iter * 1-2 分が上限
+#   - コスト: Ralph $0.075 vs Resolver の Haiku 実コスト
+
+name: Resolve Issue with OpenHands
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  call-openhands-resolver:
+    uses: OpenHands/OpenHands/.github/workflows/openhands-resolver.yml@main
+    with:
+      macro: ${{ vars.OPENHANDS_MACRO || '@openhands-agent' }}
+      max_iterations: ${{ fromJson(vars.OPENHANDS_MAX_ITER || 30) }}
+      base_container_image: ${{ vars.OPENHANDS_BASE_CONTAINER_IMAGE || '' }}
+      LLM_MODEL: ${{ vars.LLM_MODEL || 'openrouter/anthropic/claude-haiku-4.5' }}
+      target_branch: ${{ vars.TARGET_BRANCH || 'infra/phase0-autonomous-foundation' }}
+      runner: ${{ vars.TARGET_RUNNER }}
+    secrets:
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_USERNAME: ${{ secrets.PAT_USERNAME }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
