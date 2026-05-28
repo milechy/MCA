@@ -59,6 +59,11 @@ jobs:
       GH_TOKEN: ${{ secrets.PAT_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       MODEL: ${{ vars.LLM_MODEL || 'openrouter/anthropic/claude-haiku-4.5' }}
+      # Aider runs this after each edit (via --auto-test). Keep it scoped to
+      # the ralph suite so we don't pay for the full repo's e2e tests on
+      # every iteration; if the issue touches non-ralph code, override via
+      # repo variable AIDER_TEST_CMD.
+      TEST_CMD: ${{ vars.AIDER_TEST_CMD || 'npx playwright test --config playwright.ralph.config.js' }}
 
     steps:
       - name: Checkout
@@ -72,10 +77,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Aider
+      - name: Install Aider + project deps for --auto-test
         run: |
           python -m pip install --upgrade pip
           pip install aider-chat
+          # npm deps for Playwright test runner (Aider's --auto-test invokes them)
+          npm ci --prefer-offline --no-audit --fund=false
+          npx playwright install --with-deps chromium 2>&1 | tail -5 || true
 
       - name: Configure git
         run: |
@@ -116,8 +124,15 @@ jobs:
             echo "You are working on a GitHub issue. The full text of the issue is below."
             echo ""
             echo "Please implement the change exactly as described. Edit only the files needed."
-            echo "If tests are mentioned, write them. After editing, do not run tests yourself —"
-            echo "CI will run them once you commit. Make ONE commit with a clear message."
+            echo "If tests are mentioned, write them."
+            echo ""
+            echo "The test runner is configured via Aider's --auto-test. After each edit,"
+            echo "Aider will run \`npx playwright test\` automatically and surface failures"
+            echo "back to you. Fix any test failures it reports before considering the work"
+            echo "complete. Pay attention to floating-point comparisons — prefer"
+            echo "toBeCloseTo over toBe for fractional numbers."
+            echo ""
+            echo "Make commits as needed; Aider's default is one commit per response."
             echo ""
             echo "--- Issue title ---"
             jq -r '.issue.title' "$GITHUB_EVENT_PATH"
@@ -125,8 +140,8 @@ jobs:
             echo "--- Issue body ---"
             cat /tmp/body.txt
           } > /tmp/prompt.txt
-          echo '--- prompt preview (first 60 lines) ---'
-          head -60 /tmp/prompt.txt
+          echo '--- prompt preview (first 80 lines) ---'
+          head -80 /tmp/prompt.txt
 
       - name: Run Aider
         id: aider
@@ -147,6 +162,8 @@ jobs:
               --no-stream \
               --no-show-model-warnings \
               --no-attribute-author --no-attribute-committer --no-attribute-co-authored-by \
+              --auto-test \
+              --test-cmd "$TEST_CMD" \
               --message-file /tmp/prompt.txt \
               "${FILES[@]}"
           else
@@ -156,6 +173,8 @@ jobs:
               --no-stream \
               --no-show-model-warnings \
               --no-attribute-author --no-attribute-committer --no-attribute-co-authored-by \
+              --auto-test \
+              --test-cmd "$TEST_CMD" \
               --message-file /tmp/prompt.txt
           fi
 
