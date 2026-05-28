@@ -101,47 +101,86 @@ function recordKimiCall({ rootDir, story_id, prompt_text, output_text, model, no
   return { ok: true, entry, ledger_path: ledgerPath };
 }
 
-function readDailySpend({ rootDir, date = new Date() }) {
-  const dateIso = date.toISOString().slice(0, 10);
-  const ledgerPath = path.join(rootDir, '.ralph', 'cost-ledger.jsonl');
-
+function parseCostLedger(ledgerPath) {
   if (!fs.existsSync(ledgerPath)) {
-    return {
-      date_iso: dateIso,
-      entries: [],
-      input_tokens: 0,
-      output_tokens: 0,
-      cost_usd: 0,
-      story_count: 0
-    };
+    return [];
   }
 
   const raw = fs.readFileSync(ledgerPath, 'utf8');
   const lines = raw.split('\n');
+  const entries = [];
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      entries.push(entry);
+    } catch (err) {
+      console.error('Skipping malformed cost-ledger line:', line, err.message);
+    }
+  }
+
+  return entries;
+}
+
+function readDailySpend({ rootDir, date = new Date() }) {
+  const dateIso = date.toISOString().slice(0, 10);
+  const ledgerPath = path.join(rootDir, '.ralph', 'cost-ledger.jsonl');
+
+  const allEntries = parseCostLedger(ledgerPath);
   const entries = [];
   const seenStories = new Set();
   let input_tokens = 0;
   let output_tokens = 0;
   let cost_usd = 0;
 
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.at && entry.at.startsWith(dateIso)) {
-        entries.push(entry);
-        input_tokens += entry.input_tokens || 0;
-        output_tokens += entry.output_tokens || 0;
-        cost_usd += entry.cost_usd || 0;
-        if (entry.story_id) seenStories.add(entry.story_id);
-      }
-    } catch (err) {
-      console.error('Skipping malformed cost-ledger line:', line, err.message);
+  for (const entry of allEntries) {
+    if (entry.at && entry.at.startsWith(dateIso)) {
+      entries.push(entry);
+      input_tokens += entry.input_tokens || 0;
+      output_tokens += entry.output_tokens || 0;
+      cost_usd += entry.cost_usd || 0;
+      if (entry.story_id) seenStories.add(entry.story_id);
     }
   }
 
   return {
     date_iso: dateIso,
+    entries,
+    input_tokens,
+    output_tokens,
+    cost_usd,
+    story_count: seenStories.size
+  };
+}
+
+function readSpendWindow({ rootDir, since, until }) {
+  const ledgerPath = path.join(rootDir, '.ralph', 'cost-ledger.jsonl');
+
+  const allEntries = parseCostLedger(ledgerPath);
+  const entries = [];
+  const seenStories = new Set();
+  let input_tokens = 0;
+  let output_tokens = 0;
+  let cost_usd = 0;
+
+  for (const entry of allEntries) {
+    if (!entry.at) continue;
+
+    // Check lower bound (since)
+    if (since && entry.at < since) continue;
+
+    // Check upper bound (until)
+    if (until && entry.at > until) continue;
+
+    entries.push(entry);
+    input_tokens += entry.input_tokens || 0;
+    output_tokens += entry.output_tokens || 0;
+    cost_usd += entry.cost_usd || 0;
+    if (entry.story_id) seenStories.add(entry.story_id);
+  }
+
+  return {
     entries,
     input_tokens,
     output_tokens,
@@ -186,6 +225,7 @@ module.exports = {
   estimateCostUsd,
   recordKimiCall,
   readDailySpend,
+  readSpendWindow,
   dailyBudgetCap,
   isOverBudget
 };
