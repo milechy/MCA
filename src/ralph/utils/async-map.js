@@ -5,7 +5,7 @@ async function asyncMap(arr, asyncFn, concurrency = Infinity) {
   if (typeof asyncFn !== 'function') {
     throw new TypeError('Second argument must be a function');
   }
-  if (!Number.isFinite(concurrency) || concurrency < 1) {
+  if ((concurrency !== Infinity && !Number.isFinite(concurrency)) || concurrency < 1) {
     throw new TypeError('Concurrency must be a positive number');
   }
 
