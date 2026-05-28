@@ -72,12 +72,70 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
           fetch-depth: 0
 
+      - name: Acknowledge on issue
+        run: |
+          gh issue comment "$ISSUE_NUMBER" \
+            --body "🛠️ Aider Resolver picked up this issue. Model: \`$MODEL\`. Watch progress: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Pre-flight cost ceiling check
+        # Parallel to Ralph's kimi-cost-tracker.isOverBudget() but for the
+        # Actions path: ask OpenRouter directly. Two gates:
+        #   1. Daily-spend cap (this key) — default $5/day, override via repo
+        #      variable AIDER_DAILY_CAP_USD. Comparable to Ralph's
+        #      RALPH_KIMI_DAILY_BUDGET_USD.
+        #   2. Minimum residual balance (account total) — default $1, override
+        #      via AIDER_MIN_BALANCE_USD. Prevents Aider running on an empty
+        #      account and racking up no-credit error spam.
+        # Either tripping → set step output `blocked=1`; downstream steps
+        # gate on it. Step itself succeeds so the workflow stays green
+        # (not a failure — the issue is bookkeeping, not a bug).
+        id: cost_check
+        env:
+          DAILY_CAP_USD: ${{ vars.AIDER_DAILY_CAP_USD || '5.00' }}
+          MIN_BALANCE_USD: ${{ vars.AIDER_MIN_BALANCE_USD || '1.00' }}
+        run: |
+          set -e
+          KEY_INFO=$(curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/key)
+          CRED_INFO=$(curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/credits)
+
+          DAILY=$(echo "$KEY_INFO" | jq -r '.data.usage_daily // 0')
+          TOTAL_CREDITS=$(echo "$CRED_INFO" | jq -r '.data.total_credits // 0')
+          TOTAL_USAGE=$(echo "$CRED_INFO" | jq -r '.data.total_usage // 0')
+          BALANCE=$(awk -v c="$TOTAL_CREDITS" -v u="$TOTAL_USAGE" 'BEGIN{printf "%.6f\n", c - u}')
+
+          echo "OpenRouter snapshot: usage_daily=\$$DAILY balance=\$$BALANCE cap_daily=\$$DAILY_CAP_USD min_balance=\$$MIN_BALANCE_USD"
+
+          # Numeric comparison via awk so floats compare correctly.
+          DAILY_OVER=$(awk -v d="$DAILY" -v c="$DAILY_CAP_USD" 'BEGIN{print (d >= c) ? 1 : 0}')
+          BAL_LOW=$(awk -v b="$BALANCE" -v m="$MIN_BALANCE_USD" 'BEGIN{print (b < m) ? 1 : 0}')
+
+          if [ "$DAILY_OVER" = "1" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body \
+              "⛔ Aider Resolver halted: OpenRouter usage_daily (\$$DAILY) ≥ AIDER_DAILY_CAP_USD (\$$DAILY_CAP_USD). Try again tomorrow or raise the cap via repo variable."
+            echo "blocked=1" >> "$GITHUB_OUTPUT"
+            echo "::notice::cost ceiling: daily cap hit (\$$DAILY ≥ \$$DAILY_CAP_USD)"
+            exit 0
+          fi
+          if [ "$BAL_LOW" = "1" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body \
+              "⛔ Aider Resolver halted: OpenRouter balance (\$$BALANCE) < AIDER_MIN_BALANCE_USD (\$$MIN_BALANCE_USD). Top up at https://openrouter.ai/credits."
+            echo "blocked=1" >> "$GITHUB_OUTPUT"
+            echo "::notice::cost ceiling: low balance (\$$BALANCE < \$$MIN_BALANCE_USD)"
+            exit 0
+          fi
+          echo "blocked=0" >> "$GITHUB_OUTPUT"
+          echo "cost ceiling: OK — proceed."
+
       - name: Set up Python
+        if: steps.cost_check.outputs.blocked != '1'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install Aider + project deps for --auto-test
+        if: steps.cost_check.outputs.blocked != '1'
         run: |
           python -m pip install --upgrade pip
           pip install aider-chat
@@ -86,16 +144,13 @@ jobs:
           npx playwright install --with-deps chromium 2>&1 | tail -5 || true
 
       - name: Configure git
+        if: steps.cost_check.outputs.blocked != '1'
         run: |
           git config --global user.email "${{ secrets.PAT_USERNAME }}@users.noreply.github.com"
           git config --global user.name  "${{ secrets.PAT_USERNAME }}"
 
-      - name: Acknowledge on issue
-        run: |
-          gh issue comment "$ISSUE_NUMBER" \
-            --body "🛠️ Aider Resolver picked up this issue. Model: \`$MODEL\`. Watch progress: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
       - name: Extract requested paths from issue body
+        if: steps.cost_check.outputs.blocked != '1'
         id: paths
         run: |
           # Convention: any path in backticks like `src/foo.js` is treated as
@@ -111,6 +166,7 @@ jobs:
           echo "csv=$paths_csv" >> "$GITHUB_OUTPUT"
 
       - name: Create work branch
+        if: steps.cost_check.outputs.blocked != '1'
         id: branch
         run: |
           BR="auto/issue-$ISSUE_NUMBER"
@@ -119,6 +175,7 @@ jobs:
           echo "name=$BR" >> "$GITHUB_OUTPUT"
 
       - name: Write Aider prompt
+        if: steps.cost_check.outputs.blocked != '1'
         run: |
           {
             echo "You are working on a GitHub issue. The full text of the issue is below."
@@ -144,6 +201,7 @@ jobs:
           head -80 /tmp/prompt.txt
 
       - name: Run Aider
+        if: steps.cost_check.outputs.blocked != '1'
         id: aider
         run: |
           set -e
@@ -179,6 +237,7 @@ jobs:
           fi
 
       - name: Open PR (or comment if no changes)
+        if: steps.cost_check.outputs.blocked != '1'
         run: |
           set -e
           DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
