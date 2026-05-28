@@ -10,6 +10,7 @@ const {
   RUNTIME_MODE,
   resolveModel,
   safeEnv,
+  readOpencodeAuthKey,
   buildPrompt,
   buildWorktreePrompt,
   buildRequestedPathsSection,
@@ -77,6 +78,58 @@ test('safeEnv drops everything except PATH/HOME/CI/TMPDIR and routes Kimi API ke
 test('safeEnv falls back to KIMI_API_KEY when OPENROUTER_API_KEY is absent', () => {
   const env = safeEnv({ PATH: '/bin', HOME: '/u', KIMI_API_KEY: 'kimi-key' });
   expect(env.OPENROUTER_API_KEY).toBe('kimi-key');
+});
+
+// Phase 8 #6: dispatcher should fall back to opencode auth.json when env is empty
+function tmpHomeWithAuthJson(payload) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-auth-'));
+  const dir = path.join(home, '.local', 'share', 'opencode');
+  fs.mkdirSync(dir, { recursive: true });
+  if (payload != null) {
+    fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify(payload), 'utf8');
+  }
+  return home;
+}
+
+test('Phase 8 #6: readOpencodeAuthKey reads .openrouter.key from $HOME/.local/share/opencode/auth.json', () => {
+  const home = tmpHomeWithAuthJson({ openrouter: { type: 'api', key: 'sk-or-fixture-12345' } });
+  expect(readOpencodeAuthKey({ HOME: home })).toBe('sk-or-fixture-12345');
+});
+
+test('Phase 8 #6: readOpencodeAuthKey returns empty string when auth.json is missing', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-no-auth-'));
+  expect(readOpencodeAuthKey({ HOME: home })).toBe('');
+});
+
+test('Phase 8 #6: readOpencodeAuthKey returns empty string when auth.json has no openrouter entry', () => {
+  const home = tmpHomeWithAuthJson({ someOtherProvider: { key: 'irrelevant' } });
+  expect(readOpencodeAuthKey({ HOME: home })).toBe('');
+});
+
+test('Phase 8 #6: readOpencodeAuthKey returns empty string on malformed JSON (no throw)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-bad-auth-'));
+  const dir = path.join(home, '.local', 'share', 'opencode');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'auth.json'), '{ malformed not json', 'utf8');
+  expect(readOpencodeAuthKey({ HOME: home })).toBe('');
+});
+
+test('Phase 8 #6: safeEnv falls back to opencode auth.json when both env vars are absent', () => {
+  const home = tmpHomeWithAuthJson({ openrouter: { type: 'api', key: 'sk-or-from-auth-json' } });
+  const env = safeEnv({ PATH: '/bin', HOME: home });
+  expect(env.OPENROUTER_API_KEY).toBe('sk-or-from-auth-json');
+});
+
+test('Phase 8 #6: env OPENROUTER_API_KEY beats auth.json (env precedence preserved)', () => {
+  const home = tmpHomeWithAuthJson({ openrouter: { type: 'api', key: 'sk-or-from-auth-json' } });
+  const env = safeEnv({ PATH: '/bin', HOME: home, OPENROUTER_API_KEY: 'sk-or-from-env' });
+  expect(env.OPENROUTER_API_KEY).toBe('sk-or-from-env');
+});
+
+test('Phase 8 #6: env KIMI_API_KEY beats auth.json when OPENROUTER_API_KEY missing', () => {
+  const home = tmpHomeWithAuthJson({ openrouter: { type: 'api', key: 'sk-or-from-auth-json' } });
+  const env = safeEnv({ PATH: '/bin', HOME: home, KIMI_API_KEY: 'sk-kimi-from-env' });
+  expect(env.OPENROUTER_API_KEY).toBe('sk-kimi-from-env');
 });
 
 test('resolveModel sanitizes input and falls back to default Kimi K2 model', () => {
