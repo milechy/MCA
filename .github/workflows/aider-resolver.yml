@@ -190,7 +190,14 @@ jobs:
               --body "Aider produced no diff on this attempt. Manual investigation needed. Run logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             exit 0
           fi
-          git push -u origin "$BR"
+          # --force so re-runs against the same issue can re-push cleanly.
+          # We deliberately don't use --force-with-lease: the local branch
+          # is always carved fresh from origin/$DEFAULT_BRANCH earlier in
+          # the job and has no tracking history, so a lease check has
+          # nothing to compare against. The branch namespace auto/issue-<N>
+          # is owned exclusively by this workflow; no risk of clobbering a
+          # parallel human contribution there.
+          git push -u --force origin "$BR"
           {
             echo "Closes #${ISSUE_NUMBER}."
             echo ""
