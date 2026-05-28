@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -54,8 +55,35 @@ function ensureSandboxRoot(rootDir, sandbox_root) {
   return { ok: true, reason: null, sandbox_root: safe, absolute };
 }
 
+// Phase 8 #6: when env doesn't carry OPENROUTER_API_KEY / KIMI_API_KEY,
+// fall back to opencode's own credential store (the file `opencode auth
+// login openrouter` writes to). The planner path already reads opencode
+// auth via the `opencode` CLI, so without this fallback the dispatcher
+// silently differs from the planner — that asymmetry burned a 35-min
+// debugging session on 2026-05-27 (task #25).
+//
+// Resolution order inside safeEnv: env.OPENROUTER_API_KEY → env.KIMI_API_KEY
+//   → $HOME/.local/share/opencode/auth.json `.openrouter.key`.
+// Tests inject HOME (and place a fixture auth.json) to exercise the
+// fallback path deterministically.
+function readOpencodeAuthKey(env) {
+  try {
+    const home = (env && env.HOME) || os.homedir();
+    if (!home) return '';
+    const authPath = path.join(home, '.local', 'share', 'opencode', 'auth.json');
+    if (!fs.existsSync(authPath)) return '';
+    const raw = fs.readFileSync(authPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const key = parsed && parsed.openrouter && parsed.openrouter.key;
+    return typeof key === 'string' ? key.trim() : '';
+  } catch (_err) {
+    return '';
+  }
+}
+
 function safeEnv(env) {
-  const apiKey = env.OPENROUTER_API_KEY || env.KIMI_API_KEY || '';
+  let apiKey = env.OPENROUTER_API_KEY || env.KIMI_API_KEY || '';
+  if (!apiKey) apiKey = readOpencodeAuthKey(env);
   return {
     PATH: env.PATH || '',
     HOME: env.HOME || '',
@@ -432,6 +460,7 @@ module.exports = {
   RUNTIME_MODE,
   resolveModel,
   safeEnv,
+  readOpencodeAuthKey,
   buildPrompt,
   buildWorktreePrompt,
   buildRequestedPathsSection,
