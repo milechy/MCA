@@ -105,9 +105,13 @@ export function assignItemIds(items = [], existingItems = []) {
     const m = String(it.id || '').match(/^REQ-(\d+)$/);
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
-  return items.map((it, i) => ({
-    id: `REQ-${String(max + i + 1).padStart(3, '0')}`,
-    title: it.title,
-    body: it.body
-  }));
+  // map old decomposition ids → new REQ-NNN so depends_on stays valid (Phase 12 #2)
+  const idMap = {};
+  items.forEach((it, i) => { idMap[it.id] = `REQ-${String(max + i + 1).padStart(3, '0')}`; });
+  return items.map((it) => {
+    const deps = (Array.isArray(it.depends_on) ? it.depends_on : []).map((d) => idMap[d]).filter(Boolean);
+    const out = { id: idMap[it.id], title: it.title, body: it.body };
+    if (deps.length) out.depends_on = deps;
+    return out;
+  });
 }

@@ -71,13 +71,15 @@ jobs:
         if: steps.gate.outputs.skip != '1'
         id: state
         run: |
-          # All issue titles (open AND closed) so a filed item is never re-filed.
+          # All issues (open AND closed) with state — title for re-file dedup,
+          # state for dependency gating (a dep is satisfied once its issue is
+          # CLOSED/merged). Phase 12 #2.
           gh issue list --repo "${{ github.repository }}" --state all --limit 500 \
-            --json title --jq '[.[].title]' > /tmp/titles.json || echo '[]' > /tmp/titles.json
+            --json title,state > /tmp/issues.json || echo '[]' > /tmp/issues.json
           OPEN_PRS=$(gh pr list --repo "${{ github.repository }}" --state open \
             --search "head:auto/issue-" --json number --jq 'length' 2>/dev/null || echo 0)
           echo "open_prs=$OPEN_PRS" >> "$GITHUB_OUTPUT"
-          echo "existing titles: $(jq 'length' /tmp/titles.json), open auto PRs: $OPEN_PRS"
+          echo "existing issues: $(jq 'length' /tmp/issues.json), open auto PRs: $OPEN_PRS"
 
       - name: Select next backlog item
         if: steps.gate.outputs.skip != '1'
@@ -85,7 +87,7 @@ jobs:
         run: |
           RESULT=$(node scripts/ralph/issue-supplier.js \
             --backlog "$BACKLOG" \
-            --titles-file /tmp/titles.json \
+            --issues-file /tmp/issues.json \
             --open-prs "${{ steps.state.outputs.open_prs }}" \
             --max-open-prs "$MAX_OPEN_PRS")
           echo "selector: $RESULT"

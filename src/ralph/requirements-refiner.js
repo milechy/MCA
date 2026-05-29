@@ -196,13 +196,19 @@ function formatForApproval(decomposition) {
 }
 
 // Convert decomposition items to .github/ralph-backlog.json item shape.
+// Re-ids BL-n → REQ-NNN and rewrites depends_on through the same map so the
+// supplier can honor the build order (Phase 12 #2).
 function toBacklogItems(decomposition, { prefix = 'REQ' } = {}) {
   if (!decomposition || !decomposition.items) return [];
-  return decomposition.items.map((it, i) => ({
-    id: `${prefix}-${String(i + 1).padStart(3, '0')}`,
-    title: it.title,
-    body: it.body
-  }));
+  const items = decomposition.items;
+  const idMap = {};
+  items.forEach((it, i) => { idMap[it.id] = `${prefix}-${String(i + 1).padStart(3, '0')}`; });
+  return items.map((it) => {
+    const deps = (Array.isArray(it.depends_on) ? it.depends_on : []).map((d) => idMap[d]).filter(Boolean);
+    const out = { id: idMap[it.id], title: it.title, body: it.body };
+    if (deps.length) out.depends_on = deps;
+    return out;
+  });
 }
 
 module.exports = {

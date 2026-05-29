@@ -19,31 +19,34 @@ const fs = require('node:fs');
 const { pickFromBacklog, issueTitleFor } = require('../../src/ralph/backlog-supplier');
 
 function parseArgs(argv) {
-  const a = { backlog: '.github/ralph-backlog.json', titlesFile: null, openPrs: 0, maxOpenPrs: 3 };
+  const a = { backlog: '.github/ralph-backlog.json', issuesFile: null, openPrs: 0, maxOpenPrs: 3 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--backlog') a.backlog = argv[++i];
-    else if (k === '--titles-file') a.titlesFile = argv[++i];
+    // --issues-file (preferred: JSON [{title,state}]) or legacy --titles-file (JSON [title])
+    else if (k === '--issues-file' || k === '--titles-file') a.issuesFile = argv[++i];
     else if (k === '--open-prs') a.openPrs = parseInt(argv[++i], 10) || 0;
     else if (k === '--max-open-prs') a.maxOpenPrs = parseInt(argv[++i], 10) || 3;
   }
   return a;
 }
 
-function loadTitles(file) {
+// Returns the parsed array as-is ({title,state} objects preferred; plain
+// strings still accepted — but dependency gating needs state).
+function loadIssues(file) {
   if (!file || !fs.existsSync(file)) return [];
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(parsed) ? parsed.map((x) => (typeof x === 'string' ? x : (x && x.title) || '')) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch { return []; }
 }
 
 function main(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
   const args = parseArgs(argv);
-  const titles = loadTitles(args.titlesFile);
+  const issues = loadIssues(args.issuesFile);
   const result = pickFromBacklog({
     backlogPath: args.backlog,
-    issueTitles: titles,
+    issues,
     openPrs: args.openPrs,
     maxOpenPrs: args.maxOpenPrs
   });
@@ -54,4 +57,4 @@ function main(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
 
 if (require.main === module) main();
 
-module.exports = { parseArgs, loadTitles, main };
+module.exports = { parseArgs, loadIssues, main };

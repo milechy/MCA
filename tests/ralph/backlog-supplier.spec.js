@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   loadBacklog,
   extractFiledIds,
+  extractDoneIds,
   isValidItem,
   selectNextItem,
   pickFromBacklog,
@@ -83,13 +84,57 @@ test('selectNextItem skips invalid items', () => {
   expect(r.item.id).toBe('GOOD');
 });
 
-test('pickFromBacklog: load + select end to end', () => {
+test('pickFromBacklog: load + select end to end (issues with state)', () => {
   const p = tmpBacklog({ version: 'ralph-backlog-v1', items: [item('BL-001'), item('BL-002')] });
-  const r = pickFromBacklog({ backlogPath: p, issueTitles: ['[BL-001] task BL-001'], openPrs: 0, maxOpenPrs: 3 });
+  const r = pickFromBacklog({ backlogPath: p, issues: [{ title: '[BL-001] task BL-001', state: 'CLOSED' }], openPrs: 0, maxOpenPrs: 3 });
   expect(r.ok).toBe(true);
   expect(r.item.id).toBe('BL-002');
   expect(r.total_items).toBe(2);
   expect(r.filed_count).toBe(1);
+  expect(r.done_count).toBe(1);
+});
+
+test('extractDoneIds only counts CLOSED issues', () => {
+  const done = extractDoneIds([
+    { title: '[A] x', state: 'CLOSED' },
+    { title: '[B] y', state: 'OPEN' },
+    { title: '[C] z', state: 'closed' }
+  ]);
+  expect(done.has('A')).toBe(true);
+  expect(done.has('C')).toBe(true);
+  expect(done.has('B')).toBe(false);
+});
+
+test('selectNextItem blocks an item until its depends_on are DONE', () => {
+  const items = [
+    { id: 'A', title: 'a', body: 'A' },
+    { id: 'B', title: 'b', body: 'B', depends_on: ['A'] }
+  ];
+  // A filed but still OPEN (not done) → B blocked, A already filed → blocked_on_deps
+  let r = selectNextItem({ items, filedIds: new Set(['A']), doneIds: new Set(), openPrs: 0, maxOpenPrs: 3 });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toBe('blocked_on_deps');
+  // A done → B becomes eligible
+  r = selectNextItem({ items, filedIds: new Set(['A']), doneIds: new Set(['A']), openPrs: 0, maxOpenPrs: 3 });
+  expect(r.ok).toBe(true);
+  expect(r.item.id).toBe('B');
+});
+
+test('selectNextItem skips a blocked item to file a later independent one', () => {
+  const items = [
+    { id: 'A', title: 'a', body: 'A' },
+    { id: 'B', title: 'b', body: 'B', depends_on: ['A'] },
+    { id: 'C', title: 'c', body: 'C' } // independent
+  ];
+  // A filed+open, B blocked, C free → pick C
+  const r = selectNextItem({ items, filedIds: new Set(['A']), doneIds: new Set(), openPrs: 0, maxOpenPrs: 3 });
+  expect(r.item.id).toBe('C');
+});
+
+test('selectNextItem with no deps behaves as before', () => {
+  const items = [item('A'), item('B')];
+  const r = selectNextItem({ items, filedIds: new Set(['A']) });
+  expect(r.item.id).toBe('B');
 });
 
 test('pickFromBacklog surfaces load failure', () => {
