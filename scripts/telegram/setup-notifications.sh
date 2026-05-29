@@ -18,6 +18,11 @@ set -euo pipefail
 
 REPO="${REPO:-}"
 if [ -z "$REPO" ]; then read -r -p "GitHub repo (owner/name) [milechy/MCA]: " REPO; REPO="${REPO:-milechy/MCA}"; fi
+# accept a bare owner by mistake → assume the MCA repo
+case "$REPO" in
+  */*) : ;;
+  *) echo "ℹ '$REPO' has no '/', assuming '$REPO/MCA'"; REPO="$REPO/MCA" ;;
+esac
 
 for c in gh curl jq; do command -v "$c" >/dev/null || { echo "✘ need '$c' installed"; exit 1; }; done
 
@@ -30,19 +35,35 @@ ME=$(curl -fsS "https://api.telegram.org/bot${TG_TOKEN}/getMe") || { echo "✘ t
 echo "$ME" | jq -e '.ok' >/dev/null || { echo "✘ getMe not ok: $ME"; exit 1; }
 echo "✓ bot: @$(echo "$ME" | jq -r '.result.username')"
 
-echo "→ discovering chat id (getUpdates) ..."
-UPD=$(curl -fsS "https://api.telegram.org/bot${TG_TOKEN}/getUpdates")
-mapfile -t CHATS < <(echo "$UPD" | jq -r '.result[]?.message.chat | "\(.id)\t\(.title // (.first_name + " " + (.last_name // "")) // .username // "?")"' | sort -u)
-if [ "${#CHATS[@]}" -eq 0 ]; then
-  echo "✘ no recent messages. Open Telegram, send any message to @$(echo "$ME" | jq -r '.result.username'), then re-run."
-  exit 1
-fi
-echo "recent chats:"
-i=1; for c in "${CHATS[@]}"; do echo "  [$i] $c"; i=$((i+1)); done
-if [ "${#CHATS[@]}" -eq 1 ]; then
-  CHAT_ID=$(echo "${CHATS[0]}" | cut -f1); echo "→ using the only chat: $CHAT_ID"
-else
-  read -r -p "pick chat number: " n; CHAT_ID=$(echo "${CHATS[$((n-1))]}" | cut -f1)
+# Escape hatch: skip discovery entirely if you already know your chat id.
+CHAT_ID="${CHAT_ID:-}"
+if [ -z "$CHAT_ID" ]; then
+  echo "→ discovering chat id (getUpdates) ..."
+  UPD=$(curl -fsS "https://api.telegram.org/bot${TG_TOKEN}/getUpdates")
+  mapfile -t CHATS < <(echo "$UPD" | jq -r '.result[]?.message.chat | "\(.id)\t\(.title // (.first_name + " " + (.last_name // "")) // .username // "?")"' | sort -u)
+  if [ "${#CHATS[@]}" -eq 0 ]; then
+    echo "✘ getUpdates returned no chats."
+    # A set webhook makes getUpdates always empty — detect + explain.
+    WH=$(curl -fsS "https://api.telegram.org/bot${TG_TOKEN}/getWebhookInfo" | jq -r '.result.url // ""')
+    if [ -n "$WH" ]; then
+      echo "  ⚠ a webhook is currently set ($WH) — that's why getUpdates is empty."
+      echo "    Options: (1) re-run with your chat id directly:"
+      echo "         CHAT_ID=<your numeric id> REPO=$REPO bash scripts/telegram/setup-notifications.sh"
+      echo "    or (2) temporarily clear it, message the bot, re-run, then re-set the webhook:"
+      echo "         curl \"https://api.telegram.org/bot<token>/deleteWebhook\""
+    else
+      echo "  → Open Telegram, send any message to @$(echo "$ME" | jq -r '.result.username'), then re-run."
+      echo "    (or re-run with CHAT_ID=<your id> to skip discovery.)"
+    fi
+    exit 1
+  fi
+  echo "recent chats:"
+  i=1; for c in "${CHATS[@]}"; do echo "  [$i] $c"; i=$((i+1)); done
+  if [ "${#CHATS[@]}" -eq 1 ]; then
+    CHAT_ID=$(echo "${CHATS[0]}" | cut -f1); echo "→ using the only chat: $CHAT_ID"
+  else
+    read -r -p "pick chat number: " n; CHAT_ID=$(echo "${CHATS[$((n-1))]}" | cut -f1)
+  fi
 fi
 [ -n "$CHAT_ID" ] || { echo "✘ no chat id"; exit 1; }
 
