@@ -105,6 +105,18 @@ test('toBacklogItems converts to ralph-backlog item shape', () => {
   expect(items[1].id).toBe('REQ-002');
   expect(items[0].title).toBe('a');
   expect(items[0].body).toBe('A');
+  expect(items[0].depends_on).toBeUndefined(); // no deps → field omitted
+});
+
+test('toBacklogItems remaps depends_on through the id translation (Phase 12 #2)', () => {
+  const items = R.toBacklogItems({ items: [
+    { id: 'BL-1', title: 'schema', body: 'A', depends_on: [] },
+    { id: 'BL-2', title: 'api', body: 'B', depends_on: ['BL-1'] },
+    { id: 'BL-3', title: 'ui', body: 'C', depends_on: ['BL-1', 'BL-2'] }
+  ] });
+  expect(items[1].depends_on).toEqual(['REQ-001']);
+  expect(items[2].depends_on).toEqual(['REQ-001', 'REQ-002']);
+  expect(items[0].depends_on).toBeUndefined();
 });
 
 test('formatQuestions numbers questions', () => {

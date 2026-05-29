@@ -70,7 +70,7 @@ test('buildPutBacklogRequest base64-encodes and includes sha', () => {
 
 test('assignItemIds continues numbering past existing REQ ids', () => {
   const items = S.assignItemIds(
-    [{ title: 'a', body: 'A' }, { title: 'b', body: 'B' }],
+    [{ id: 'BL-1', title: 'a', body: 'A' }, { id: 'BL-2', title: 'b', body: 'B' }],
     [{ id: 'REQ-005', title: 'x', body: 'X' }, { id: 'BL-1', title: 'y', body: 'Y' }]
   );
   expect(items[0].id).toBe('REQ-006');
@@ -78,6 +78,20 @@ test('assignItemIds continues numbering past existing REQ ids', () => {
 });
 
 test('assignItemIds starts at 001 with no existing', () => {
-  const items = S.assignItemIds([{ title: 'a', body: 'A' }], []);
+  const items = S.assignItemIds([{ id: 'BL-1', title: 'a', body: 'A' }], []);
   expect(items[0].id).toBe('REQ-001');
+});
+
+test('assignItemIds remaps depends_on through new ids (Phase 12 #2)', () => {
+  const items = S.assignItemIds(
+    [
+      { id: 'BL-1', title: 'schema', body: 'A', depends_on: [] },
+      { id: 'BL-2', title: 'api', body: 'B', depends_on: ['BL-1'] }
+    ],
+    [{ id: 'REQ-005', title: 'x', body: 'X' }]
+  );
+  expect(items[0].id).toBe('REQ-006');
+  expect(items[1].id).toBe('REQ-007');
+  expect(items[1].depends_on).toEqual(['REQ-006']);
+  expect(items[0].depends_on).toBeUndefined();
 });
