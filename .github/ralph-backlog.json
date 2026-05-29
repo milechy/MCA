@@ -1,0 +1,21 @@
+{
+  "version": "ralph-backlog-v1",
+  "_comment": "Human-curated work queue for the autonomous issue supplier (Phase 12 #1). The cron supplier files the FIRST item below whose id has not already been turned into a [<id>]-titled issue, applies the aider-fix label, and the Aider Resolver takes it → PR → auto-merge. YOU curate WHAT goes here; the cron only decides WHEN. Rules for good items: clear spec, target file paths in backticks, a tests/... path, small-to-medium scope (the proven range). Add new items at the BOTTOM; processed ids are remembered via existing issue titles so order is stable. Delete or keep the seed examples below as you like.",
+  "items": [
+    {
+      "id": "BL-001",
+      "title": "Add utils/sleep helper",
+      "body": "## Task\nCreate a new module `src/ralph/utils/sleep.js` exporting a single function.\n\n## Spec\n`sleep(ms)` returns a Promise that resolves after `ms` milliseconds. `sleep(0)` resolves on the next tick. Negative or non-number input is treated as 0 (never throws, never hangs).\n\n## Requirements\n- `module.exports = { sleep };`\n- Pure timer wrapper, no other side effects.\n- Add `tests/ralph/utils-sleep.spec.js` (@playwright/test) covering: resolves after the delay, sleep(0) resolves, negative/NaN treated as 0.\n\n## Context\nPhase 12 autonomous-supplier seed item. New file only; no conflicts."
+    },
+    {
+      "id": "BL-002",
+      "title": "Add utils/once helper",
+      "body": "## Task\nCreate a new module `src/ralph/utils/once.js` exporting a single function.\n\n## Spec\n`once(fn)` returns a wrapped function that invokes `fn` only on the first call and caches its return value; subsequent calls return the cached value without re-invoking `fn`. Arguments from the first call are passed through; later calls' arguments are ignored.\n\n## Requirements\n- `module.exports = { once };`\n- Pure (no I/O).\n- Add `tests/ralph/utils-once.spec.js` (@playwright/test) covering: fn called exactly once across multiple calls, cached value returned, first-call args used.\n\n## Context\nPhase 12 autonomous-supplier seed item. New file only; no conflicts."
+    },
+    {
+      "id": "BL-003",
+      "title": "Add utils/pluck helper",
+      "body": "## Task\nCreate a new module `src/ralph/utils/pluck.js` exporting a single function.\n\n## Spec\n`pluck(arr, key)` returns an array of `item[key]` for each item in `arr`. Items missing the key contribute `undefined`. Empty array returns `[]`. Non-array input returns `[]` (never throws).\n\n## Requirements\n- `module.exports = { pluck };`\n- Pure.\n- Add `tests/ralph/utils-pluck.spec.js` (@playwright/test) covering: basic pluck, missing key → undefined, empty array, non-array input.\n\n## Context\nPhase 12 autonomous-supplier seed item. New file only; no conflicts."
+    }
+  ]
+}
