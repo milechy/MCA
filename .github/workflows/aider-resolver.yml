@@ -64,6 +64,9 @@ jobs:
       # every iteration; if the issue touches non-ralph code, override via
       # repo variable AIDER_TEST_CMD.
       TEST_CMD: ${{ vars.AIDER_TEST_CMD || 'npx playwright test --config playwright.ralph.config.js' }}
+      # Phase 13 #1: outbound Telegram notifications (best-effort no-op if unset).
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Checkout
@@ -116,6 +119,7 @@ jobs:
               "⛔ Aider Resolver halted: OpenRouter usage_daily (\$$DAILY) ≥ AIDER_DAILY_CAP_USD (\$$DAILY_CAP_USD). Try again tomorrow or raise the cap via repo variable."
             echo "blocked=1" >> "$GITHUB_OUTPUT"
             echo "::notice::cost ceiling: daily cap hit (\$$DAILY ≥ \$$DAILY_CAP_USD)"
+            node scripts/ralph/notify-telegram.js "⛔ *Cost ceiling hit* (daily): \$$DAILY ≥ \$$DAILY_CAP_USD. Aider halted on issue #$ISSUE_NUMBER." || true
             exit 0
           fi
           if [ "$BAL_LOW" = "1" ]; then
@@ -123,6 +127,7 @@ jobs:
               "⛔ Aider Resolver halted: OpenRouter balance (\$$BALANCE) < AIDER_MIN_BALANCE_USD (\$$MIN_BALANCE_USD). Top up at https://openrouter.ai/credits."
             echo "blocked=1" >> "$GITHUB_OUTPUT"
             echo "::notice::cost ceiling: low balance (\$$BALANCE < \$$MIN_BALANCE_USD)"
+            node scripts/ralph/notify-telegram.js "⛔ *Low balance*: \$$BALANCE < \$$MIN_BALANCE_USD. Aider halted on issue #$ISSUE_NUMBER — top up OpenRouter." || true
             exit 0
           fi
           echo "blocked=0" >> "$GITHUB_OUTPUT"
@@ -288,19 +293,24 @@ jobs:
           #
           # Opt-out via repo variable AIDER_AUTO_MERGE=0 (operator escape
           # hatch for issues they want to review by hand).
+          PR_NUM=$(echo "$PR_URL" | sed -E 's|.*/pull/||')
           if [ "${{ vars.AIDER_AUTO_MERGE || '1' }}" = "1" ]; then
             if gh pr merge "$PR_URL" --auto --squash --delete-branch 2>/tmp/auto_err.log; then
               echo "auto-merge enabled — will merge when checks pass"
+              node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM opened for issue #$ISSUE_NUMBER (auto-merge pending) — model \`$MODEL\`" || true
             else
               echo "auto-merge unavailable; trying immediate merge"
               cat /tmp/auto_err.log
               if gh pr merge "$PR_URL" --squash --delete-branch 2>/tmp/imm_err.log; then
                 echo "immediate-merge succeeded"
+                node scripts/ralph/notify-telegram.js "✅ *Auto-merged* PR #$PR_NUM (issue #$ISSUE_NUMBER) — model \`$MODEL\`" || true
               else
                 echo "::warning::both --auto and immediate merge failed; PR left open"
                 cat /tmp/imm_err.log
+                node scripts/ralph/notify-telegram.js "⚠️ PR #$PR_NUM (issue #$ISSUE_NUMBER) could not auto-merge — needs manual review." || true
               fi
             fi
           else
             echo "AIDER_AUTO_MERGE=0 — leaving PR open for manual review."
+            node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM opened for issue #$ISSUE_NUMBER — manual review (auto-merge off)" || true
           fi

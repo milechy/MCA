@@ -43,6 +43,9 @@ jobs:
       MAX_PER_RUN: ${{ vars.ISSUE_SUPPLIER_MAX_PER_RUN || '1' }}
       MAX_OPEN_PRS: ${{ vars.ISSUE_SUPPLIER_MAX_OPEN_PRS || '3' }}
       BACKLOG: .github/ralph-backlog.json
+      # Phase 13 #1: outbound Telegram notifications (best-effort no-op if unset).
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - name: Gate scheduled runs behind ISSUE_SUPPLIER_ENABLED
         id: gate
@@ -90,7 +93,11 @@ jobs:
           OK=$(jq -r '.ok' /tmp/selected.json)
           echo "ok=$OK" >> "$GITHUB_OUTPUT"
           if [ "$OK" != "true" ]; then
-            echo "nothing to file: $(jq -r '.reason' /tmp/selected.json)"
+            REASON=$(jq -r '.reason' /tmp/selected.json)
+            echo "nothing to file: $REASON"
+            if [ "$REASON" = "backlog_exhausted" ]; then
+              node scripts/ralph/notify-telegram.js "📭 Backlog *exhausted* — supplier idle. Add items to .github/ralph-backlog.json to keep the loop fed." || true
+            fi
           fi
 
       - name: File the issue
@@ -107,3 +114,4 @@ jobs:
           URL=$(gh issue create --repo "${{ github.repository }}" \
             --title "$TITLE" --body-file /tmp/issue_body.md --label "$LABELS")
           echo "filed: $URL"
+          node scripts/ralph/notify-telegram.js "📤 Supplier filed: $TITLE — $URL" || true
