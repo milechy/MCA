@@ -16,6 +16,21 @@
       "id": "BL-003",
       "title": "Add utils/pluck helper",
       "body": "## Task\nCreate a new module `src/ralph/utils/pluck.js` exporting a single function.\n\n## Spec\n`pluck(arr, key)` returns an array of `item[key]` for each item in `arr`. Items missing the key contribute `undefined`. Empty array returns `[]`. Non-array input returns `[]` (never throws).\n\n## Requirements\n- `module.exports = { pluck };`\n- Pure.\n- Add `tests/ralph/utils-pluck.spec.js` (@playwright/test) covering: basic pluck, missing key → undefined, empty array, non-array input.\n\n## Context\nPhase 12 autonomous-supplier seed item. New file only; no conflicts."
+    },
+    {
+      "id": "REQ-001",
+      "title": "Implement in-memory Queue class (queue.js)",
+      "body": "## Task\nCreate `src/ralph/utils/queue.js` exporting a `Queue` class.\n\n## Requirements\n- Constructor: `new Queue()`\n- Methods: `enqueue(item)`, `dequeue()` (returns `undefined` when empty), `size` (getter), `isEmpty` (getter)\n- FIFO order guaranteed\n- Write tests in `tests/ralph/utils/queue.spec.js` using `@playwright/test`\n- Tests must cover: enqueue/dequeue ordering, size tracking, isEmpty, dequeue on empty queue"
+    },
+    {
+      "id": "REQ-002",
+      "title": "Implement concurrency-limited pool runner (pool.js)",
+      "body": "## Task\nCreate `src/ralph/utils/pool.js` exporting `run(queue, concurrency)`.\n\n## Requirements\n- Accepts a `Queue` instance (from `queue.js`) pre-populated with zero-arg async functions (tasks)\n- `concurrency` must be a positive integer; throw synchronously otherwise\n- Drains the queue running at most `concurrency` tasks in parallel\n- Returns `Promise<Result[]>` in enqueue order (index = insertion order)\n- Each `Result`: `{ ok: true, value, durationMs }` or `{ ok: false, error, durationMs }`\n- Task rejection/throw → collect error, continue; do not abort\n- Measure `durationMs` per task internally with `Date.now()` or `performance.now()`\n- Write tests in `tests/ralph/utils/pool.spec.js` using `@playwright/test`\n- Tests must cover: ordered results, concurrency cap, error collection, invalid concurrency throws, empty queue"
+    },
+    {
+      "id": "REQ-003",
+      "title": "Implement report aggregator (report.js)",
+      "body": "## Task\nCreate `src/ralph/utils/report.js` exporting `aggregate(results)`.\n\n## Requirements\n- Accepts `Result[]` as returned by `pool.run()`\n- Returns a plain JS object: `{ total, succeeded, failed, avgDurationMs, errors: [string] }`\n- `total` = results.length; `succeeded` = count where `ok === true`; `failed` = count where `ok === false`\n- `avgDurationMs` = arithmetic mean of all `durationMs` values (0 if empty array)\n- `errors` = array of string representations of each `error` where `ok === false`\n- Write tests in `tests/ralph/utils/report.spec.js` using `@playwright/test`\n- Tests must cover: all-success, all-failure, mixed, empty array, avgDurationMs calculation"
     }
   ]
 }
