@@ -1,0 +1,109 @@
+# Phase 12 #1: autonomous issue supplier.
+#
+# Closes gap ① (continuous trigger) — makes the autonomous loop laptop-
+# independent. On a schedule, read the human-curated .github/ralph-backlog.json,
+# file the next un-filed item as an `aider-fix` issue, which the existing
+# Aider Resolver picks up → PR → auto-merge.
+#
+# SAFETY (this is a money-spending autonomous loop):
+#   - Scheduled runs do NOTHING until repo variable ISSUE_SUPPLIER_ENABLED=1.
+#     Merging this workflow does not start autonomous spend; you opt in.
+#   - Manual `workflow_dispatch` always runs (so you can test it once before
+#     enabling the cron).
+#   - At most 1 issue filed per run (ISSUE_SUPPLIER_MAX_PER_RUN, default 1).
+#   - Open-PR guard: if >= ISSUE_SUPPLIER_MAX_OPEN_PRS (default 3) auto PRs
+#     are already open, skip — don't pile up unreviewed work.
+#   - Downstream Aider Resolver still enforces its own cost ceiling (#190).
+#   - The human curates the backlog; the cron never invents work.
+
+name: Ralph Issue Supplier
+
+on:
+  schedule:
+    # every 6 hours → at most 4 firings/day, each files <= 1 issue, further
+    # throttled by the open-PR guard. Adjust to taste.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Select the next item but do NOT create the issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  supply:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+      MAX_PER_RUN: ${{ vars.ISSUE_SUPPLIER_MAX_PER_RUN || '1' }}
+      MAX_OPEN_PRS: ${{ vars.ISSUE_SUPPLIER_MAX_OPEN_PRS || '3' }}
+      BACKLOG: .github/ralph-backlog.json
+    steps:
+      - name: Gate scheduled runs behind ISSUE_SUPPLIER_ENABLED
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ vars.ISSUE_SUPPLIER_ENABLED }}" != "1" ]; then
+            echo "scheduled run but ISSUE_SUPPLIER_ENABLED != 1 — not filing. Set the repo variable to 1 to enable 24h autonomous supply."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.skip != '1'
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        if: steps.gate.outputs.skip != '1'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Gather state (existing issue titles + open auto-PR count)
+        if: steps.gate.outputs.skip != '1'
+        id: state
+        run: |
+          # All issue titles (open AND closed) so a filed item is never re-filed.
+          gh issue list --repo "${{ github.repository }}" --state all --limit 500 \
+            --json title --jq '[.[].title]' > /tmp/titles.json || echo '[]' > /tmp/titles.json
+          OPEN_PRS=$(gh pr list --repo "${{ github.repository }}" --state open \
+            --search "head:auto/issue-" --json number --jq 'length' 2>/dev/null || echo 0)
+          echo "open_prs=$OPEN_PRS" >> "$GITHUB_OUTPUT"
+          echo "existing titles: $(jq 'length' /tmp/titles.json), open auto PRs: $OPEN_PRS"
+
+      - name: Select next backlog item
+        if: steps.gate.outputs.skip != '1'
+        id: select
+        run: |
+          RESULT=$(node scripts/ralph/issue-supplier.js \
+            --backlog "$BACKLOG" \
+            --titles-file /tmp/titles.json \
+            --open-prs "${{ steps.state.outputs.open_prs }}" \
+            --max-open-prs "$MAX_OPEN_PRS")
+          echo "selector: $RESULT"
+          echo "$RESULT" > /tmp/selected.json
+          OK=$(jq -r '.ok' /tmp/selected.json)
+          echo "ok=$OK" >> "$GITHUB_OUTPUT"
+          if [ "$OK" != "true" ]; then
+            echo "nothing to file: $(jq -r '.reason' /tmp/selected.json)"
+          fi
+
+      - name: File the issue
+        if: steps.gate.outputs.skip != '1' && steps.select.outputs.ok == 'true'
+        run: |
+          TITLE=$(jq -r '.issue_title' /tmp/selected.json)
+          jq -r '.item.body' /tmp/selected.json > /tmp/issue_body.md
+          LABELS=$(jq -r '.item.labels | join(",")' /tmp/selected.json)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "DRY RUN — would file: $TITLE  [labels: $LABELS]"
+            echo "--- body ---"; cat /tmp/issue_body.md
+            exit 0
+          fi
+          URL=$(gh issue create --repo "${{ github.repository }}" \
+            --title "$TITLE" --body-file /tmp/issue_body.md --label "$LABELS")
+          echo "filed: $URL"
