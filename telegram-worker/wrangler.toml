@@ -1,0 +1,16 @@
+name = "ralph-telegram-nl"
+main = "index.mjs"
+compatibility_date = "2026-05-01"
+# global fetch + URLSearchParams are available on the modern Workers runtime.
+
+# Secrets (DO NOT put values here — set via `wrangler secret put`, see README.md):
+#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_WEBHOOK_SECRET
+#   ALLOWED_CHAT_ID
+#   GITHUB_PAT
+#   GITHUB_REPO
+#   OPENROUTER_API_KEY
+
+# Non-secret default; override with `wrangler secret put LLM_MODEL` if desired.
+[vars]
+LLM_MODEL = "openrouter/anthropic/claude-haiku-4.5"
