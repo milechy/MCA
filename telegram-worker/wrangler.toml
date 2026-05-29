@@ -12,5 +12,7 @@ compatibility_date = "2026-05-01"
 #   OPENROUTER_API_KEY
 
 # Non-secret default; override with `wrangler secret put LLM_MODEL` if desired.
+# BARE slug (no openrouter/ prefix) — the Worker calls the OpenRouter API
+# directly, which rejects the prefixed form.
 [vars]
-LLM_MODEL = "openrouter/anthropic/claude-haiku-4.5"
+LLM_MODEL = "anthropic/claude-haiku-4.5"

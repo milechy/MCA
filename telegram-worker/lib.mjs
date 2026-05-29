@@ -100,7 +100,10 @@ export function buildOpenRouterRequest({ apiKey, model, userText, system = NL_TO
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model || 'openrouter/anthropic/claude-haiku-4.5',
+        // BARE slug — direct OpenRouter API rejects the `openrouter/` prefix
+        // (that form is only for opencode/aider/LiteLLM). Bug found by the
+        // Phase 15 #1 live test; same class as requirements-refiner.
+        model: model || 'anthropic/claude-haiku-4.5',
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: userText }
