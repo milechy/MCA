@@ -3,12 +3,22 @@ class Queue {
     this.items = [];
   }
 
-  enqueue(item) {
-    this.items.push(item);
+  enqueue(element) {
+    this.items.push(element);
   }
 
   dequeue() {
-    return this.items.length > 0 ? this.items.shift() : undefined;
+    if (this.items.length === 0) {
+      return undefined;
+    }
+    return this.items.shift();
+  }
+
+  peek() {
+    if (this.items.length === 0) {
+      return undefined;
+    }
+    return this.items[0];
   }
 
   get size() {
@@ -17,6 +27,10 @@ class Queue {
 
   get isEmpty() {
     return this.items.length === 0;
+  }
+
+  clear() {
+    this.items = [];
   }
 }
 
