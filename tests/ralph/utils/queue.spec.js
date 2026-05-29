@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { Queue } = require('../../src/ralph/utils/queue');
+const { Queue } = require('../../../src/ralph/utils/queue');
 
 test('constructor creates empty queue', () => {
   const queue = new Queue();

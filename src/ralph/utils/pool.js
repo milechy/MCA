@@ -5,12 +5,17 @@
  * @returns {Promise<Result[]>} Results in enqueue order
  * @throws {Error} If concurrency is not a positive integer
  */
-async function run(queue, concurrency) {
-  // Validate concurrency
+function run(queue, concurrency) {
+  // Validate concurrency SYNCHRONOUSLY so callers can
+  // `expect(() => run(q, 0)).toThrow(...)`. (The autonomous executor first
+  // shipped this as an async fn, making the throw a rejected promise — its
+  // own test then failed and merged red because there was no test gate;
+  // Phase 16 adds that gate. This is the corrected impl.)
   if (!Number.isInteger(concurrency) || concurrency <= 0) {
     throw new Error('concurrency must be a positive integer');
   }
 
+  return (async () => {
   // Collect results in order
   const results = [];
   let taskIndex = 0;
@@ -52,6 +57,7 @@ async function run(queue, concurrency) {
   await Promise.all(workers);
 
   return results;
+  })();
 }
 
 module.exports = { run };
