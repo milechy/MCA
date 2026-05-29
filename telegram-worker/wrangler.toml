@@ -16,3 +16,10 @@ compatibility_date = "2026-05-01"
 # directly, which rejects the prefixed form.
 [vars]
 LLM_MODEL = "anthropic/claude-haiku-4.5"
+
+# Phase 15 #2: KV namespace for requirements-refinement conversation state.
+# Created via MCP (id below). For local dev `wrangler kv namespace create`
+# makes another; keep prod id here.
+[[kv_namespaces]]
+binding = "REFINE_KV"
+id = "8ace6eac1e6e4caa8e14b54f0db6575d"

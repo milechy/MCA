@@ -10,18 +10,27 @@ notifications message you when it lands.
 this Worker only runs when Telegram delivers a message, so nothing needs to
 stay running on your machine.
 
-## Architecture
+## Two flows
 
+**A. Quick one-issue** (short message): NL → one GitHub issue.
 ```
-You (Telegram, natural language)
-  → Telegram webhook → Cloudflare Worker (this)
-      → verify webhook secret + allowed chat id
-      → OpenRouter (Haiku) expands NL → structured issue JSON
-      → GitHub API: create issue with aider-fix label
-      → reply "📥 issue #N created"
-  → Aider Resolver (existing) → PR → auto-merge
-  → Telegram notification (Phase 13 #1) "✅ merged"
+short text → Worker → OpenRouter (Haiku) → 1 issue (aider-fix) → reply
+  → Aider Resolver → PR → auto-merge → Telegram notify
 ```
+
+**B. Requirements refinement** (Phase 15 #2 — a document upload OR a long
+multi-line message): a multi-turn conversation that organizes / brushes up
+the requirements and decomposes them into a backlog.
+```
+要件定義 (.md/.txt upload or long text)
+  → Worker → analyze (Sonnet) → clarifying questions → you answer (KV holds state)
+  → re-analyze until clear → decompose into ordered backlog items
+  → "これでOK?" → you approve
+  → commit items to .github/ralph-backlog.json (GitHub Contents API)
+  → the issue supplier paces them into the Aider loop
+```
+State between turns lives in the `REFINE_KV` namespace (key `refine:<chatId>`,
+24h TTL).
 
 ## Deploy (one-time, ~10 min)
 
@@ -61,14 +70,20 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates"
 
 ## Usage
 
-Just text the bot in plain language. Examples:
+**Quick one-issue** — text in plain language:
 - "`src/ralph/utils/throttle.js` に throttle(fn, ms) を作ってテストも"
-- "kimi-cost-tracker に週次集計の関数足して"
 
-Control phrases (no LLM call):
-- `help` — usage
-- `status` — link to the Actions tab
-- `stop` — how to pause the autonomous supplier
+**Requirements refinement** — upload a `.md`/`.txt` requirements doc, or paste
+a long multi-line spec. The bot summarizes, asks clarifying questions (reply
+in one message), then proposes a decomposed backlog; reply **OK** to commit
+(or send adjustments, or `キャンセル`). The KV namespace must be bound
+(`REFINE_KV`, already in wrangler.toml).
+
+Control phrases (no LLM call): `help` / `status` / `stop`.
+
+The refinement KV namespace was created via the Cloudflare API (id in
+wrangler.toml). If you redeploy in a fresh account, run
+`npx wrangler kv namespace create REFINE_KV` and replace the id.
 
 ## Safety
 
