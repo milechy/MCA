@@ -314,12 +314,68 @@ def classify(prompt: str, backend: str) -> dict:
     return sig
 
 
+def serve(backend: str, host: str, port: int):
+    """Long-running HTTP server so the model loads ONCE instead of per call
+    (~6s cold load → ~110ms warm). POST any path with body {"prompt": "..."} →
+    the classify() JSON. GET /health → {"ok": true}. The Node bridge prefers
+    this (via curl) when NEMOCLAW_CLASSIFIER_URL is set, and falls back to the
+    one-shot subprocess otherwise."""
+    import json as _json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    # Warm the model once up front so the first request is already fast.
+    if backend == "nvidia":
+        try:
+            _load_nvidia()
+        except Exception:
+            pass
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, obj):
+            body = _json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send(200, {"ok": True, "backend": backend})
+
+        def do_POST(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode() if length else ""
+                prompt = _json.loads(raw).get("prompt", "") if raw.strip() else ""
+            except Exception:
+                prompt = ""
+            try:
+                self._send(200, classify(prompt, backend))
+            except Exception as exc:  # never crash the server on one bad request
+                self._send(200, {"ok": False, "error": str(exc)[:300]})
+
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    sys.stderr.write(f"[classifier] serving backend={backend} on http://{host}:{port}\n")
+    sys.stderr.flush()
+    httpd.serve_forever()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["nvidia", "heuristic"], default="heuristic")
     ap.add_argument("--prompt", default=None)
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--serve", action="store_true", help="run as a persistent HTTP server")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8077)
     args = ap.parse_args()
+
+    if args.serve:
+        serve(args.backend, args.host, args.port)
+        return
 
     if args.self_test:
         samples = [

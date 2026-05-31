@@ -15,16 +15,43 @@ const CLASSIFIER_DIR = path.join(__dirname, '..', '..', 'scripts', 'ralph', 'com
 const DEFAULT_PYTHON = path.join(CLASSIFIER_DIR, '.venv', 'bin', 'python');
 const SCRIPT = path.join(CLASSIFIER_DIR, 'classify.py');
 
+// Fast path: hit a persistent classifier server (the model is already loaded,
+// ~110ms) via curl so the call stays synchronous. Returns the signal or null.
+function classifyViaServer({ prompt, url, timeoutMs, spawnImpl }) {
+  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const res = spawnImpl('curl', [
+    '-s', '--max-time', String(seconds),
+    '-X', 'POST', '-H', 'Content-Type: application/json',
+    '--data-binary', JSON.stringify({ prompt }), url
+  ], { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+  if (!res || res.status !== 0 || !res.stdout) return null;
+  try {
+    const sig = JSON.parse(res.stdout.trim().split('\n').filter(Boolean).pop());
+    return sig && sig.ok ? sig : null;
+  } catch {
+    return null;
+  }
+}
+
 function classifyPrompt({
   prompt,
   env = process.env,
   backend = env.NEMOCLAW_CLASSIFIER_BACKEND || 'nvidia',
   python = env.NEMOCLAW_CLASSIFIER_PYTHON || DEFAULT_PYTHON,
+  serverUrl = env.NEMOCLAW_CLASSIFIER_URL || null,
   timeoutMs = Number(env.NEMOCLAW_CLASSIFIER_TIMEOUT_MS) || 30000,
   spawnImpl = spawnSync
 } = {}) {
   if (!prompt || typeof prompt !== 'string') return null;
   if ((env.NEMOCLAW_CLASSIFIER || 'on') === 'off') return null;
+
+  // Prefer the persistent server (no per-call model load) when configured;
+  // fall back to the one-shot subprocess if it's unreachable.
+  if (serverUrl) {
+    const viaServer = classifyViaServer({ prompt, url: serverUrl, timeoutMs, spawnImpl });
+    if (viaServer) return viaServer;
+  }
+
   try {
     const res = spawnImpl(python, [SCRIPT, '--backend', backend], {
       input: JSON.stringify({ prompt }),
@@ -43,4 +70,4 @@ function classifyPrompt({
   }
 }
 
-module.exports = { classifyPrompt, CLASSIFIER_DIR, SCRIPT, DEFAULT_PYTHON };
+module.exports = { classifyPrompt, classifyViaServer, CLASSIFIER_DIR, SCRIPT, DEFAULT_PYTHON };

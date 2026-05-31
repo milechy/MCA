@@ -3,6 +3,7 @@ const { test, expect } = require('@playwright/test');
 const {
   ESCALATION_LADDER,
   tierForComplexity,
+  effectiveComplexity,
   selectModel
 } = require('../../src/ralph/nemoclaw-brain');
 
@@ -28,6 +29,27 @@ test('tierForComplexity maps complexity bands to the cost ladder', () => {
   expect(tierForComplexity(0.74)).toBe(2);
   expect(tierForComplexity(0.75)).toBe(3);
   expect(tierForComplexity(0.99)).toBe(3);
+});
+
+test('effectiveComplexity lifts hard code work the classifier under-rates', () => {
+  // A hard code task: low overall (creativity-weighted) but high reasoning+domain.
+  const hardCode = { task_type: 'Code Generation', prompt_complexity_score: 0.22, reasoning: 0.85, domain_knowledge: 0.9, constraint_ct: 0.6 };
+  expect(effectiveComplexity(hardCode)).toBeGreaterThan(0.55); // climbs into sonnet/gpt tier
+  // Trivial code stays low (no reasoning/domain).
+  const easyCode = { task_type: 'Code Generation', prompt_complexity_score: 0.18, reasoning: 0.01, domain_knowledge: 0.05, constraint_ct: 0.0 };
+  expect(effectiveComplexity(easyCode)).toBeLessThan(0.30);
+  // Non-code tasks use the overall score unchanged.
+  const prose = { task_type: 'Text Generation', prompt_complexity_score: 0.4, reasoning: 0.9 };
+  expect(effectiveComplexity(prose)).toBe(0.4);
+});
+
+test('hard code task routes above tier 0 despite low overall complexity', () => {
+  const r = selectModel({
+    story: { story_id: 'S' },
+    classifierSignal: { task_type: 'Code Generation', prompt_complexity_score: 0.22, reasoning: 0.85, domain_knowledge: 0.9, constraint_ct: 0.6 }
+  });
+  // Without the code-aware lift this would be Kimi (tier 0); now it escalates.
+  expect(r.tier).toBeGreaterThanOrEqual(2);
 });
 
 test('explicit story.executor_model always wins (allowlisted)', () => {

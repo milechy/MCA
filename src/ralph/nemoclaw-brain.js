@@ -77,9 +77,32 @@ function normDifficulty(difficulty) {
   return String(difficulty || '').toLowerCase().trim();
 }
 
+// The NVIDIA classifier's overall prompt_complexity_score already ranks code
+// tasks roughly monotonically (typo < simple class < distributed system), so
+// it is the base signal. But it is creativity-weighted, so genuinely
+// reasoning-heavy code can still score a touch low. For code tasks we add a
+// gentle reasoning/constraint bump ON TOP of the overall score.
+//
+// Validated against the live classifier (2026-05-31): domain_knowledge is
+// near-constant (~0.99) for ANY code prompt, so it does NOT discriminate and is
+// deliberately excluded — including it over-escalated routine code (a plain
+// Queue class) off the cheap tier. reasoning is the discriminating signal, so
+// only that (plus constraints) lifts the tier; routine code stays on Kimi and
+// the escalation ladder handles the occasional miss.
+const CODE_TASK_TYPES = Object.freeze(new Set(['Code Generation', 'Closed QA', 'Extraction']));
+
+function effectiveComplexity(signal) {
+  if (!signal || signal.prompt_complexity_score == null) return null;
+  const overall = Number(signal.prompt_complexity_score) || 0;
+  if (!CODE_TASK_TYPES.has(signal.task_type)) return overall;
+  const bump = 0.40 * (Number(signal.reasoning) || 0) + 0.15 * (Number(signal.constraint_ct) || 0);
+  return Math.min(1, overall + bump);
+}
+
 function baseTierFor({ classifierSignal, story }) {
-  if (classifierSignal && classifierSignal.prompt_complexity_score != null) {
-    return { tier: tierForComplexity(classifierSignal.prompt_complexity_score), via: 'classifier_tier' };
+  const effective = effectiveComplexity(classifierSignal);
+  if (effective != null) {
+    return { tier: tierForComplexity(effective), via: 'classifier_tier' };
   }
   const diff = normDifficulty(story && story.difficulty);
   if (diff && has(DIFFICULTY_TIER_INDEX, diff)) {
@@ -243,6 +266,7 @@ module.exports = {
   TRANSIENT_FAILURES,
   DEFAULT_COST_CAP_USD,
   tierForComplexity,
+  effectiveComplexity,
   baseTierFor,
   pickLearned,
   selectModel,
