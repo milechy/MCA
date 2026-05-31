@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createStory, readStory } = require('../../src/ralph/story-queue');
-const { tickAutonomousLoop, LOOP_PHASES } = require('../../src/ralph/autonomous-loop');
+const { tickAutonomousLoop, maybeShadowCompare, LOOP_PHASES } = require('../../src/ralph/autonomous-loop');
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-brain-wiring-'));
@@ -66,6 +66,34 @@ test('A7: an already-terminal story is NOT re-recorded on subsequent ticks', () 
   // tick again — story is now DONE; the entry short-circuit must not re-record.
   tickAutonomousLoop({ rootDir, story_id: 'STORY-A7', approvals: { 'APR-PR': 'approved' } });
   expect(readOutcomes(rootDir).length).toBe(1);
+});
+
+function shadowLogExists(rootDir) {
+  return fs.existsSync(path.join(rootDir, '.ralph', 'shadow-execution.jsonl'));
+}
+
+test('shadow hook is OFF by default (no shadow run, no OpenClaw call)', () => {
+  const rootDir = tmpRoot();
+  createStory({ story_id: 'S', title: 't', requirement: 'r', requested_paths: ['x.js'] }, { rootDir });
+  // PATCH_PREVIEW result, but flag unset → must not record.
+  maybeShadowCompare({
+    rootDir,
+    env: {},
+    result: { story_id: 'S', to_phase: LOOP_PHASES.PATCH_PREVIEW, candidate_patch_path: 'k/candidate.patch' }
+  });
+  expect(shadowLogExists(rootDir)).toBe(false);
+});
+
+test('shadow hook does nothing when the tick did not produce a patch', () => {
+  const rootDir = tmpRoot();
+  createStory({ story_id: 'S', title: 't', requirement: 'r' }, { rootDir });
+  // flag ON but the phase is not PATCH_PREVIEW → no shadow.
+  maybeShadowCompare({
+    rootDir,
+    env: { RALPH_SHADOW_OPENCLAW: 'on' },
+    result: { story_id: 'S', to_phase: LOOP_PHASES.GATES, candidate_patch_path: null }
+  });
+  expect(shadowLogExists(rootDir)).toBe(false);
 });
 
 test('A7: a non-terminal tick records nothing', () => {

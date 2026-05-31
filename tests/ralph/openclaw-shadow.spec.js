@@ -7,6 +7,7 @@ const {
   normalizeBackendResult,
   compareBackends,
   runShadowComparison,
+  shadowAgainstProduction,
   recordShadowComparison,
   summarizeShadowLog
 } = require('../../src/ralph/openclaw-shadow');
@@ -81,6 +82,41 @@ test('runShadowComparison never throws if a backend throws (records as failure)'
 test('runShadowComparison validates inputs', () => {
   expect(runShadowComparison({ runOpenClaw: () => {}, runOpenCodeKimi: () => {} }).reason).toBe('task_required');
   expect(runShadowComparison({ task: 't' }).reason).toBe('runners_required');
+});
+
+test('shadowAgainstProduction reuses the production result and runs only OpenClaw', () => {
+  const rootDir = tmpRoot();
+  let openclawRuns = 0;
+  const record = shadowAgainstProduction({
+    rootDir,
+    task: 'Add a util',
+    requested_paths: ['x.js'],
+    story_id: 'STORY-1',
+    productionResult: { ok: true, candidate_patch_path: 'k/candidate.patch' },
+    productionDurationMs: 12000,
+    runOpenClaw: () => { openclawRuns += 1; return { ok: true, candidate_patch_path: 'oc/candidate.patch' }; },
+    clock: steppedClock(50),
+    now: new Date('2026-05-31T00:00:00Z')
+  });
+  expect(openclawRuns).toBe(1); // production NOT re-run
+  expect(record.source).toBe('daemon_shadow');
+  expect(record.opencode_kimi.duration_ms).toBe(12000); // carried from production
+  expect(record.comparison.agreement).toBe('both_valid');
+  const lines = fs.readFileSync(path.join(rootDir, '.ralph', 'shadow-execution.jsonl'), 'utf8').trim().split('\n');
+  expect(lines.length).toBe(1);
+});
+
+test('shadowAgainstProduction never throws if OpenClaw throws', () => {
+  const rootDir = tmpRoot();
+  const record = shadowAgainstProduction({
+    rootDir,
+    task: 't',
+    productionResult: { ok: true, candidate_patch_path: 'p' },
+    runOpenClaw: () => { throw new Error('sandbox down'); },
+    clock: steppedClock()
+  });
+  expect(record.openclaw.ok).toBe(false);
+  expect(record.comparison.agreement).toBe('only_kimi');
 });
 
 test('recordShadowComparison appends a JSONL line', () => {

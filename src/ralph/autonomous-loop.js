@@ -21,6 +21,7 @@ const { createOpenCodeCommitApproval } = require('../telegram/opencode-commit-ap
 const { commitOpenCodeAppliedPatch } = require('../telegram/opencode-commit');
 const { recordStoryOutcome } = require('./task-outcome-recorder');
 const { classifyPrompt } = require('./complexity-classifier');
+const { shadowAgainstProduction } = require('./openclaw-shadow');
 
 const AUTONOMOUS_LOOP_VERSION = 'autonomous_loop_v0_1';
 const OPENCODE_RATE_LIMIT_BACKOFF_MS = 10 * 60 * 1000;
@@ -359,18 +360,53 @@ function maybeRecordTerminalOutcome({ rootDir = process.cwd(), now = new Date(),
   } catch { /* never break the loop on a recording failure */ }
 }
 
+// Phase C — when the production backend (opencode-kimi) has just produced a
+// candidate patch, shadow-run OpenClaw on the SAME task and record a comparison.
+// Opt-in (RALPH_SHADOW_OPENCLAW=on), best-effort, and NEVER touches the merge
+// path — the loop already moved on with opencode-kimi's patch. Correctness
+// verification is left off here by default (it mutates the tree); the synthetic
+// batch is where verifyPatch runs safely.
+function maybeShadowCompare({ rootDir = process.cwd(), env = process.env, now = new Date(), result } = {}) {
+  if ((env.RALPH_SHADOW_OPENCLAW || 'off') !== 'on') return;
+  if (!result || result.to_phase !== LOOP_PHASES.PATCH_PREVIEW || !result.candidate_patch_path) return;
+  try {
+    const story = readStory(rootDir, result.story_id);
+    if (!story) return;
+    const runOpenClaw = ({ rootDir: r, task, requested_paths, env: e }) => runNemoClawOpenCodeCandidatePatch({
+      rootDir: r,
+      sandbox_root: `.ralph/tmp/shadow-openclaw/${story.story_id}`,
+      requested_paths,
+      task,
+      env: { ...e, NEMOCLAW_SANDBOX_NAME: e.NEMOCLAW_SANDBOX_NAME || 'mca-ralph' },
+      timeout_ms: Number(e.RALPH_SHADOW_TIMEOUT_MS) || 120000
+    });
+    shadowAgainstProduction({
+      rootDir,
+      task: taskForStory(story),
+      requested_paths: story.requested_paths || [],
+      story_id: story.story_id,
+      productionResult: { ok: true, candidate_patch_path: result.candidate_patch_path },
+      runOpenClaw,
+      env,
+      now
+    });
+  } catch { /* never break the loop on a shadow failure */ }
+}
+
 function tickAutonomousLoop(opts = {}) {
   const result = tickAutonomousLoopCore(opts);
-  maybeRecordTerminalOutcome({
+  const hookArgs = {
     rootDir: opts.rootDir || process.cwd(),
     now: opts.now || new Date(),
     env: opts.env || process.env,
     result
-  });
+  };
+  maybeRecordTerminalOutcome(hookArgs);
+  maybeShadowCompare(hookArgs);
   return result;
 }
 
 function tickAutonomousLoopCore({ rootDir = process.cwd(), story_id, now = new Date(), approvals = {}, env = process.env, pre_secret_scan_ok = false, opencode_dispatcher, opencode_command, opencode_args, gate_runner, apply_result, timeout_ms, nemclaw_spawn } = {}) { if (!story_id) return baseResult({ reason: 'story_id_required' }); const story = readStory(rootDir, story_id); if (!story) return baseResult({ reason: 'story_not_found', story_id }); if (story.status === STORY_STATUSES.STOPPED || story.current_phase === LOOP_PHASES.STOPPED) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.COMPLETED || story.current_phase === LOOP_PHASES.DONE) return advanceTerminalPhase(story); if (story.status === STORY_STATUSES.FAILED || story.current_phase === LOOP_PHASES.ESCALATED) return advanceTerminalPhase(story); switch (story.current_phase || LOOP_PHASES.PLAN) { case LOOP_PHASES.PLAN: return advancePlanPhase(story, { rootDir, now, env }); case LOOP_PHASES.PLAN_APPROVAL_PENDING: case LOOP_PHASES.DIFF_APPROVAL_PENDING: case LOOP_PHASES.COMMIT_APPROVAL_PENDING: case LOOP_PHASES.PUSH_APPROVAL_PENDING: case LOOP_PHASES.PR_APPROVAL_PENDING: return advanceWaitingApprovalPhase(story, { rootDir, now, approvals }); case LOOP_PHASES.OPENCODE_RUNNING: return advanceOpenCodeRunningPhase(story, { rootDir, now, env, pre_secret_scan_ok, opencode_dispatcher, opencode_command, opencode_args, timeout_ms, nemclaw_spawn }); case LOOP_PHASES.PATCH_PREVIEW: return advancePatchPreviewPhase(story, { rootDir, now }); case LOOP_PHASES.APPLY: return advanceApplyPhase(story, { rootDir, now, apply_result, timeout_ms }); case LOOP_PHASES.GATES: return advanceGatesPhase(story, { rootDir, now, gate_runner, timeout_ms }); case LOOP_PHASES.COMMIT: return advanceCommitPhase(story, { rootDir, now, timeout_ms, env }); case LOOP_PHASES.FIX_LOOP: return advanceFixLoopPhase(story, { rootDir, now }); default: return baseResult({ ok: false, reason: 'loop_phase_not_supported_yet', story_id: story.story_id, from_phase: story.current_phase, to_phase: story.current_phase, story: summarizeStory(story), provider_config: story.last_provider_config || null, next_action: 'implement_next_autonomous_loop_phase' }); } }
 function pauseStory(story_id, { rootDir = process.cwd(), now = new Date(), reason = 'operator_pause' } = {}) { const updated = updateStory(story_id, { status: STORY_STATUSES.STOPPED, current_phase: LOOP_PHASES.STOPPED, blocked_reason: reason }, { rootDir, now, event: 'story_paused' }); if (!updated.ok) return baseResult({ reason: updated.reason, story_id }); return baseResult({ ok: true, story_id, from_phase: null, to_phase: LOOP_PHASES.STOPPED, story: updated.summary, provider_config: updated.story?.last_provider_config || null, reason: null, next_action: 'story_stopped' }); }
 
-module.exports = { AUTONOMOUS_LOOP_VERSION, OPENCODE_RATE_LIMIT_BACKOFF_MS, OPENCODE_AGENT_OUTPUT_CONTRACT_BACKOFF_MS, OPENCODE_RUNTIME_MODES, LOOP_PHASES, boundedFailureSummary, defaultApprovalId, defaultApplyApprovalId, defaultJobId, defaultSandboxRoot, taskForStory, phaseForUltraPlan, statusForPhase, nextActionForPhase, currentSafeProviderConfig, failedOpenCodeNextAction, retryAfterForOpenCodeFailure, persistedApprovalIsApproved, buildPatchPreviewForStory, buildOpenCodePreflight, directOpenCodeDevOnlyAllowed, opencodeKimiDirectEnabled, nemoclawDispatcherExplicitlyEnabled, buildDefaultOpenCodeDispatcher, tickAutonomousLoop, pauseStory };
+module.exports = { AUTONOMOUS_LOOP_VERSION, OPENCODE_RATE_LIMIT_BACKOFF_MS, OPENCODE_AGENT_OUTPUT_CONTRACT_BACKOFF_MS, OPENCODE_RUNTIME_MODES, LOOP_PHASES, boundedFailureSummary, defaultApprovalId, defaultApplyApprovalId, defaultJobId, defaultSandboxRoot, taskForStory, phaseForUltraPlan, statusForPhase, nextActionForPhase, currentSafeProviderConfig, failedOpenCodeNextAction, retryAfterForOpenCodeFailure, persistedApprovalIsApproved, buildPatchPreviewForStory, buildOpenCodePreflight, directOpenCodeDevOnlyAllowed, opencodeKimiDirectEnabled, nemoclawDispatcherExplicitlyEnabled, buildDefaultOpenCodeDispatcher, tickAutonomousLoop, maybeShadowCompare, pauseStory };

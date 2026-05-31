@@ -139,6 +139,51 @@ function runShadowComparison({
   };
 }
 
+// Daemon integration: the production backend (opencode-kimi) ALREADY ran and
+// produced a patch — don't run it again. Run ONLY OpenClaw on the same task,
+// compare against the production result, and record. Used by the live loop's
+// shadow hook so each real story yields a comparison without double-dispatching
+// production or affecting the merge path.
+function shadowAgainstProduction({
+  rootDir = process.cwd(),
+  task,
+  requested_paths = [],
+  story_id = null,
+  productionResult,
+  productionDurationMs = null,
+  runOpenClaw,
+  verifyPatch = null,
+  env = process.env,
+  clock = () => Date.now(),
+  now = new Date()
+} = {}) {
+  if (typeof runOpenClaw !== 'function') return { ok: false, reason: 'runner_required' };
+  const opencode_kimi = normalizeBackendResult(productionResult || {}, { duration_ms: productionDurationMs });
+  const start = clock();
+  let ocRaw;
+  try { ocRaw = runOpenClaw({ rootDir, task, requested_paths, env }); }
+  catch (e) { ocRaw = { ok: false, reason: String((e && e.message) || e) }; }
+  const openclaw = normalizeBackendResult(ocRaw, { duration_ms: clock() - start });
+
+  if (typeof verifyPatch === 'function') {
+    Object.assign(openclaw, safeVerify(verifyPatch, { ...openclaw, backend: 'openclaw' }));
+    Object.assign(opencode_kimi, safeVerify(verifyPatch, { ...opencode_kimi, backend: 'opencode_kimi' }));
+  }
+
+  const record = {
+    ok: true,
+    story_id,
+    source: 'daemon_shadow',
+    task_preview: String(task || '').slice(0, 200),
+    requested_paths,
+    openclaw,
+    opencode_kimi,
+    comparison: compareBackends(openclaw, opencode_kimi)
+  };
+  recordShadowComparison({ rootDir, record, now });
+  return record;
+}
+
 // Append a comparison to the shadow log. Best-effort; never throws into a run.
 function recordShadowComparison({ rootDir = process.cwd(), record, now = new Date() } = {}) {
   if (!record) return { ok: false, reason: 'record_required' };
@@ -214,6 +259,7 @@ module.exports = {
   normalizeBackendResult,
   compareBackends,
   runShadowComparison,
+  shadowAgainstProduction,
   recordShadowComparison,
   summarizeShadowLog
 };
