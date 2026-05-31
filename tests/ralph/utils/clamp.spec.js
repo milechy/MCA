@@ -1,3 +1,4 @@
+const { test, expect } = require('@playwright/test');
 const { clamp } = require('../../../src/ralph/utils/clamp');
 
 test('in-range value is returned unchanged', () => {
