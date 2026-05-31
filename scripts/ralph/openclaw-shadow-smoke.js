@@ -14,6 +14,7 @@
 const path = require('node:path');
 const { runNemoClawOpenCodeCandidatePatch } = require('../../src/ralph/nemoclaw-opencode-gateway');
 const { dispatchOpenCodeKimi } = require('../../src/ralph/opencode-kimi-dispatcher');
+const { routeExecutor } = require('../../src/ralph/executor-router');
 const { runShadowComparison, recordShadowComparison } = require('../../src/ralph/openclaw-shadow');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -35,15 +36,14 @@ function runOpenClaw({ rootDir, task, requested_paths, env }) {
 }
 
 function runOpenCodeKimi({ rootDir, task, requested_paths, env }) {
-  return dispatchOpenCodeKimi({
-    rootDir,
-    story: { story_id: 'SHADOW-SMOKE', difficulty: 'easy', requested_paths },
-    sandbox_root: '.ralph/tmp/shadow-kimi',
-    task,
-    requested_paths,
-    env,
-    timeout_ms: TIMEOUT_MS
+  const story = { story_id: 'SHADOW-SMOKE', difficulty: 'easy', requested_paths };
+  // Surface the routed model + estimated cost so the shadow log can compare
+  // cost (the dispatcher result itself doesn't carry them).
+  const route = routeExecutor({ story, env, rootDir, prompt_chars: String(task).length });
+  const result = dispatchOpenCodeKimi({
+    rootDir, story, sandbox_root: '.ralph/tmp/shadow-kimi', task, requested_paths, env, timeout_ms: TIMEOUT_MS
   });
+  return { ...result, executor_model: route.executor_model, estimated_cost_usd: route.estimated_cost_usd };
 }
 
 function main() {
