@@ -243,6 +243,30 @@ function recordTaskOutcome({ rootDir, story, ledgerEntries = [], env = process.e
   return { ...local, ok: true, sink: 'local', record };
 }
 
+// Read the cost-ledger rows for one story (the per-attempt model spend) so the
+// live loop can record a finished story without the caller assembling them.
+function readLedgerEntries({ rootDir, story_id } = {}) {
+  if (!rootDir || !story_id) return [];
+  const p = path.join(rootDir, '.ralph', 'cost-ledger.jsonl');
+  if (!fs.existsSync(p)) return [];
+  const out = [];
+  for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const e = JSON.parse(line);
+      if (e && e.story_id === story_id) out.push(e);
+    } catch { /* skip malformed */ }
+  }
+  return out;
+}
+
+// Convenience for the live loop terminal hook: pull the ledger and record.
+function recordStoryOutcome({ rootDir, story, env = process.env, now = new Date(), writeSupabase } = {}) {
+  if (!rootDir || !story || !story.story_id) return { ok: false, reason: 'rootDir_and_story_required' };
+  const ledgerEntries = readLedgerEntries({ rootDir, story_id: story.story_id });
+  return recordTaskOutcome({ rootDir, story, ledgerEntries, env, now, writeSupabase });
+}
+
 module.exports = {
   KNOWN_DIFFICULTIES,
   inferLanguage,
@@ -256,5 +280,7 @@ module.exports = {
   buildOutcomeRecord,
   localSink,
   selectSink,
+  readLedgerEntries,
+  recordStoryOutcome,
   recordTaskOutcome
 };
