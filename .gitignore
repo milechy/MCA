@@ -44,3 +44,8 @@ node_modules/
 .ralph/telegram-offset.json
 .ralph/mode.json
 .ralph/state.json
+.ralph/brain-decisions.jsonl
+
+# NemoClaw brain — complexity classifier venv + HF model cache (multi-GB)
+scripts/ralph/complexity-classifier/.venv/
+scripts/ralph/complexity-classifier/__pycache__/

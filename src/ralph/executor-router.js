@@ -50,7 +50,55 @@ function modelForDifficulty(difficulty) {
   return DIFFICULTY_TIER_MODELS[key] || null;
 }
 
+// Phase A: consult the NemoClaw brain when it has a richer signal than the
+// static ladder — a classifier reading, prior outcomes to learn from, or a
+// retry to escalate. Plain first-attempt calls with no extra signal keep the
+// proven static behavior (and its exact contract) untouched, so this is
+// backward-compatible while being on by default. Returns null to defer to the
+// static ladder. Brain + routing-stats are required lazily to avoid a require
+// cycle (nemoclaw-brain depends on this module's FALLBACK_EXECUTOR_MODEL).
+function tryBrain({ story = {}, env = process.env, rootDir, prompt_chars = 0 } = {}) {
+  if ((env.RALPH_BRAIN || 'on') === 'off') return null;
+  const classifierSignal = story.classifier_signal || null;
+  const attempt = Number(story.attempt_number) > 0
+    ? Number(story.attempt_number)
+    : (Array.isArray(story.repair_history) ? story.repair_history.length : 0);
+  const lastFailureClass = story.last_failure_class || story.blocked_reason || null;
+
+  let outcomes = [];
+  if (rootDir) {
+    try { outcomes = require('./routing-stats').readOutcomes(rootDir); } catch { outcomes = []; }
+  }
+  const hasLearnable = outcomes.length > 0 && Boolean(story.context_bucket);
+
+  // Only engage when the brain can add something beyond the static ladder.
+  if (!classifierSignal && attempt === 0 && !hasLearnable) return null;
+
+  const { selectModel, recordDecision } = require('./nemoclaw-brain');
+  const decision = selectModel({
+    story, classifierSignal, outcomes, attempt, lastFailureClass,
+    spentUsd: Number(story.spent_usd) || 0, env
+  });
+  if (rootDir) recordDecision({ rootDir, story, decision });
+  return {
+    ok: true,
+    executor_model: decision.model,
+    estimated_cost_usd: estimateCostFromContext({ prompt_chars, model: decision.model }),
+    reason: `nemoclaw_${decision.source}`,
+    fallback_applied: decision.fallback_applied,
+    routing_source: `nemoclaw_${decision.source}`,
+    difficulty_tier: decision.tier == null ? null : String(decision.tier),
+    brain_rationale: decision.rationale,
+    escalate_to_human: decision.escalate_to_human,
+    task_type: decision.task_type,
+    complexity: decision.complexity
+  };
+}
+
 function routeExecutor({ story, env = process.env, rootDir, prompt_chars = 0 } = {}) {
+  const brained = tryBrain({ story, env, rootDir, prompt_chars });
+  if (brained) return brained;
+
   const specified = story && story.executor_model;
   let executor_model;
   let fallback_applied = false;
@@ -124,5 +172,6 @@ module.exports = {
   DIFFICULTY_TIER_MODELS,
   estimateCostFromContext,
   modelForDifficulty,
+  tryBrain,
   routeExecutor
 };

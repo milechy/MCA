@@ -81,24 +81,29 @@ function statsByContextBucket(outcomes) {
     .sort((a, b) => a.key.localeCompare(b.key));
 }
 
-// For each difficulty, which model is the recommended pick by cost-per-
-// success (lowest), requiring a minimum sample size to avoid noise.
-function recommendByDifficulty(outcomes, { minSamples = 2 } = {}) {
-  const byDiff = new Map();
-  for (const row of statsByDifficultyModel(outcomes)) {
-    const [difficulty, model] = row.key.split(' | ');
-    if (!byDiff.has(difficulty)) byDiff.set(difficulty, []);
-    byDiff.get(difficulty).push({ model, ...row });
+// Shared core: given stat rows whose `key` is "<bucket> | <model>", pick the
+// recommended model per bucket — highest success_rate, tie-broken by lowest
+// cost-per-success, requiring a minimum sample size to avoid noise. Used by
+// both recommendByDifficulty and recommendByContextBucket so the selection
+// policy lives in exactly one place (the nemoclaw-brain reads these).
+function recommendFromStats(statRows, { minSamples = 2 } = {}) {
+  const byBucket = new Map();
+  for (const row of statRows) {
+    const sep = row.key.lastIndexOf(' | ');
+    const bucket = sep === -1 ? row.key : row.key.slice(0, sep);
+    const model = sep === -1 ? row.key : row.key.slice(sep + 3);
+    if (!byBucket.has(bucket)) byBucket.set(bucket, []);
+    byBucket.get(bucket).push({ model, ...row });
   }
   const out = {};
-  for (const [difficulty, rows] of byDiff) {
+  for (const [bucket, rows] of byBucket) {
     const eligible = rows.filter((r) => r.executions >= minSamples && r.cost_per_success_usd != null);
     const pool = eligible.length ? eligible : rows.filter((r) => r.cost_per_success_usd != null);
-    if (!pool.length) { out[difficulty] = { model: null, reason: 'no_successful_samples' }; continue; }
+    if (!pool.length) { out[bucket] = { model: null, reason: 'no_successful_samples' }; continue; }
     // best = highest success_rate, tie-break by lowest cost_per_success
     pool.sort((a, b) => b.success_rate - a.success_rate || a.cost_per_success_usd - b.cost_per_success_usd);
     const best = pool[0];
-    out[difficulty] = {
+    out[bucket] = {
       model: best.model,
       success_rate: best.success_rate,
       cost_per_success_usd: best.cost_per_success_usd,
@@ -107,6 +112,22 @@ function recommendByDifficulty(outcomes, { minSamples = 2 } = {}) {
     };
   }
   return out;
+}
+
+// For each difficulty, which model is the recommended pick by cost-per-
+// success (lowest), requiring a minimum sample size to avoid noise.
+function recommendByDifficulty(outcomes, { minSamples = 2 } = {}) {
+  return recommendFromStats(statsByDifficultyModel(outcomes), { minSamples });
+}
+
+// Phase A (NemoClaw brain): finer-grained recommendation keyed by the full
+// context_bucket (difficulty|task_kind|lang|paths) rather than difficulty
+// alone. This is what lets the brain pick "the best LLM for THIS function"
+// — e.g. Code Generation in JS over 2-3 files — instead of a coarse
+// difficulty tier. Falls back to recommendByDifficulty at the call site when
+// a bucket has no confident samples (cold start).
+function recommendByContextBucket(outcomes, { minSamples = 2 } = {}) {
+  return recommendFromStats(statsByContextBucket(outcomes), { minSamples });
 }
 
 function formatTable(rows, title) {
@@ -134,11 +155,13 @@ function buildReport(rootDir, { minSamples = 2 } = {}) {
   const byDM = statsByDifficultyModel(outcomes);
   const byCB = statsByContextBucket(outcomes);
   const rec = recommendByDifficulty(outcomes, { minSamples });
+  const recBucket = recommendByContextBucket(outcomes, { minSamples });
   return {
     total_stories: deduped.length,
     by_difficulty_model: byDM,
     by_context_bucket: byCB,
-    recommendations: rec
+    recommendations: rec,
+    recommendations_by_bucket: recBucket
   };
 }
 
@@ -153,6 +176,13 @@ function formatReport(report) {
     const conf = r.low_confidence ? ' ⚠low-confidence' : '';
     parts.push(`- ${diff} → ${r.model} (rate=${r.success_rate}, $/succ=${r.cost_per_success_usd}, n=${r.samples})${conf}`);
   }
+  parts.push('\n## Data-informed recommendation per context bucket');
+  parts.push('(the NemoClaw brain prefers these over the difficulty tier when confident)');
+  for (const [bucket, r] of Object.entries(report.recommendations_by_bucket || {})) {
+    if (!r.model) { parts.push(`- ${bucket}: ${r.reason}`); continue; }
+    const conf = r.low_confidence ? ' ⚠low-confidence' : '';
+    parts.push(`- ${bucket} → ${r.model} (rate=${r.success_rate}, $/succ=${r.cost_per_success_usd}, n=${r.samples})${conf}`);
+  }
   return parts.join('\n');
 }
 
@@ -162,7 +192,9 @@ module.exports = {
   aggregate,
   statsByDifficultyModel,
   statsByContextBucket,
+  recommendFromStats,
   recommendByDifficulty,
+  recommendByContextBucket,
   buildReport,
   formatReport,
   formatTable

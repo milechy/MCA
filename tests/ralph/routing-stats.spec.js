@@ -5,6 +5,7 @@ const {
   aggregate,
   statsByDifficultyModel,
   recommendByDifficulty,
+  recommendByContextBucket,
   buildReport
 } = require('../../src/ralph/routing-stats');
 
@@ -106,6 +107,31 @@ test('recommendByDifficulty reports no_successful_samples when all failed', () =
   const rec = recommendByDifficulty(set, { minSamples: 2 });
   expect(rec.hard.model).toBe(null);
   expect(rec.hard.reason).toBe('no_successful_samples');
+});
+
+test('recommendByContextBucket keys on the full context bucket, not difficulty', () => {
+  const bucket = 'easy|create|js|2-3f';
+  const set = [
+    outcome('S1', 'easy', 'haiku', true, 0.10, 0, bucket),
+    outcome('S2', 'easy', 'haiku', true, 0.10, 0, bucket),
+    outcome('S3', 'easy', 'kimi', false, 0.05, 0, bucket)
+  ];
+  const rec = recommendByContextBucket(set, { minSamples: 2 });
+  expect(rec[bucket].model).toBe('haiku');
+  expect(rec[bucket].success_rate).toBe(1);
+  expect(rec[bucket].low_confidence).toBe(false);
+});
+
+test('recommendByContextBucket tolerates pipe characters inside the bucket key', () => {
+  // bucket itself contains " | "-like separators; the recommender must split
+  // on the LAST " | " (bucket | model), not the first.
+  const bucket = 'medium|modify|js|2-3f';
+  const set = [
+    outcome('S1', 'medium', 'sonnet', true, 0.4, 0, bucket),
+    outcome('S2', 'medium', 'sonnet', true, 0.4, 0, bucket)
+  ];
+  const rec = recommendByContextBucket(set, { minSamples: 2 });
+  expect(rec[bucket].model).toBe('sonnet');
 });
 
 test('buildReport assembles all sections', () => {

@@ -204,3 +204,47 @@ test('Phase 8 #4: explicit unallowlisted executor_model still drops back to Kimi
   expect(r.reason).toBe('executor_model_not_allowed');
   expect(r.ok).toBe(false);
 });
+
+// ============================================================
+// Phase A: NemoClaw brain integration (engages only with richer signal)
+// ============================================================
+
+test('Phase A: a classifier signal routes through the brain (nemoclaw_ source)', () => {
+  const r = routeExecutor({
+    story: {
+      story_id: 'S',
+      difficulty: 'easy', // static would say Kimi…
+      classifier_signal: { task_type: 'Code Generation', prompt_complexity_score: 0.8 } // …but this is hard
+    },
+    prompt_chars: 100
+  });
+  expect(r.routing_source).toBe('nemoclaw_classifier_tier');
+  expect(r.executor_model).toBe('openrouter/openai/gpt-5');
+  expect(r.task_type).toBe('Code Generation');
+});
+
+test('Phase A: a retry escalates the model via the brain', () => {
+  const r = routeExecutor({
+    story: { story_id: 'S', difficulty: 'easy', attempt_number: 1, last_failure_class: 'gate_failure' },
+    prompt_chars: 100
+  });
+  expect(r.routing_source).toBe('nemoclaw_escalated');
+  expect(r.executor_model).toBe('openrouter/anthropic/claude-haiku-4.5'); // base tier 0 → 1
+});
+
+test('Phase A: RALPH_BRAIN=off preserves the legacy static path exactly', () => {
+  const r = routeExecutor({
+    story: { story_id: 'S', difficulty: 'easy', classifier_signal: { prompt_complexity_score: 0.9 } },
+    env: { ...process.env, RALPH_BRAIN: 'off' },
+    prompt_chars: 100
+  });
+  expect(r.routing_source).toBe('difficulty_tier'); // brain bypassed
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+});
+
+test('Phase A: plain first attempt with no signal keeps the static contract', () => {
+  const r = routeExecutor({ story: { difficulty: 'hard' }, prompt_chars: 50 });
+  // unchanged: no classifier, no outcomes, attempt 0 → static ladder
+  expect(r.routing_source).toBe('difficulty_tier');
+  expect(r.reason).toBe('difficulty_tier_hard');
+});
