@@ -45,6 +45,7 @@ node_modules/
 .ralph/mode.json
 .ralph/state.json
 .ralph/brain-decisions.jsonl
+.ralph/shadow-execution.jsonl
 
 # NemoClaw brain — complexity classifier venv + HF model cache (multi-GB)
 scripts/ralph/complexity-classifier/.venv/
