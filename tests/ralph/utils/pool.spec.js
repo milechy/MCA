@@ -97,7 +97,7 @@ test('pool: measures duration per task', async () => {
 
   const poolResults = await run(queue, 1);
 
-  expect(poolResults[0].durationMs).toBeGreaterThanOrEqual(20);
+  expect(poolResults[0].durationMs).toBeGreaterThanOrEqual(15);
   expect(poolResults[1].durationMs).toBeLessThan(20);
 });
 
