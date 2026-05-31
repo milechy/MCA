@@ -1,36 +1,22 @@
-# Phase 9 #2: Aider-based autonomous PR creation.
+# Aider Resolver — brain-routed, escalating, learning (2026-05-31).
 #
-# Replaces the broken OpenHands Resolver path (Phase 9 #1). Issue gets
-# `aider-fix` label → Aider runs on GitHub-hosted runner → branch + PR.
+# Issue `aider-fix` label → Aider runs on a GitHub-hosted runner → branch + PR
+# → auto-merge (only if the test gate is GREEN). The model is NOT a fixed Claude
+# default: the NemoClaw brain (scripts/ralph/ci-select-model.js) classifies the
+# issue, consults the Cloudflare D1 learning store, and picks the cheapest model
+# likely to succeed — escalating one rung per failed attempt (kimi → haiku →
+# sonnet → gpt-5 → opus) until the work is implemented AND tests pass, or the
+# ladder is exhausted (then it asks a human). Each attempt's outcome is written
+# back to D1 so the next issue in the same context bucket learns from it.
 #
-# Why Aider:
-#   - active OSS (45k★, last push 2026-05-22), maintained, no upstream
-#     deprecation
-#   - LiteLLM under the hood = same OpenRouter slug format we already use
-#     for Ralph (openrouter/anthropic/claude-haiku-4.5 etc.)
-#   - simple CLI: read prompt + files in, edit files + git commit out
-#   - no Python-module-not-found class of upstream breakage (Aider's whole
-#     reason for existing IS the CLI surface)
+# Cost: no per-issue model cap blocks completion; the escalation ladder is the
+# bound (≤5 attempts). A high daily safety cap (AIDER_DAILY_CAP_USD, default
+# $100) + a min-balance check are the only money guards.
 #
-# Inputs:
-#   Secrets — already set for Phase 9 #1:
-#     PAT_TOKEN, PAT_USERNAME, LLM_API_KEY (= OPENROUTER_API_KEY)
-#   Variables — already set:
-#     LLM_MODEL (default: openrouter/anthropic/claude-haiku-4.5)
-#
-# Behaviour:
-#   1. Extract any `path/to/file.ext` style backquoted paths from the
-#      issue body — those are the files Aider will edit.
-#   2. Create a feature branch `auto/issue-<N>`.
-#   3. Aider runs headless with the full issue body as prompt, those
-#      files in scope, autonomously commits its diff (one commit).
-#   4. If anything changed, push the branch and open a PR targeting
-#      the repo default branch (`infra/phase0-autonomous-foundation`).
-#   5. If nothing changed, comment on the issue.
-#
-# Cost cap: Aider doesn't have a hard $-cap flag. We rely on the model
-# choice (Haiku 4.5 default ≈ $0.05–0.20/PR) plus the implicit 10-minute
-# step timeout below. If Aider tries to runaway it'll be killed.
+# Secrets: PAT_TOKEN, PAT_USERNAME, LLM_API_KEY (=OPENROUTER_API_KEY),
+#          TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, CLOUDFLARE_API_TOKEN
+# Variables: CLOUDFLARE_ACCOUNT_ID, RALPH_D1_DATABASE_ID, AIDER_TEST_CMD,
+#            AIDER_DAILY_CAP_USD, AIDER_AUTO_MERGE
 
 name: Aider Resolver
 
@@ -52,21 +38,20 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@aider-fix') &&
        (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'COLLABORATOR' || github.event.comment.author_association == 'MEMBER'))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     env:
       OPENROUTER_API_KEY: ${{ secrets.LLM_API_KEY }}
-      # PAT used both for checkout (so the push event re-triggers CI) and for `gh`.
       GH_TOKEN: ${{ secrets.PAT_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
-      MODEL: ${{ vars.LLM_MODEL || 'openrouter/anthropic/claude-haiku-4.5' }}
-      # Aider runs this after each edit (via --auto-test). Keep it scoped to
-      # the ralph suite so we don't pay for the full repo's e2e tests on
-      # every iteration; if the issue touches non-ralph code, override via
-      # repo variable AIDER_TEST_CMD.
       TEST_CMD: ${{ vars.AIDER_TEST_CMD || 'npx playwright test --config playwright.ralph.config.js' }}
-      # Phase 13 #1: outbound Telegram notifications (best-effort no-op if unset).
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # NemoClaw D1 learning store — the brain reads recommendations + writes outcomes.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      RALPH_D1_DATABASE_ID: ${{ vars.RALPH_D1_DATABASE_ID }}
+      NEMOCLAW_CLASSIFIER_BACKEND: heuristic
+      NEMOCLAW_CLASSIFIER_PYTHON: python3
 
     steps:
       - name: Checkout
@@ -78,60 +63,37 @@ jobs:
       - name: Acknowledge on issue
         run: |
           gh issue comment "$ISSUE_NUMBER" \
-            --body "🛠️ Aider Resolver picked up this issue. Model: \`$MODEL\`. Watch progress: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --body "🛠️ Aider Resolver (brain-routed) picked up this issue — it will pick the cheapest capable model and escalate up to Opus until tests pass. Progress: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Pre-flight cost ceiling check
-        # Parallel to Ralph's kimi-cost-tracker.isOverBudget() but for the
-        # Actions path: ask OpenRouter directly. Two gates:
-        #   1. Daily-spend cap (this key) — default $5/day, override via repo
-        #      variable AIDER_DAILY_CAP_USD. Comparable to Ralph's
-        #      RALPH_KIMI_DAILY_BUDGET_USD.
-        #   2. Minimum residual balance (account total) — default $1, override
-        #      via AIDER_MIN_BALANCE_USD. Prevents Aider running on an empty
-        #      account and racking up no-credit error spam.
-        # Either tripping → set step output `blocked=1`; downstream steps
-        # gate on it. Step itself succeeds so the workflow stays green
-        # (not a failure — the issue is bookkeeping, not a bug).
         id: cost_check
         env:
-          DAILY_CAP_USD: ${{ vars.AIDER_DAILY_CAP_USD || '5.00' }}
+          DAILY_CAP_USD: ${{ vars.AIDER_DAILY_CAP_USD || '100.00' }}
           MIN_BALANCE_USD: ${{ vars.AIDER_MIN_BALANCE_USD || '1.00' }}
         run: |
           set -e
-          KEY_INFO=$(curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-            https://openrouter.ai/api/v1/key)
-          CRED_INFO=$(curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-            https://openrouter.ai/api/v1/credits)
-
+          KEY_INFO=$(curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/key)
+          CRED_INFO=$(curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/credits)
           DAILY=$(echo "$KEY_INFO" | jq -r '.data.usage_daily // 0')
           TOTAL_CREDITS=$(echo "$CRED_INFO" | jq -r '.data.total_credits // 0')
           TOTAL_USAGE=$(echo "$CRED_INFO" | jq -r '.data.total_usage // 0')
           BALANCE=$(awk -v c="$TOTAL_CREDITS" -v u="$TOTAL_USAGE" 'BEGIN{printf "%.6f\n", c - u}')
-
-          echo "OpenRouter snapshot: usage_daily=\$$DAILY balance=\$$BALANCE cap_daily=\$$DAILY_CAP_USD min_balance=\$$MIN_BALANCE_USD"
-
-          # Numeric comparison via awk so floats compare correctly.
+          echo "OpenRouter: usage_daily=\$$DAILY balance=\$$BALANCE cap_daily=\$$DAILY_CAP_USD min_balance=\$$MIN_BALANCE_USD"
           DAILY_OVER=$(awk -v d="$DAILY" -v c="$DAILY_CAP_USD" 'BEGIN{print (d >= c) ? 1 : 0}')
           BAL_LOW=$(awk -v b="$BALANCE" -v m="$MIN_BALANCE_USD" 'BEGIN{print (b < m) ? 1 : 0}')
-
           if [ "$DAILY_OVER" = "1" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body \
-              "⛔ Aider Resolver halted: OpenRouter usage_daily (\$$DAILY) ≥ AIDER_DAILY_CAP_USD (\$$DAILY_CAP_USD). Try again tomorrow or raise the cap via repo variable."
+            gh issue comment "$ISSUE_NUMBER" --body "⛔ Halted: OpenRouter usage_daily (\$$DAILY) ≥ safety cap AIDER_DAILY_CAP_USD (\$$DAILY_CAP_USD). Raise the repo variable to continue."
             echo "blocked=1" >> "$GITHUB_OUTPUT"
-            echo "::notice::cost ceiling: daily cap hit (\$$DAILY ≥ \$$DAILY_CAP_USD)"
-            node scripts/ralph/notify-telegram.js "⛔ *Cost ceiling hit* (daily): \$$DAILY ≥ \$$DAILY_CAP_USD. Aider halted on issue #$ISSUE_NUMBER." || true
+            node scripts/ralph/notify-telegram.js "⛔ *Daily safety cap hit*: \$$DAILY ≥ \$$DAILY_CAP_USD. Aider halted on issue #$ISSUE_NUMBER." || true
             exit 0
           fi
           if [ "$BAL_LOW" = "1" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body \
-              "⛔ Aider Resolver halted: OpenRouter balance (\$$BALANCE) < AIDER_MIN_BALANCE_USD (\$$MIN_BALANCE_USD). Top up at https://openrouter.ai/credits."
+            gh issue comment "$ISSUE_NUMBER" --body "⛔ Halted: OpenRouter balance (\$$BALANCE) < AIDER_MIN_BALANCE_USD (\$$MIN_BALANCE_USD). Top up at https://openrouter.ai/credits."
             echo "blocked=1" >> "$GITHUB_OUTPUT"
-            echo "::notice::cost ceiling: low balance (\$$BALANCE < \$$MIN_BALANCE_USD)"
-            node scripts/ralph/notify-telegram.js "⛔ *Low balance*: \$$BALANCE < \$$MIN_BALANCE_USD. Aider halted on issue #$ISSUE_NUMBER — top up OpenRouter." || true
+            node scripts/ralph/notify-telegram.js "⛔ *Low balance*: \$$BALANCE < \$$MIN_BALANCE_USD. Aider halted on issue #$ISSUE_NUMBER." || true
             exit 0
           fi
           echo "blocked=0" >> "$GITHUB_OUTPUT"
-          echo "cost ceiling: OK — proceed."
 
       - name: Set up Python
         if: steps.cost_check.outputs.blocked != '1'
@@ -139,12 +101,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Aider + project deps for --auto-test
+      - name: Install Aider + project deps
         if: steps.cost_check.outputs.blocked != '1'
         run: |
           python -m pip install --upgrade pip
           pip install aider-chat
-          # npm deps for Playwright test runner (Aider's --auto-test invokes them)
           npm ci --prefer-offline --no-audit --fund=false
           npx playwright install --with-deps chromium 2>&1 | tail -5 || true
 
@@ -154,186 +115,121 @@ jobs:
           git config --global user.email "${{ secrets.PAT_USERNAME }}@users.noreply.github.com"
           git config --global user.name  "${{ secrets.PAT_USERNAME }}"
 
-      - name: Extract requested paths from issue body
+      - name: Extract requested paths + build prompt
         if: steps.cost_check.outputs.blocked != '1'
         id: paths
         run: |
-          # Convention: any path in backticks like `src/foo.js` is treated as
-          # a target file. Filters to plausible code paths (has extension and
-          # at least one slash, OR matches a top-level file we whitelist).
-          jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH" > /tmp/body.txt
-          grep -oE '`[A-Za-z0-9_./-]+\.(js|ts|tsx|jsx|md|py|yml|yaml|json|sh)`' /tmp/body.txt \
-            | tr -d '`' | sort -u > /tmp/paths.txt || true
-          echo "extracted paths:"
-          cat /tmp/paths.txt || true
-          # Comma-separated for later steps' logging only
-          paths_csv=$(paste -sd ',' /tmp/paths.txt)
-          echo "csv=$paths_csv" >> "$GITHUB_OUTPUT"
-
-      - name: Create work branch
-        if: steps.cost_check.outputs.blocked != '1'
-        id: branch
-        run: |
-          BR="auto/issue-$ISSUE_NUMBER"
-          # Re-trigger safety: if branch exists remotely, start fresh from default.
-          git checkout -B "$BR" "origin/${{ github.event.repository.default_branch }}"
-          echo "name=$BR" >> "$GITHUB_OUTPUT"
-
-      - name: Write Aider prompt
-        if: steps.cost_check.outputs.blocked != '1'
-        run: |
+          jq -r '.issue.title // ""' "$GITHUB_EVENT_PATH" > /tmp/title.txt
+          jq -r '.issue.body  // ""' "$GITHUB_EVENT_PATH" > /tmp/body.txt
+          grep -oE '`[A-Za-z0-9_./-]+\.(js|ts|tsx|jsx|md|py|yml|yaml|json|sh)`' /tmp/body.txt | tr -d '`' | sort -u > /tmp/paths.txt || true
+          echo "csv=$(paste -sd ',' /tmp/paths.txt)" >> "$GITHUB_OUTPUT"
           {
-            echo "You are working on a GitHub issue. The full text of the issue is below."
+            echo "You are working on a GitHub issue. Implement the change exactly as described."
+            echo "Edit only the files needed. If tests are mentioned, write them."
+            echo "Aider runs the test suite after each edit (--auto-test); fix any failures it"
+            echo "reports before finishing. Prefer toBeCloseTo over toBe for fractional numbers."
             echo ""
-            echo "Please implement the change exactly as described. Edit only the files needed."
-            echo "If tests are mentioned, write them."
-            echo ""
-            echo "The test runner is configured via Aider's --auto-test. After each edit,"
-            echo "Aider will run \`npx playwright test\` automatically and surface failures"
-            echo "back to you. Fix any test failures it reports before considering the work"
-            echo "complete. Pay attention to floating-point comparisons — prefer"
-            echo "toBeCloseTo over toBe for fractional numbers."
-            echo ""
-            echo "Make commits as needed; Aider's default is one commit per response."
-            echo ""
-            echo "--- Issue title ---"
-            jq -r '.issue.title' "$GITHUB_EVENT_PATH"
-            echo ""
-            echo "--- Issue body ---"
-            cat /tmp/body.txt
-          } > /tmp/prompt.txt
-          echo '--- prompt preview (first 80 lines) ---'
-          head -80 /tmp/prompt.txt
+            echo "--- Issue title ---"; cat /tmp/title.txt
+            echo ""; echo "--- Issue body ---"; cat /tmp/body.txt
+          } > /tmp/prompt_base.txt
 
-      - name: Run Aider
-        if: steps.cost_check.outputs.blocked != '1'
-        id: aider
-        run: |
-          set -e
-          # If we extracted paths, pass them. If not, just give Aider the prompt
-          # and let it discover via its repo-map.
-          if [ -s /tmp/paths.txt ]; then
-            mapfile -t FILES < /tmp/paths.txt
-            # Create missing files so Aider can "edit" them (Aider can also CREATE,
-            # but it's friendlier to pre-touch new files).
-            for f in "${FILES[@]}"; do
-              if [ ! -f "$f" ]; then mkdir -p "$(dirname "$f")"; touch "$f"; fi
-            done
-            aider \
-              --model "$MODEL" \
-              --yes \
-              --no-stream \
-              --no-show-model-warnings \
-              --no-attribute-author --no-attribute-committer --no-attribute-co-authored-by \
-              --auto-test \
-              --test-cmd "$TEST_CMD" \
-              --message-file /tmp/prompt.txt \
-              "${FILES[@]}"
-          else
-            aider \
-              --model "$MODEL" \
-              --yes \
-              --no-stream \
-              --no-show-model-warnings \
-              --no-attribute-author --no-attribute-committer --no-attribute-co-authored-by \
-              --auto-test \
-              --test-cmd "$TEST_CMD" \
-              --message-file /tmp/prompt.txt
-          fi
-
-      - name: Open PR (or comment if no changes)
+      - name: Brain-routed escalating Aider loop
         if: steps.cost_check.outputs.blocked != '1'
         run: |
-          set -e
+          set +e
           DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
-          BR="${{ steps.branch.outputs.name }}"
-          AHEAD=$(git rev-list --count "origin/$DEFAULT_BRANCH..HEAD")
-          echo "commits ahead of $DEFAULT_BRANCH: $AHEAD"
-          if [ "$AHEAD" -eq 0 ]; then
-            gh issue comment "$ISSUE_NUMBER" \
-              --body "Aider produced no diff on this attempt. Manual investigation needed. Run logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BR="auto/issue-$ISSUE_NUMBER"
+          TITLE="$(cat /tmp/title.txt)"
+          PATHS_CSV="${{ steps.paths.outputs.csv }}"
+          MAX_ATTEMPTS=5   # ladder length: kimi → haiku → sonnet → gpt-5 → opus
+          LAST_FAILURE=""
+          SUCCESS=0
+          STORY_ID="issue-$ISSUE_NUMBER"
+
+          for attempt in $(seq 0 $((MAX_ATTEMPTS-1))); do
+            echo "::group::attempt $attempt"
+            MODEL=$(node scripts/ralph/ci-select-model.js \
+              --story-id "$STORY_ID" --title "$TITLE" --body-file /tmp/body.txt \
+              --paths "$PATHS_CSV" --attempt "$attempt" --last-failure "$LAST_FAILURE" \
+              --out /tmp/decision.json)
+            SEL_EXIT=$?
+            CTX_BUCKET=$(jq -r '.context_bucket // ""' /tmp/decision.json 2>/dev/null)
+            DIFFICULTY=$(jq -r '.difficulty // ""' /tmp/decision.json 2>/dev/null)
+            echo "brain decision: $(cat /tmp/decision.json 2>/dev/null)"
+            echo "attempt $attempt → model=$MODEL"
+
+            # Fresh branch from default each attempt (discard prior attempt's commits).
+            git checkout -B "$BR" "origin/$DEFAULT_BRANCH"
+
+            # On a retry, hand the stronger model the previous failure log.
+            cp /tmp/prompt_base.txt /tmp/prompt.txt
+            if [ "$attempt" -gt 0 ] && [ -s /tmp/gate.log ]; then
+              { echo ""; echo "--- A weaker model's previous attempt FAILED its tests. Fix these: ---"; tail -40 /tmp/gate.log; } >> /tmp/prompt.txt
+            fi
+
+            if [ -s /tmp/paths.txt ]; then
+              mapfile -t FILES < /tmp/paths.txt
+              for f in "${FILES[@]}"; do [ -f "$f" ] || { mkdir -p "$(dirname "$f")"; touch "$f"; }; done
+              aider --model "$MODEL" --yes --no-stream --no-show-model-warnings \
+                --no-attribute-author --no-attribute-committer --no-attribute-co-authored-by \
+                --auto-test --test-cmd "$TEST_CMD" --message-file /tmp/prompt.txt "${FILES[@]}" || true
+            else
+              aider --model "$MODEL" --yes --no-stream --no-show-model-warnings \
+                --no-attribute-author --no-attribute-committer --no-attribute-co-authored-by \
+                --auto-test --test-cmd "$TEST_CMD" --message-file /tmp/prompt.txt || true
+            fi
+
+            AHEAD=$(git rev-list --count "origin/$DEFAULT_BRANCH..HEAD")
+            if [ "$AHEAD" -eq 0 ]; then
+              echo "no diff produced"
+              LAST_FAILURE="no_diff"
+              node scripts/ralph/ci-record-outcome.js --story-id "$STORY_ID" --context-bucket "$CTX_BUCKET" --difficulty "$DIFFICULTY" --model "$MODEL" --attempt "$attempt" --succeeded false --failure-class no_diff || true
+              echo "::endgroup::"
+              [ "$SEL_EXIT" = "3" ] && break || continue
+            fi
+
+            echo "test gate: $TEST_CMD"
+            if eval "$TEST_CMD" > /tmp/gate.log 2>&1; then
+              echo "✅ test gate passed on attempt $attempt with $MODEL"
+              node scripts/ralph/ci-record-outcome.js --story-id "$STORY_ID" --context-bucket "$CTX_BUCKET" --difficulty "$DIFFICULTY" --model "$MODEL" --attempt "$attempt" --succeeded true || true
+              SUCCESS=1; WIN_MODEL="$MODEL"; WIN_ATTEMPT="$attempt"
+              echo "::endgroup::"; break
+            else
+              echo "::warning::test gate failed on attempt $attempt with $MODEL"
+              tail -20 /tmp/gate.log || true
+              LAST_FAILURE="gate_failure"
+              node scripts/ralph/ci-record-outcome.js --story-id "$STORY_ID" --context-bucket "$CTX_BUCKET" --difficulty "$DIFFICULTY" --model "$MODEL" --attempt "$attempt" --succeeded false --failure-class gate_failure || true
+              echo "::endgroup::"
+              [ "$SEL_EXIT" = "3" ] && break || continue
+            fi
+          done
+
+          if [ "$SUCCESS" != "1" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "⛔ Escalation exhausted (tried up to Opus) without a green implementation. Needs a human. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            node scripts/ralph/notify-telegram.js "⛔ Issue #$ISSUE_NUMBER: escalation exhausted (kimi→opus) without passing tests — needs human." || true
             exit 0
           fi
-          # --force so re-runs against the same issue can re-push cleanly.
-          # We deliberately don't use --force-with-lease: the local branch
-          # is always carved fresh from origin/$DEFAULT_BRANCH earlier in
-          # the job and has no tracking history, so a lease check has
-          # nothing to compare against. The branch namespace auto/issue-<N>
-          # is owned exclusively by this workflow; no risk of clobbering a
-          # parallel human contribution there.
+
+          # Success → push the winning attempt, open PR, auto-merge (gate already green).
           git push -u --force origin "$BR"
           {
             echo "Closes #${ISSUE_NUMBER}."
             echo ""
-            echo "Generated by [Aider Resolver](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) using \`$MODEL\`."
-            echo ""
-            echo "Paths extracted from issue body: \`${{ steps.paths.outputs.csv }}\`"
+            echo "Generated by [Aider Resolver](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) — NemoClaw brain picked \`$WIN_MODEL\` (succeeded on attempt $WIN_ATTEMPT)."
           } > /tmp/pr_body.md
-          PR_URL=$(gh pr create \
-            --base  "$DEFAULT_BRANCH" \
-            --head  "$BR" \
-            --title "Auto-fix #${ISSUE_NUMBER}: $(jq -r '.issue.title' "$GITHUB_EVENT_PATH")" \
-            --body-file /tmp/pr_body.md)
-          echo "PR opened: $PR_URL"
+          PR_URL=$(gh pr create --base "$DEFAULT_BRANCH" --head "$BR" --title "Auto-fix #${ISSUE_NUMBER}: $TITLE" --body-file /tmp/pr_body.md)
           PR_NUM=$(echo "$PR_URL" | sed -E 's|.*/pull/||')
+          echo "PR opened: $PR_URL (model $WIN_MODEL)"
 
-          # Phase 16: HARD TEST GATE before merge. Aider's --auto-test iterates
-          # during generation but does NOT block merge — so a red suite (e.g.
-          # the queue/pool/report chain that merged with a wrong import path +
-          # async/sync mismatch) used to land on main. Now we re-run the
-          # project's test command against the pushed branch; only a GREEN
-          # suite is allowed to merge. Red → leave the PR open for review +
-          # notify, never merge.
-          echo "running test gate: $TEST_CMD"
-          if eval "$TEST_CMD" > /tmp/gate.log 2>&1; then
-            echo "✅ test gate passed"
-            TEST_GATE=pass
-          else
-            echo "::warning::test gate FAILED — PR left open, not merging"
-            tail -30 /tmp/gate.log || true
-            TEST_GATE=fail
-          fi
-          if [ "$TEST_GATE" = "fail" ]; then
-            gh pr comment "$PR_URL" --body "⛔ Auto-merge blocked: the test suite is failing on this branch. Left open for review. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            node scripts/ralph/notify-telegram.js "⛔ PR #$PR_NUM (issue #$ISSUE_NUMBER) opened but *tests fail* — not merged, needs review." || true
-            exit 0
-          fi
-
-          # Phase 9 #6 / #6b / #6c: enable auto-merge so the PR squash-merges
-          # itself.  History:
-          #   #6:  call `gh pr merge --auto`. Failed silently with "clean status"
-          #        when repo had no required checks (PR #216 evidence).
-          #   #6b: detect "clean status" string in stderr, fall back to immediate
-          #        merge. Worked for PR #218, #221, #223+, etc.
-          #   #6c: GitHub returns *two* different GraphQL messages for the same
-          #        logical "no required checks" condition: "Pull request is in
-          #        clean status" AND "Protected branch rules not configured for
-          #        this branch". PR #222 (range) and #226 (zip) hit the second
-          #        variant and got stuck open.
-          # Simplification: stop trying to discriminate by error message. Any
-          # --auto failure → immediately attempt a plain merge. If THAT fails
-          # too, leave the PR open and warn.
-          #
-          # Opt-out via repo variable AIDER_AUTO_MERGE=0 (operator escape
-          # hatch for issues they want to review by hand).
-          # (PR_NUM + the test gate were computed above; reaching here means GREEN.)
           if [ "${{ vars.AIDER_AUTO_MERGE || '1' }}" = "1" ]; then
             if gh pr merge "$PR_URL" --auto --squash --delete-branch 2>/tmp/auto_err.log; then
-              echo "auto-merge enabled — will merge when checks pass"
-              node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM opened for issue #$ISSUE_NUMBER (auto-merge pending) — model \`$MODEL\`" || true
+              node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM (issue #$ISSUE_NUMBER) auto-merge pending — model \`$WIN_MODEL\` (attempt $WIN_ATTEMPT)" || true
+            elif gh pr merge "$PR_URL" --squash --delete-branch 2>/tmp/imm_err.log; then
+              node scripts/ralph/notify-telegram.js "✅ *Auto-merged* PR #$PR_NUM (issue #$ISSUE_NUMBER) — model \`$WIN_MODEL\` (attempt $WIN_ATTEMPT)" || true
             else
-              echo "auto-merge unavailable; trying immediate merge"
-              cat /tmp/auto_err.log
-              if gh pr merge "$PR_URL" --squash --delete-branch 2>/tmp/imm_err.log; then
-                echo "immediate-merge succeeded"
-                node scripts/ralph/notify-telegram.js "✅ *Auto-merged* PR #$PR_NUM (issue #$ISSUE_NUMBER) — model \`$MODEL\`" || true
-              else
-                echo "::warning::both --auto and immediate merge failed; PR left open"
-                cat /tmp/imm_err.log
-                node scripts/ralph/notify-telegram.js "⚠️ PR #$PR_NUM (issue #$ISSUE_NUMBER) could not auto-merge — needs manual review." || true
-              fi
+              cat /tmp/auto_err.log /tmp/imm_err.log
+              node scripts/ralph/notify-telegram.js "⚠️ PR #$PR_NUM (issue #$ISSUE_NUMBER) could not auto-merge — needs manual review." || true
             fi
           else
-            echo "AIDER_AUTO_MERGE=0 — leaving PR open for manual review."
-            node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM opened for issue #$ISSUE_NUMBER — manual review (auto-merge off)" || true
+            node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM (issue #$ISSUE_NUMBER) — manual review (auto-merge off), model \`$WIN_MODEL\`" || true
           fi

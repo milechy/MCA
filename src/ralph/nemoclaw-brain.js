@@ -27,10 +27,11 @@ const { recommendByContextBucket } = require('./routing-stats');
 // escalation has a single source of truth. Filtered against MODEL_PRICING at
 // call time so we never route to an unpriced/unallowlisted model.
 const ESCALATION_LADDER = Object.freeze([
-  'openrouter/moonshotai/kimi-k2.6',     // tier 0  trivial / easy
-  'openrouter/anthropic/claude-haiku-4.5', // tier 1  medium
+  'openrouter/moonshotai/kimi-k2.6',        // tier 0  trivial / easy
+  'openrouter/anthropic/claude-haiku-4.5',  // tier 1  medium
   'openrouter/anthropic/claude-sonnet-4.6', // tier 2  hard
-  'openrouter/openai/gpt-5'              // tier 3  architectural
+  'openrouter/openai/gpt-5',                // tier 3  architectural
+  'openrouter/anthropic/claude-opus-4.7'    // tier 4  last resort — "must implement"
 ]);
 
 // difficulty string → ladder index, used only when no classifier signal is
@@ -131,6 +132,7 @@ function selectModel({
   story = {},
   classifierSignal = null,
   outcomes = [],
+  learnedRec = null,
   attempt = 0,
   lastFailureClass = null,
   spentUsd = 0,
@@ -184,9 +186,20 @@ function selectModel({
   }
 
   // 3. First attempt — confident learned pick for this function/bucket wins.
-  const learned = pickLearned({
-    outcomes, contextBucket: story && story.context_bucket, ladder, minSamples, successFloor
-  });
+  //    learnedRec (e.g. from the D1 store in CI) is honored directly when
+  //    confident; otherwise fall back to aggregating the local outcomes array.
+  let learned = null;
+  if (learnedRec && learnedRec.model && has(MODEL_PRICING, learnedRec.model)
+      && !learnedRec.low_confidence
+      && Number(learnedRec.samples) >= minSamples
+      && Number(learnedRec.success_rate) >= successFloor) {
+    learned = { model: learnedRec.model, tier: ladder.indexOf(learnedRec.model), rec: learnedRec };
+  }
+  if (!learned) {
+    learned = pickLearned({
+      outcomes, contextBucket: story && story.context_bucket, ladder, minSamples, successFloor
+    });
+  }
   if (learned) {
     return finalize({
       model: learned.model, source: 'learned',

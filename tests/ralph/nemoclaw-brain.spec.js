@@ -11,6 +11,7 @@ const KIMI = 'openrouter/moonshotai/kimi-k2.6';
 const HAIKU = 'openrouter/anthropic/claude-haiku-4.5';
 const SONNET = 'openrouter/anthropic/claude-sonnet-4.6';
 const GPT5 = 'openrouter/openai/gpt-5';
+const OPUS = 'openrouter/anthropic/claude-opus-4.7';
 
 // Build an outcomes record matching the shape routing-stats expects.
 function outcome({ story_id, context_bucket, model, succeeded, cost_usd = 0.05 }) {
@@ -115,6 +116,24 @@ test('confident learned recommendation wins over the cold-start tier', () => {
   expect(r.model).toBe(HAIKU);
 });
 
+test('a confident learnedRec (e.g. from D1) is honored directly', () => {
+  const r = selectModel({
+    story: { story_id: 'S', context_bucket: 'easy|create|js|2-3f', difficulty: 'easy' },
+    learnedRec: { model: SONNET, success_rate: 0.9, samples: 5, low_confidence: false }
+  });
+  expect(r.source).toBe('learned');
+  expect(r.model).toBe(SONNET);
+});
+
+test('a low-confidence learnedRec is ignored (falls back to tier)', () => {
+  const r = selectModel({
+    story: { story_id: 'S', context_bucket: 'b', difficulty: 'easy' },
+    learnedRec: { model: SONNET, success_rate: 0.9, samples: 1, low_confidence: true }
+  });
+  expect(r.source).not.toBe('learned');
+  expect(r.model).toBe(KIMI);
+});
+
 test('low-sample history does NOT override the cold-start tier', () => {
   const bucket = 'easy|create|js|2-3f';
   const outcomes = [outcome({ story_id: 'a', context_bucket: bucket, model: SONNET, succeeded: true })];
@@ -143,11 +162,18 @@ test('transient failure retries the same tier (no rung bump)', () => {
   expect(r.model).toBe(HAIKU); // stays tier 1
 });
 
-test('exhausting the ladder flags human escalation', () => {
-  const story = { story_id: 'S', difficulty: 'architectural' }; // base tier 3 (top)
+test('architectural escalates to Opus (last resort) before exhausting', () => {
+  const story = { story_id: 'S', difficulty: 'architectural' }; // base tier 3
   const r = selectModel({ story, attempt: 1, lastFailureClass: 'gate_failure' });
-  expect(r.model).toBe(GPT5); // capped at top
-  expect(r.escalate_to_human).toBe(true);
+  expect(r.model).toBe(OPUS); // tier 4 — must-implement last resort
+  expect(r.escalate_to_human).toBe(false);
+});
+
+test('exhausting the full ladder (past Opus) flags human escalation', () => {
+  const story = { story_id: 'S', difficulty: 'architectural' }; // base tier 3
+  const r = selectModel({ story, attempt: 2, lastFailureClass: 'gate_failure' });
+  expect(r.model).toBe(OPUS); // capped at top (tier 4)
+  expect(r.escalate_to_human).toBe(true); // wanted tier 5 > top
 });
 
 test('per-story cost cap flips escalate_to_human', () => {
