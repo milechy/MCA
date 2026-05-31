@@ -53,14 +53,40 @@ function compareBackends(openclaw, kimi) {
     else cheaper = 'tie';
   }
 
+  // Correctness (only present when a verifyPatch ran). tests_passed is
+  // true/false when measured, null/undefined when not.
+  const ocTests = openclaw.tests_passed;
+  const kimiTests = kimi.tests_passed;
+  let correctness_agreement = 'not_measured';
+  if (ocTests != null && kimiTests != null) {
+    if (ocTests && kimiTests) correctness_agreement = 'both_pass';
+    else if (ocTests) correctness_agreement = 'only_openclaw';
+    else if (kimiTests) correctness_agreement = 'only_kimi';
+    else correctness_agreement = 'neither';
+  }
+
   return {
     both_produced_valid_patch: ocOk && kimiOk,
     agreement,
     faster,
     cheaper,
     openclaw_ok: ocOk,
-    kimi_ok: kimiOk
+    kimi_ok: kimiOk,
+    both_tests_passed: ocTests === true && kimiTests === true,
+    correctness_agreement
   };
+}
+
+// Run a patch verifier (apply → test → revert) without ever throwing into the
+// comparison. Returns { tests_passed, correctness_reason }.
+function safeVerify(verifyPatch, backendResult) {
+  if (typeof verifyPatch !== 'function' || backendResult.ok !== true) return {};
+  try {
+    const v = verifyPatch(backendResult) || {};
+    return { tests_passed: v.tests_passed == null ? null : v.tests_passed, correctness_reason: v.reason || null };
+  } catch (e) {
+    return { tests_passed: null, correctness_reason: String((e && e.message) || e) };
+  }
 }
 
 // Run BOTH backends for one task and return a structured comparison. Runners
@@ -74,6 +100,7 @@ function runShadowComparison({
   env = process.env,
   runOpenClaw,
   runOpenCodeKimi,
+  verifyPatch = null,
   clock = () => Date.now()
 } = {}) {
   if (!task) return { ok: false, reason: 'task_required' };
@@ -94,6 +121,12 @@ function runShadowComparison({
 
   const openclaw = normalizeBackendResult(oc.result, { duration_ms: oc.duration_ms });
   const opencode_kimi = normalizeBackendResult(kimi.result, { duration_ms: kimi.duration_ms });
+
+  // Correctness gate (optional): apply each valid patch and run its tests.
+  if (typeof verifyPatch === 'function') {
+    Object.assign(openclaw, safeVerify(verifyPatch, { ...openclaw, backend: 'openclaw' }));
+    Object.assign(opencode_kimi, safeVerify(verifyPatch, { ...opencode_kimi, backend: 'opencode_kimi' }));
+  }
 
   return {
     ok: true,
@@ -130,28 +163,51 @@ function summarizeShadowLog(records = []) {
   const n = records.length;
   if (!n) return { samples: 0, verdict: 'no_data' };
   let bothValid = 0, openclawValid = 0, kimiValid = 0, openclawFaster = 0;
+  let measured = 0, openclawPass = 0, kimiPass = 0;
   for (const r of records) {
     const c = r.comparison || {};
     if (r.openclaw && r.openclaw.ok) openclawValid += 1;
     if (r.opencode_kimi && r.opencode_kimi.ok) kimiValid += 1;
     if (c.both_produced_valid_patch) bothValid += 1;
     if (c.faster === 'openclaw') openclawFaster += 1;
+    // Correctness: only count records where BOTH backends' tests were measured.
+    const ocT = r.openclaw && r.openclaw.tests_passed;
+    const kT = r.opencode_kimi && r.opencode_kimi.tests_passed;
+    if (ocT != null && kT != null) {
+      measured += 1;
+      if (ocT === true) openclawPass += 1;
+      if (kT === true) kimiPass += 1;
+    }
   }
   const openclawRate = openclawValid / n;
   const kimiRate = kimiValid / n;
-  // Migration-ready heuristic: OpenClaw matches or beats kimi's valid-patch
-  // rate over a meaningful sample. The operator still makes the call.
-  const verdict = n < 5 ? 'insufficient_samples'
-    : openclawRate >= kimiRate ? 'openclaw_competitive'
-      : 'openclaw_behind';
-  return {
+
+  const out = {
     samples: n,
     openclaw_valid_rate: Number(openclawRate.toFixed(3)),
     kimi_valid_rate: Number(kimiRate.toFixed(3)),
     both_valid: bothValid,
     openclaw_faster_count: openclawFaster,
-    verdict
+    correctness_measured: measured
   };
+
+  // Prefer a CORRECTNESS verdict (tests actually pass) when we have enough
+  // measured samples; otherwise fall back to the weaker validity verdict and
+  // say so. The operator makes the final migration call.
+  if (measured >= 5) {
+    const ocPassRate = openclawPass / measured;
+    const kimiPassRate = kimiPass / measured;
+    out.openclaw_test_pass_rate = Number(ocPassRate.toFixed(3));
+    out.kimi_test_pass_rate = Number(kimiPassRate.toFixed(3));
+    out.verdict = ocPassRate >= kimiPassRate ? 'openclaw_competitive_on_correctness' : 'openclaw_behind_on_correctness';
+    out.verdict_basis = 'correctness';
+  } else {
+    out.verdict = n < 5 ? 'insufficient_samples'
+      : openclawRate >= kimiRate ? 'openclaw_competitive_on_validity_only'
+        : 'openclaw_behind';
+    out.verdict_basis = measured > 0 ? 'validity_correctness_pending' : 'validity_only';
+  }
+  return out;
 }
 
 module.exports = {

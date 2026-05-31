@@ -98,7 +98,7 @@ test('recordShadowComparison appends a JSONL line', () => {
   expect(JSON.parse(lines[0]).comparison.both_produced_valid_patch).toBe(true);
 });
 
-test('summarizeShadowLog reports a migration verdict', () => {
+test('summarizeShadowLog reports a validity verdict when correctness is unmeasured', () => {
   expect(summarizeShadowLog([]).verdict).toBe('no_data');
 
   const valid = { openclaw: { ok: true }, opencode_kimi: { ok: true }, comparison: { both_produced_valid_patch: true, faster: 'openclaw' } };
@@ -106,11 +106,38 @@ test('summarizeShadowLog reports a migration verdict', () => {
   expect(small.verdict).toBe('insufficient_samples');
 
   const big = summarizeShadowLog(Array.from({ length: 6 }, () => valid));
-  expect(big.verdict).toBe('openclaw_competitive');
+  expect(big.verdict).toBe('openclaw_competitive_on_validity_only');
+  expect(big.verdict_basis).toBe('validity_only');
   expect(big.openclaw_valid_rate).toBe(1);
 
   const behind = summarizeShadowLog([
     ...Array.from({ length: 5 }, () => ({ openclaw: { ok: false }, opencode_kimi: { ok: true }, comparison: {} }))
   ]);
   expect(behind.verdict).toBe('openclaw_behind');
+});
+
+test('summarizeShadowLog prefers a correctness verdict once tests are measured', () => {
+  const passBoth = { openclaw: { ok: true, tests_passed: true }, opencode_kimi: { ok: true, tests_passed: true }, comparison: {} };
+  const r = summarizeShadowLog(Array.from({ length: 6 }, () => passBoth));
+  expect(r.verdict).toBe('openclaw_competitive_on_correctness');
+  expect(r.verdict_basis).toBe('correctness');
+  expect(r.openclaw_test_pass_rate).toBe(1);
+  expect(r.correctness_measured).toBe(6);
+
+  const ocBehind = { openclaw: { ok: true, tests_passed: false }, opencode_kimi: { ok: true, tests_passed: true }, comparison: {} };
+  const behind = summarizeShadowLog(Array.from({ length: 6 }, () => ocBehind));
+  expect(behind.verdict).toBe('openclaw_behind_on_correctness');
+});
+
+test('runShadowComparison attaches tests_passed via verifyPatch', () => {
+  const result = runShadowComparison({
+    task: 'Add a util + test',
+    runOpenClaw: () => ({ ok: true, candidate_patch_path: 'a' }),
+    runOpenCodeKimi: () => ({ ok: true, candidate_patch_path: 'b' }),
+    verifyPatch: (backend) => ({ tests_passed: backend.backend === 'openclaw' }),
+    clock: steppedClock()
+  });
+  expect(result.openclaw.tests_passed).toBe(true);
+  expect(result.opencode_kimi.tests_passed).toBe(false);
+  expect(result.comparison.correctness_agreement).toBe('only_openclaw');
 });
