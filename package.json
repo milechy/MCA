@@ -21,6 +21,7 @@
     "telegram:real-opencode-smoke": "node scripts/telegram/real-opencode-operational-smoke.js",
     "ralph:real-external-agent-smoke": "node scripts/ralph/real-external-agent-smoke.js",
     "ralph:openclaw-shadow-smoke": "node scripts/ralph/openclaw-shadow-smoke.js",
+    "ralph:openclaw-shadow-batch": "node scripts/ralph/openclaw-shadow-batch.js",
     "ralph:classifier-server": "scripts/ralph/complexity-classifier/.venv/bin/python scripts/ralph/complexity-classifier/classify.py --backend nvidia --serve --port 8077",
     "ralph:autonomous-daemon": "node scripts/ralph/autonomous-daemon.js",
     "telegram:real-transport-guard": "node scripts/telegram/real-transport-guard.js",
