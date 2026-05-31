@@ -43,8 +43,39 @@ export function parseUpdate(update = {}) {
   if (!msg) return { ok: false, reason: 'no_message' };
   const text = (msg.text || '').trim();
   const chatId = msg.chat && msg.chat.id;
-  if (!text) return { ok: false, reason: 'empty_text', chatId };
-  return { ok: true, text, chatId, from: msg.from && msg.from.username };
+  const threadId = msg.message_thread_id || null; // forum/topic id, if any
+  if (!text) return { ok: false, reason: 'empty_text', chatId, threadId };
+  return { ok: true, text, chatId, threadId, from: msg.from && msg.from.username };
+}
+
+// Multi-project routing key. One bot serves many projects by binding each
+// Telegram chat (or forum topic) to a different GitHub repo. Key = chat+thread
+// so a single forum supergroup with a topic-per-project works, and separate
+// groups/DMs also work (threadId null → ":0").
+export function routeKey(chatId, threadId) {
+  return `${chatId}:${threadId || 0}`;
+}
+
+// Validate an "owner/name" repo slug, optionally against a comma-separated
+// allowlist. Empty allowlist → any well-formed slug is accepted.
+export function repoAllowed(repo, allowedRepos = '') {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ''))) return false;
+  const list = String(allowedRepos || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length === 0 || list.includes(repo);
+}
+
+// Parse the /project (multi-project routing) command:
+//   /project owner/repo      → bind this chat/topic to that repo
+//   /project | /project show → report the current binding
+//   /project clear|none      → unbind (fall back to the default repo)
+// Returns null when the text is not a /project command.
+export function parseProjectCommand(text = '') {
+  const m = String(text).trim().match(/^\/?(project|proj|repo)\b\s*(.*)$/i);
+  if (!m) return null;
+  const arg = (m[2] || '').trim();
+  if (!arg || /^show$/i.test(arg)) return { action: 'show' };
+  if (/^(clear|none|unset|reset)$/i.test(arg)) return { action: 'clear' };
+  return { action: 'set', repo: arg.replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/, '') };
 }
 
 // A few control phrases bypass the LLM (cheap, deterministic).
@@ -183,5 +214,10 @@ export const HELP_TEXT = [
   'I expand it into a GitHub issue, the resolver writes the code, opens a PR',
   'and auto-merges. You get a message when it lands.',
   '',
-  'Commands: status / help / stop'
+  '複数プロジェクト: チャット/トピックごとに紐付け',
+  '  /project owner/repo  … このチャット/トピックを対象リポジトリに紐付け',
+  '  /project              … 現在の紐付けを表示',
+  '  /project clear        … 紐付け解除（既定リポジトリに戻る）',
+  '',
+  'Commands: status / help / stop / project'
 ].join('\n');

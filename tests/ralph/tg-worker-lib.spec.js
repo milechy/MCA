@@ -96,3 +96,37 @@ test('buildTelegramReply builds a sendMessage form post', () => {
   expect(r.init.body).toContain('chat_id=5');
   expect(r.init.body).toContain('text=done');
 });
+
+// ---- multi-project routing (Option B) ----------------------------------
+
+test('parseUpdate captures the forum topic thread id', () => {
+  const r = lib.parseUpdate({ message: { text: 'hi', chat: { id: 9 }, message_thread_id: 42 } });
+  expect(r.chatId).toBe(9);
+  expect(r.threadId).toBe(42);
+  const noTopic = lib.parseUpdate({ message: { text: 'hi', chat: { id: 9 } } });
+  expect(noTopic.threadId).toBe(null);
+});
+
+test('routeKey combines chat + thread (null thread → :0)', () => {
+  expect(lib.routeKey(9, 42)).toBe('9:42');
+  expect(lib.routeKey(9, null)).toBe('9:0');
+});
+
+test('repoAllowed validates owner/name and honors an allowlist', () => {
+  expect(lib.repoAllowed('milechy/MCA')).toBe(true);
+  expect(lib.repoAllowed('not-a-repo')).toBe(false);
+  expect(lib.repoAllowed('a/b', 'a/b,c/d')).toBe(true);
+  expect(lib.repoAllowed('x/y', 'a/b,c/d')).toBe(false);
+});
+
+test('parseProjectCommand parses set/show/clear (and non-commands)', () => {
+  expect(lib.parseProjectCommand('/project milechy/MCA')).toEqual({ action: 'set', repo: 'milechy/MCA' });
+  expect(lib.parseProjectCommand('/proj a/b')).toEqual({ action: 'set', repo: 'a/b' });
+  expect(lib.parseProjectCommand('/project')).toEqual({ action: 'show' });
+  expect(lib.parseProjectCommand('/project clear')).toEqual({ action: 'clear' });
+  expect(lib.parseProjectCommand('add a util')).toBe(null);
+});
+
+test('parseProjectCommand strips a github URL to owner/repo', () => {
+  expect(lib.parseProjectCommand('/project https://github.com/milechy/MCA.git').repo).toBe('milechy/MCA');
+});

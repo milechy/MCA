@@ -24,6 +24,9 @@ import {
   extractIssueJson,
   buildGithubIssueRequest,
   buildTelegramReply,
+  routeKey,
+  repoAllowed,
+  parseProjectCommand,
   HELP_TEXT
 } from './lib.mjs';
 import {
@@ -50,9 +53,53 @@ async function llm(req) {
   return json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
 }
 
+// ---- multi-project repo routing ----------------------------------------
+// A Telegram chat/topic can be bound to a specific GitHub repo (stored in KV
+// under `route:<chat:thread>`). Unbound → fall back to the default GITHUB_REPO,
+// so single-project setups behave exactly as before.
+async function getRoute(env, key) {
+  if (!env.REFINE_KV) return null;
+  try { return await env.REFINE_KV.get(`route:${key}`); } catch { return null; }
+}
+async function setRoute(env, key, repo) {
+  if (env.REFINE_KV) { try { await env.REFINE_KV.put(`route:${key}`, repo); } catch { /* best effort */ } }
+}
+async function clearRoute(env, key) {
+  if (env.REFINE_KV) { try { await env.REFINE_KV.delete(`route:${key}`); } catch { /* best effort */ } }
+}
+async function resolveRepo(env, key) {
+  return (await getRoute(env, key)) || env.GITHUB_REPO;
+}
+
+// Handle the /project routing command. Returns true if it consumed the message.
+async function handleProjectCommand(env, chatId, key, cmd) {
+  if (cmd.action === 'show') {
+    const bound = await getRoute(env, key);
+    await reply(env, chatId, bound
+      ? `📌 このチャット/トピックは \`${bound}\` に紐付いています。`
+      : `📌 個別の紐付けなし → 既定 \`${env.GITHUB_REPO || '(未設定)'}\` を使用。\n紐付け: \`/project owner/repo\``);
+    return true;
+  }
+  if (cmd.action === 'clear') {
+    await clearRoute(env, key);
+    await reply(env, chatId, `🧹 紐付けを解除しました。既定 \`${env.GITHUB_REPO || '(未設定)'}\` に戻ります。`);
+    return true;
+  }
+  // set
+  if (!repoAllowed(cmd.repo, env.ALLOWED_REPOS)) {
+    await reply(env, chatId, env.ALLOWED_REPOS
+      ? `⚠️ \`${cmd.repo}\` は許可リスト(ALLOWED_REPOS)にありません。`
+      : `⚠️ \`owner/repo\` 形式で指定してください。例: \`/project milechy/MCA\``);
+    return true;
+  }
+  await setRoute(env, key, cmd.repo);
+  await reply(env, chatId, `✅ このチャット/トピックを \`${cmd.repo}\` に紐付けました。以降ここでのアイデア/要件はこのリポジトリへ。`);
+  return true;
+}
+
 // ---- quick one-issue flow (Phase 13 #2) --------------------------------
 
-async function handleQuickIssue(env, chatId, text, from) {
+async function handleQuickIssue(env, chatId, text, from, repo) {
   await reply(env, chatId, '⏳ 受け取りました。issue に展開しています…');
   const orReq = buildOpenRouterRequest({ apiKey: env.OPENROUTER_API_KEY, model: env.LLM_MODEL, userText: text });
   if (!orReq.ok) { await reply(env, chatId, '⚠️ 設定エラー: OPENROUTER_API_KEY 未設定'); return; }
@@ -60,9 +107,10 @@ async function handleQuickIssue(env, chatId, text, from) {
   try { issue = extractIssueJson(await llm(orReq)); } catch (e) { await reply(env, chatId, `⚠️ LLM 展開に失敗: ${e.message}`); return; }
   if (!issue) { await reply(env, chatId, '⚠️ うまく展開できませんでした。対象ファイルや欲しい挙動をもう少し具体的に。'); return; }
   if (!issue.feasible) { await reply(env, chatId, `🤔 自動化には大きすぎ/曖昧かも:\n${issue.reason}\n小さく切り出して再依頼を。`); return; }
+  const targetRepo = repo || env.GITHUB_REPO;
   const ghReq = buildGithubIssueRequest({
-    token: env.GITHUB_PAT, repo: env.GITHUB_REPO, title: issue.title,
-    body: `${issue.body}\n\n---\n_filed from Telegram by @${from || 'user'}_`, labels: ['aider-fix']
+    token: env.GITHUB_PAT, repo: targetRepo, title: issue.title,
+    body: `${issue.body}\n\n---\n_filed from Telegram by @${from || 'user'} → ${targetRepo}_`, labels: ['aider-fix']
   });
   if (!ghReq.ok) { await reply(env, chatId, '⚠️ 設定エラー: GITHUB_PAT / GITHUB_REPO 未設定'); return; }
   try {
@@ -119,9 +167,10 @@ async function runDecompose(env, chatId, session, extraFeedback) {
   await reply(env, chatId, formatForApproval(dec));
 }
 
-async function commitBacklog(env, chatId, session) {
+async function commitBacklog(env, chatId, session, repo) {
+  const targetRepo = repo || env.GITHUB_REPO;
   // get current backlog (for sha + existing items)
-  const getReq = buildGetBacklogRequest({ token: env.GITHUB_PAT, repo: env.GITHUB_REPO });
+  const getReq = buildGetBacklogRequest({ token: env.GITHUB_PAT, repo: targetRepo });
   let existing = { items: [] };
   let sha;
   try {
@@ -137,7 +186,7 @@ async function commitBacklog(env, chatId, session) {
   const items = assignItemIds(session.decomposition.items, existing.items || []);
   const { backlog, added_count } = mergeBacklog(existing, items);
   const putReq = buildPutBacklogRequest({
-    token: env.GITHUB_PAT, repo: env.GITHUB_REPO, contentObj: backlog, sha,
+    token: env.GITHUB_PAT, repo: targetRepo, contentObj: backlog, sha,
     message: `chore: add ${added_count} refined item(s) from Telegram`
   });
   const putRes = await fetch(putReq.url, putReq.init);
@@ -150,7 +199,7 @@ async function commitBacklog(env, chatId, session) {
   }
 }
 
-async function handleRefinement(env, chatId, update, from) {
+async function handleRefinement(env, chatId, update, from, repo) {
   const doc = extractDocOrText(update);
   let session = null;
   try { session = await env.REFINE_KV.get(sessionKey(chatId), 'json'); } catch { session = null; }
@@ -166,7 +215,7 @@ async function handleRefinement(env, chatId, update, from) {
       return;
     }
     if (session.phase === 'awaiting_approval') {
-      if (isApproval(userText)) { await commitBacklog(env, chatId, session); return; }
+      if (isApproval(userText)) { await commitBacklog(env, chatId, session, repo); return; }
       // treat anything else as adjustment feedback → re-decompose
       await runDecompose(env, chatId, session, userText);
       return;
@@ -215,11 +264,17 @@ export default {
     });
     if (!auth.ok) return new Response('unauthorized', { status: 200 });
 
-    // control phrases only apply to plain text
+    // Multi-project routing key (chat + forum topic) and the repo it resolves to.
+    const key = routeKey(chatId, parsed.threadId || null);
+    const repo = await resolveRepo(env, key);
+
+    // control phrases / commands only apply to plain text
     if (parsed.ok) {
+      const projectCmd = parseProjectCommand(parsed.text);
+      if (projectCmd) { await handleProjectCommand(env, chatId, key, projectCmd); return new Response('ok', { status: 200 }); }
       const { intent } = classifyIntent(parsed.text);
       if (intent === 'help') { await reply(env, chatId, HELP_TEXT); return new Response('ok', { status: 200 }); }
-      if (intent === 'status') { await reply(env, chatId, `📊 Live runs: https://github.com/${env.GITHUB_REPO}/actions`); return new Response('ok', { status: 200 }); }
+      if (intent === 'status') { await reply(env, chatId, `📊 \`${repo || '(repo未設定)'}\` の実行: https://github.com/${repo}/actions`); return new Response('ok', { status: 200 }); }
       if (intent === 'stop') { await reply(env, chatId, '🛑 自律供給の停止: repo variable ISSUE_SUPPLIER_ENABLED=0'); return new Response('ok', { status: 200 }); }
     }
 
@@ -227,13 +282,13 @@ export default {
     let hasSession = false;
     if (env.REFINE_KV) { try { hasSession = !!(await env.REFINE_KV.get(sessionKey(chatId))); } catch { hasSession = false; } }
     if (env.REFINE_KV && (hasSession || looksLikeRequirements(doc))) {
-      await handleRefinement(env, chatId, update, parsed.from);
+      await handleRefinement(env, chatId, update, parsed.from, repo);
       return new Response('ok', { status: 200 });
     }
 
     // else: quick one-issue (needs plain text)
     if (parsed.ok) {
-      await handleQuickIssue(env, chatId, parsed.text, parsed.from);
+      await handleQuickIssue(env, chatId, parsed.text, parsed.from, repo);
     }
     return new Response('ok', { status: 200 });
   }
