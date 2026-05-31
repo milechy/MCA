@@ -150,9 +150,9 @@ test('issueTitleFor embeds the id for round-trip dedup', () => {
   expect(extractFiledIds([title]).has('BL-007')).toBe(true);
 });
 
-test('the real seed backlog parses and yields BL-001 first', () => {
+test('the real seed backlog parses and yields REQ-001 first', () => {
   const r = pickFromBacklog({ backlogPath: '.github/ralph-backlog.json', issueTitles: [], openPrs: 0, maxOpenPrs: 3 });
   expect(r.ok).toBe(true);
-  expect(r.item.id).toBe('BL-001');
-  expect(r.item.body).toMatch(/src\/ralph\/utils\/sleep\.js/);
+  expect(r.item.id).toBe('REQ-001');
+  expect(r.item.body).toMatch(/src\/ralph\/utils\/queue\.js/);
 });
