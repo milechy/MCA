@@ -174,13 +174,19 @@ function planProject({ name, kind = 'node-lib', description = '', owner = 'milec
     files: [...generated, ...COPY_FILES],
     // The new repo needs the same pipeline credentials. AIDER_TEST_CMD is set
     // to `npm test` so the copied resolver runs THIS repo's tests, not MCA's.
-    secrets_needed: ['LLM_API_KEY', 'PAT_TOKEN', 'PAT_USERNAME', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
+    // Secrets are copied from THIS shell's env at --execute time (unset → skipped).
+    // CLOUDFLARE_API_TOKEN powers the D1 learning store the brain-routed resolver reads.
+    secrets_needed: ['LLM_API_KEY', 'PAT_TOKEN', 'PAT_USERNAME', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN'],
     variables: {
       LLM_MODEL: 'openrouter/anthropic/claude-haiku-4.5',
       AIDER_TEST_CMD: 'npm test',
-      AIDER_DAILY_CAP_USD: '5.00',
+      AIDER_DAILY_CAP_USD: '100.00',
       AIDER_AUTO_MERGE: '1',
-      ISSUE_SUPPLIER_ENABLED: '0'
+      ISSUE_SUPPLIER_ENABLED: '0',
+      // NemoClaw brain + D1 learning. Default to the shared learning DB so every
+      // project's model-routing learning accumulates together (override via env).
+      CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID || 'b6d518fc9ad3c51d71c39426f531b1e8',
+      RALPH_D1_DATABASE_ID: process.env.RALPH_D1_DATABASE_ID || '206002eb-58ed-4cde-a153-f0d8d27d4573'
     },
     cloudflare: isCf
       ? {

@@ -30,6 +30,11 @@ test('planProject (node-lib) produces repo + files + secrets + first issue', () 
   expect(paths).toContain('.github/workflows/issue-supplier.yml');
   expect(p.secrets_needed).toContain('LLM_API_KEY');
   expect(p.variables.AIDER_TEST_CMD).toBe('npm test');
+  // brain + D1 learning config is inherited by new projects
+  expect(p.secrets_needed).toContain('CLOUDFLARE_API_TOKEN');
+  expect(p.variables.RALPH_D1_DATABASE_ID).toBeTruthy();
+  expect(p.variables.CLOUDFLARE_ACCOUNT_ID).toBeTruthy();
+  expect(p.variables.AIDER_DAILY_CAP_USD).toBe('100.00'); // $5 cap removed
   expect(p.cloudflare).toBe(null);
   expect(p.first_issue.title).toMatch(/Scaffold/);
 });
