@@ -27,6 +27,8 @@ import {
   routeKey,
   repoAllowed,
   parseProjectCommand,
+  parseNewProjectCommand,
+  buildWorkflowDispatchRequest,
   HELP_TEXT
 } from './lib.mjs';
 import {
@@ -95,6 +97,34 @@ async function handleProjectCommand(env, chatId, key, cmd) {
   await setRoute(env, key, cmd.repo);
   await reply(env, chatId, `✅ このチャット/トピックを \`${cmd.repo}\` に紐付けました。以降ここでのアイデア/要件はこのリポジトリへ。`);
   return true;
+}
+
+// Handle /newproject — trigger the provision-project workflow (creates a new
+// self-driving repo via the existing bootstrapper) and auto-bind this chat.
+async function handleNewProject(env, chatId, key, np) {
+  if (np.ok === false) {
+    await reply(env, chatId, '使い方: `/newproject <slug> <説明>`\n例: `/newproject my-app リアルタイムチャットアプリ`');
+    return;
+  }
+  const provisionRepo = env.PROVISION_REPO || env.GITHUB_REPO;
+  const owner = String(env.GITHUB_REPO || '').split('/')[0] || 'milechy';
+  const ref = env.PROVISION_REF || 'infra/phase0-autonomous-foundation';
+  const target = `${owner}/${np.slug}`;
+  const req = buildWorkflowDispatchRequest({
+    token: env.GITHUB_PAT, repo: provisionRepo, workflow: 'provision-project.yml', ref,
+    inputs: { name: np.slug, description: np.description || '', owner, kind: 'node-lib', visibility: 'private' }
+  });
+  if (!req.ok) { await reply(env, chatId, '⚠️ 設定エラー: GITHUB_PAT 未設定'); return; }
+  try {
+    const res = await fetch(req.url, req.init);
+    if (res.status === 204) {
+      await setRoute(env, key, target); // bind now; issues land once the repo exists
+      await reply(env, chatId, `🏗️ \`${target}\` を作成中…（数分）。完了したら通知します。\nこのチャットは \`${target}\` に紐付け済みです — 以降のアイデア/要件はそちらへ。`);
+    } else {
+      const t = await res.text().catch(() => '');
+      await reply(env, chatId, `⚠️ 作成の起動に失敗 (${res.status})。PROVISION_PAT/権限を確認してください。\n${String(t).slice(0, 200)}`);
+    }
+  } catch (e) { await reply(env, chatId, `⚠️ 作成起動エラー: ${e.message}`); }
 }
 
 // ---- quick one-issue flow (Phase 13 #2) --------------------------------
@@ -270,6 +300,8 @@ export default {
 
     // control phrases / commands only apply to plain text
     if (parsed.ok) {
+      const newProj = parseNewProjectCommand(parsed.text);
+      if (newProj) { await handleNewProject(env, chatId, key, newProj); return new Response('ok', { status: 200 }); }
       const projectCmd = parseProjectCommand(parsed.text);
       if (projectCmd) { await handleProjectCommand(env, chatId, key, projectCmd); return new Response('ok', { status: 200 }); }
       const { intent } = classifyIntent(parsed.text);

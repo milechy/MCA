@@ -130,3 +130,31 @@ test('parseProjectCommand parses set/show/clear (and non-commands)', () => {
 test('parseProjectCommand strips a github URL to owner/repo', () => {
   expect(lib.parseProjectCommand('/project https://github.com/milechy/MCA.git').repo).toBe('milechy/MCA');
 });
+
+// ---- /newproject (Telegram-driven project creation) --------------------
+
+test('parseNewProjectCommand parses slug + description', () => {
+  expect(lib.parseNewProjectCommand('/newproject my-app a chat app')).toEqual({ ok: true, slug: 'my-app', description: 'a chat app' });
+  expect(lib.parseNewProjectCommand('/newproject My_App build it')).toEqual({ ok: true, slug: 'my-app', description: 'build it' }); // slug = first token, sanitized
+  expect(lib.parseNewProjectCommand('/newproject')).toEqual({ ok: false, reason: 'usage' });
+  expect(lib.parseNewProjectCommand('add a util')).toBe(null);
+});
+
+test('parseNewProjectCommand does not collide with /project', () => {
+  expect(lib.parseProjectCommand('/newproject foo bar')).toBe(null); // /newproject is not /project
+  expect(lib.parseNewProjectCommand('/project owner/repo')).toBe(null);
+});
+
+test('buildWorkflowDispatchRequest targets the workflow dispatch endpoint', () => {
+  const r = lib.buildWorkflowDispatchRequest({ token: 'PAT', repo: 'milechy/MCA', workflow: 'provision-project.yml', ref: 'main', inputs: { name: 'x' } });
+  expect(r.ok).toBe(true);
+  expect(r.url).toBe('https://api.github.com/repos/milechy/MCA/actions/workflows/provision-project.yml/dispatches');
+  const body = JSON.parse(r.init.body);
+  expect(body.ref).toBe('main');
+  expect(body.inputs.name).toBe('x');
+  expect(r.init.headers.Authorization).toBe('Bearer PAT');
+});
+
+test('buildWorkflowDispatchRequest rejects missing fields', () => {
+  expect(lib.buildWorkflowDispatchRequest({ token: 'P', repo: 'o/r' }).ok).toBe(false);
+});

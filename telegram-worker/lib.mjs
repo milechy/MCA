@@ -78,6 +78,40 @@ export function parseProjectCommand(text = '') {
   return { action: 'set', repo: arg.replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/, '') };
 }
 
+// Parse the /newproject command — create a brand-new self-driving repo:
+//   /newproject <slug> <description...>
+// Returns null for non-commands; {ok:false} for malformed; {ok, slug, description}.
+export function parseNewProjectCommand(text = '') {
+  const m = String(text).trim().match(/^\/?(newproject|new-project|newproj|bootstrap)\b\s*(.*)$/i);
+  if (!m) return null;
+  const rest = (m[2] || '').trim();
+  if (!rest) return { ok: false, reason: 'usage' };
+  const parts = rest.split(/\s+/);
+  const slug = String(parts.shift()).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) return { ok: false, reason: 'invalid_slug' };
+  return { ok: true, slug, description: parts.join(' ').trim() };
+}
+
+// Build a GitHub Actions workflow_dispatch request (POST; 204 on success).
+// Used to trigger MCA's provision-project workflow from the Worker.
+export function buildWorkflowDispatchRequest({ token, repo, workflow, ref = 'main', inputs = {} } = {}) {
+  if (!token || !repo || !workflow) return { ok: false, reason: 'dispatch_fields_required' };
+  return {
+    ok: true,
+    url: `https://api.github.com/repos/${repo}/actions/workflows/${workflow}/dispatches`,
+    init: {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'ralph-telegram-worker'
+      },
+      body: JSON.stringify({ ref, inputs })
+    }
+  };
+}
+
 // A few control phrases bypass the LLM (cheap, deterministic).
 // NOTE: \b word boundaries don't work after CJK characters, so we match by
 // stripping a leading slash and testing equality / prefix against keyword
@@ -215,9 +249,10 @@ export const HELP_TEXT = [
   'and auto-merges. You get a message when it lands.',
   '',
   '複数プロジェクト: チャット/トピックごとに紐付け',
-  '  /project owner/repo  … このチャット/トピックを対象リポジトリに紐付け',
-  '  /project              … 現在の紐付けを表示',
-  '  /project clear        … 紐付け解除（既定リポジトリに戻る）',
+  '  /newproject <slug> <説明> … 新規プロジェクト(repo)を作成し、このチャットに紐付け',
+  '  /project owner/repo       … このチャット/トピックを既存リポジトリに紐付け',
+  '  /project                   … 現在の紐付けを表示',
+  '  /project clear             … 紐付け解除（既定リポジトリに戻る）',
   '',
-  'Commands: status / help / stop / project'
+  'Commands: status / help / stop / project / newproject'
 ].join('\n');

@@ -1,0 +1,89 @@
+# Provision Project — create a brand-new self-driving repo from one trigger.
+#
+# Triggered by the Telegram worker's /newproject command (workflow_dispatch).
+# Reuses the existing, tested scripts/ralph/bootstrap-project.js: it creates the
+# repo, scaffolds it, copies the CURRENT autonomous-loop workflows (so the new
+# repo gets the brain-routed escalating resolver), and sets the new repo's
+# secrets (from this job's env) + variables (incl. the shared D1 learning DB).
+#
+# Secrets are copied in CI where `gh secret set` handles the libsodium encryption
+# automatically — no crypto in the Worker. Required repo secret PROVISION_PAT is
+# a PAT (classic: repo + workflow scope) able to CREATE repos and write secrets
+# on them. Keep it dedicated and tightly held.
+
+name: Provision Project
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'repo slug (lowercase, hyphens)'
+        required: true
+      description:
+        description: 'what the project does'
+        required: false
+        default: ''
+      kind:
+        description: 'node-lib | cf-worker | cf-pages'
+        required: false
+        default: 'node-lib'
+      owner:
+        description: 'GitHub owner'
+        required: false
+        default: 'milechy'
+      visibility:
+        description: 'private | public'
+        required: false
+        default: 'private'
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # gh (repo create + secret/variable set on the new repo) uses this PAT.
+      GH_TOKEN: ${{ secrets.PROVISION_PAT }}
+      # Secret VALUES propagated to the new repo — names match bootstrap's
+      # secrets_needed so its `process.env[name]` step picks them up.
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_USERNAME: ${{ secrets.PAT_USERNAME }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Variable defaults that planProject reads from env (shared learning DB).
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      RALPH_D1_DATABASE_ID: ${{ vars.RALPH_D1_DATABASE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --prefer-offline --no-audit --fund=false
+
+      - name: Bootstrap the new self-driving repo
+        run: |
+          set -e
+          VIS_FLAG=""
+          [ "${{ inputs.visibility }}" = "public" ] && VIS_FLAG="--public"
+          node scripts/ralph/bootstrap-project.js \
+            --name "${{ inputs.name }}" \
+            --kind "${{ inputs.kind }}" \
+            --description "${{ inputs.description }}" \
+            --owner "${{ inputs.owner }}" \
+            $VIS_FLAG --execute
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            node scripts/ralph/notify-telegram.js "✅ 新規プロジェクト \`${{ inputs.owner }}/${{ inputs.name }}\` を作成・配線しました。Telegramでアイデアを投げれば、頭脳ルーティング＋学習で自律開発が走ります。" || true
+          else
+            node scripts/ralph/notify-telegram.js "⛔ プロジェクト \`${{ inputs.owner }}/${{ inputs.name }}\` の作成に失敗しました。Actionsログを確認してください: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+          fi
