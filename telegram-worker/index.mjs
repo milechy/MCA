@@ -110,11 +110,15 @@ async function handleNewProject(env, chatId, key, np) {
   const owner = String(env.GITHUB_REPO || '').split('/')[0] || 'milechy';
   const ref = env.PROVISION_REF || 'infra/phase0-autonomous-foundation';
   const target = `${owner}/${np.slug}`;
+  // Dispatching a workflow needs Actions:write — the issue-creating GITHUB_PAT
+  // often lacks it. Prefer PROVISION_PAT (the same token that provisions repos)
+  // when present, falling back to GITHUB_PAT.
+  const dispatchToken = env.PROVISION_PAT || env.GITHUB_PAT;
   const req = buildWorkflowDispatchRequest({
-    token: env.GITHUB_PAT, repo: provisionRepo, workflow: 'provision-project.yml', ref,
+    token: dispatchToken, repo: provisionRepo, workflow: 'provision-project.yml', ref,
     inputs: { name: np.slug, description: np.description || '', owner, kind: 'node-lib', visibility: 'private' }
   });
-  if (!req.ok) { await reply(env, chatId, '⚠️ 設定エラー: GITHUB_PAT 未設定'); return; }
+  if (!req.ok) { await reply(env, chatId, '⚠️ 設定エラー: PROVISION_PAT/GITHUB_PAT 未設定'); return; }
   try {
     const res = await fetch(req.url, req.init);
     if (res.status === 204) {
