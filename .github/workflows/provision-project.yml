@@ -67,6 +67,12 @@ jobs:
       - name: Bootstrap the new self-driving repo
         run: |
           set -e
+          # CI runner has no git identity / repo credentials — configure both so
+          # bootstrap's commit + push to the NEW repo succeed (gh auth setup-git
+          # makes git use PROVISION_PAT for all github.com pushes).
+          git config --global user.email "${PAT_USERNAME:-ralph-bot}@users.noreply.github.com"
+          git config --global user.name  "${PAT_USERNAME:-ralph-bot}"
+          gh auth setup-git
           VIS_FLAG=""
           [ "${{ inputs.visibility }}" = "public" ] && VIS_FLAG="--public"
           node scripts/ralph/bootstrap-project.js \
