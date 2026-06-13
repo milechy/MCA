@@ -22,6 +22,16 @@
       "depends_on": [
         "REQ-002"
       ]
+    },
+    {
+      "id": "ASANA-1215654682762407",
+      "title": "テスト",
+      "body": "テスト\n\n---\n_synced from Asana: https://app.asana.com/1/817733952351708/project/1215654682762403/task/1215654682762407_"
+    },
+    {
+      "id": "ASANA-1215654682762409",
+      "title": "Untitled Asana task",
+      "body": "Untitled Asana task\n\n---\n_synced from Asana: https://app.asana.com/1/817733952351708/project/1215654682762403/task/1215654682762409_"
     }
   ]
 }
