@@ -80,15 +80,8 @@ function execute(plan, args, { stdout }) {
   // 2. materialize files
   materializeFiles(plan, { srcRoot: args.root, destRoot: tmp });
 
-  // 3. git init + push
-  sh('git', ['init', '-b', 'main'], { cwd: tmp });
-  sh('git', ['add', '.'], { cwd: tmp });
-  sh('git', ['commit', '-m', `Bootstrap ${plan.repo.name} (autonomous-loop scaffold)`], { cwd: tmp });
-  sh('git', ['remote', 'add', 'origin', `https://github.com/${plan.repo.full_name}.git`], { cwd: tmp });
-  sh('git', ['push', '-u', 'origin', 'main'], { cwd: tmp });
-  stdout.write('pushed scaffold to main\n');
-
-  // 4. secrets + variables (secrets from env; skip any that are unset)
+  // 3. secrets + variables set BEFORE push so deploy workflow has credentials
+  // when the push triggers it (secrets from env; skip any that are unset).
   for (const s of plan.secrets_needed) {
     const val = process.env[s];
     if (!val) { stdout.write(`  secret ${s}: SKIPPED (not in env)\n`); continue; }
@@ -100,9 +93,15 @@ function execute(plan, args, { stdout }) {
     stdout.write(`  variable ${k}=${v}: set\n`);
   }
 
-  // 5. cloudflare (operator runs deploy; needs wrangler login)
+  // 4. git init + push (triggers deploy workflow if cf kind; secrets already set)
+  sh('git', ['init', '-b', 'main'], { cwd: tmp });
+  sh('git', ['add', '.'], { cwd: tmp });
+  sh('git', ['commit', '-m', `Bootstrap ${plan.repo.name} (autonomous-loop scaffold)`], { cwd: tmp });
+  sh('git', ['remote', 'add', 'origin', `https://github.com/${plan.repo.full_name}.git`], { cwd: tmp });
+  sh('git', ['push', '-u', 'origin', 'main'], { cwd: tmp });
+  stdout.write('pushed scaffold to main\n');
   if (plan.cloudflare) {
-    stdout.write(`cloudflare: clone the repo and run \`${plan.cloudflare.deploy_cmd}\` after \`npx wrangler login\`.\n`);
+    stdout.write(`cloudflare: deploy workflow triggered — first deploy will create the ${plan.cloudflare.type} automatically.\n`);
   }
 
   // 6. first scaffold issue — create the aider-fix label first (a fresh repo

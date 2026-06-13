@@ -54,6 +54,7 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      ASANA_TOKEN: ${{ secrets.ASANA_TOKEN }}
       # Variable defaults that planProject reads from env (shared learning DB).
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       RALPH_D1_DATABASE_ID: ${{ vars.RALPH_D1_DATABASE_ID }}

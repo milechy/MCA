@@ -141,6 +141,62 @@ const COPY_FILES = [
   { path: 'src/ralph/backlog-supplier.js', copyFrom: 'src/ralph/backlog-supplier.js' }
 ];
 
+// ---- deploy workflow (generated, embedded) -----------------------------
+
+function deployWorkflow(kind, repoSlug) {
+  if (kind === 'cf-worker') {
+    return `name: Deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --prefer-offline --no-audit --fund=false
+      - name: Deploy to Cloudflare Workers
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  }
+  if (kind === 'cf-pages') {
+    return `name: Deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --prefer-offline --no-audit --fund=false
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler pages deploy public --project-name ${repoSlug}
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  }
+  return null;
+}
+
 // ---- the plan -----------------------------------------------------------
 
 function planProject({ name, kind = 'node-lib', description = '', owner = 'milechy', visibility = 'private' } = {}) {
@@ -149,6 +205,7 @@ function planProject({ name, kind = 'node-lib', description = '', owner = 'milec
 
   const repoSlug = slug(name);
 
+  const deployWf = deployWorkflow(kind, repoSlug);
   const generated = [
     { path: 'README.md', content: readme(name, description) },
     { path: '.gitignore', content: gitignore() },
@@ -157,7 +214,8 @@ function planProject({ name, kind = 'node-lib', description = '', owner = 'milec
     ...starterFiles(kind).map((f) => ({
       ...f,
       content: f.content.replace(/REPO_SLUG/g, repoSlug)
-    }))
+    })),
+    ...(deployWf ? [{ path: '.github/workflows/deploy.yml', content: deployWf }] : [])
   ];
 
   const isCf = kind === 'cf-worker' || kind === 'cf-pages';
@@ -176,7 +234,7 @@ function planProject({ name, kind = 'node-lib', description = '', owner = 'milec
     // to `npm test` so the copied resolver runs THIS repo's tests, not MCA's.
     // Secrets are copied from THIS shell's env at --execute time (unset → skipped).
     // CLOUDFLARE_API_TOKEN powers the D1 learning store the brain-routed resolver reads.
-    secrets_needed: ['LLM_API_KEY', 'PAT_TOKEN', 'PAT_USERNAME', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN'],
+    secrets_needed: ['LLM_API_KEY', 'PAT_TOKEN', 'PAT_USERNAME', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN', 'ASANA_TOKEN'],
     variables: {
       LLM_MODEL: 'openrouter/anthropic/claude-haiku-4.5',
       AIDER_TEST_CMD: 'npm test',
