@@ -221,6 +221,24 @@ jobs:
           PR_NUM=$(echo "$PR_URL" | sed -E 's|.*/pull/||')
           echo "PR opened: $PR_URL (model $WIN_MODEL)"
 
+          # Independent pre-merge review (Evaluator/Reviewer role): a deterministic
+          # secret/dangerous-pattern scan + an LLM security/bug review. A block
+          # leaves the PR open for a human (never merges) — the test gate is green
+          # but this catches what tests don't. Disable via AIDER_REVIEW_ENABLED=0.
+          if [ "${{ vars.AIDER_REVIEW_ENABLED || '1' }}" = "1" ]; then
+            echo "running pre-merge review…"
+            if node scripts/ralph/ci-review.js > /tmp/review.json 2>/tmp/review.err; then
+              echo "✅ review passed"; cat /tmp/review.json || true
+            else
+              echo "::warning::review BLOCKED the merge"; cat /tmp/review.json /tmp/review.err || true
+              SUMMARY=$(node -e 'try{const r=require("/tmp/review.json");console.log((r.issues||[]).map(i=>"- ["+i.severity+"] "+i.note).join("\n")||r.llm_summary||"blocked")}catch{console.log("blocked")}')
+              printf '⛔ Auto-merge blocked by independent review (security/correctness). Left open for a human.\n\n%s\n\nRun: %s/%s/actions/runs/%s\n' "$SUMMARY" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" > /tmp/review_comment.md
+              gh pr comment "$PR_URL" --body-file /tmp/review_comment.md || true
+              node scripts/ralph/notify-telegram.js "⛔ PR #$PR_NUM (issue #$ISSUE_NUMBER) はレビューでブロック（要人間確認）。" || true
+              exit 0
+            fi
+          fi
+
           if [ "${{ vars.AIDER_AUTO_MERGE || '1' }}" = "1" ]; then
             if gh pr merge "$PR_URL" --auto --squash --delete-branch 2>/tmp/auto_err.log; then
               node scripts/ralph/notify-telegram.js "🔵 PR #$PR_NUM (issue #$ISSUE_NUMBER) auto-merge pending — model \`$WIN_MODEL\` (attempt $WIN_ATTEMPT)" || true

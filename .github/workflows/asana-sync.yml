@@ -1,0 +1,58 @@
+# Asana → backlog sync. Pulls an Asana project's tasks (priority/board order)
+# into .github/ralph-backlog.json so the issue-supplier paces them into
+# aider-fix issues → brain-routed PRs. Runs unattended on a cron (no laptop).
+#
+# Gated by repo variable ASANA_SYNC_ENABLED=1 (default off). Requires secret
+# ASANA_TOKEN and variable ASANA_PROJECT_GID. HUMAN-APPROVAL-REQUIRED tasks are
+# skipped (left in Asana for a human), per the bridge's safety rule.
+
+name: Asana Backlog Sync
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: ${{ vars.ASANA_SYNC_ENABLED == '1' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ASANA_TOKEN: ${{ secrets.ASANA_TOKEN }}
+      ASANA_PROJECT_GID: ${{ vars.ASANA_PROJECT_GID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Sync Asana → backlog
+        id: sync
+        run: |
+          set -e
+          if [ -z "$ASANA_TOKEN" ] || [ -z "$ASANA_PROJECT_GID" ]; then
+            echo "::notice::ASANA_TOKEN / ASANA_PROJECT_GID not configured — skipping"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          OUT=$(node scripts/ralph/asana-sync.js)
+          echo "$OUT"
+          ADDED=$(echo "$OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s.trim().split("\n").pop()).added||0)}catch{console.log(0)}})')
+          echo "added=$ADDED" >> "$GITHUB_OUTPUT"
+          git diff --quiet -- .github/ralph-backlog.json && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Commit updated backlog
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git config user.email "${{ secrets.PAT_USERNAME }}@users.noreply.github.com"
+          git config user.name  "${{ secrets.PAT_USERNAME }}"
+          git add .github/ralph-backlog.json
+          git commit -m "chore: sync ${{ steps.sync.outputs.added }} Asana task(s) into backlog"
+          git push
+          node scripts/ralph/notify-telegram.js "📥 Asana から ${{ steps.sync.outputs.added }} 件を backlog に同期しました。supplier が順次 issue 化します。" || true
