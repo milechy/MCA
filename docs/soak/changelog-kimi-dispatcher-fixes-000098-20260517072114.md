@@ -1,0 +1,1 @@
+- Rewrote worktree-prompt dispatch logic to improve reliability and reduce race conditions in multi-worktree setups; swapped the classify-order heuristic so that shorter, higher-confidence classifications are preferred over longer speculative chains; downgraded the soft-timeout handling from an error to a warning (PR #46) to prevent false-positive failures on slower hosts.
