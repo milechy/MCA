@@ -1,0 +1,1 @@
+Added fullauto auto-approver logic that automatically progresses soak tasks without manual intervention; introduced resume-after-security-stop to allow halted sessions to continue once the security hold is cleared; and added Telegram bot commands `/resume-request` and `/resume-status` so operators can trigger and check the status of resumed workflows directly from chat.
