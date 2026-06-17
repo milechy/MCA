@@ -1,0 +1,1 @@
+PR #46 refactored the Kimi dispatcher pipeline by rewriting the worktree-prompt logic, swapping the classify-order sequence, and downgrading the soft-timeout mechanism to improve reliability and correctness under load.
