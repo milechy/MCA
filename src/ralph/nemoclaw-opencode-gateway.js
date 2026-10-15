@@ -4,7 +4,7 @@
  * @deprecated 2026-05-14 (Phase 1 #5). Per
  *   docs/adr-2026-05-14-retire-nemoclaw-mediator-default.md, this dispatcher is
  *   no longer the autonomous-loop default. The default is now
- *   src/ralph/opencode-kimi-dispatcher.js (OpenCode + Kimi K2.6 via OpenRouter),
+ *   src/ralph/opencode-kimi-dispatcher.js (OpenCode + Kimi K3 via OpenRouter),
  *   which has been verified end-to-end across PRs #45, #46, #49, #50, #51, #52
  *   and the 24-story soak documented in docs/soak-2026-05-14-summary.md.
  *

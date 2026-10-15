@@ -63,12 +63,12 @@ test('Phase 3 #1: updateStory patches executor_model independently', () => {
   }, { rootDir, now: new Date() });
 
   updateStory('STORY-PATCH', {
-    executor_model: 'openrouter/moonshotai/kimi-k2.6',
+    executor_model: 'openrouter/moonshotai/kimi-k3',
     difficulty: 'easy'
   }, { rootDir, now: new Date(), event: 'phase3_patched' });
 
   const s = readStory(rootDir, 'STORY-PATCH');
-  expect(s.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(s.executor_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(s.difficulty).toBe('easy');
   expect(s.planner_model).toBe(null);  // untouched
 });
@@ -80,7 +80,7 @@ test('Phase 3 #1: updateStory with executor_model=null explicitly clears it', ()
     title: 'clear',
     requirement: 'x',
     requested_paths: ['docs/a.md'],
-    executor_model: 'openrouter/moonshotai/kimi-k2.6'
+    executor_model: 'openrouter/moonshotai/kimi-k3'
   }, { rootDir, now: new Date() });
 
   updateStory('STORY-CLEAR', { executor_model: null }, { rootDir, now: new Date(), event: 'cleared' });
@@ -142,13 +142,13 @@ test('Phase 3 #1: summarizeStory surfaces Phase 3 fields', () => {
     title: 'sum',
     requirement: 'x',
     requested_paths: ['docs/a.md'],
-    executor_model: 'openrouter/moonshotai/kimi-k2.6',
+    executor_model: 'openrouter/moonshotai/kimi-k3',
     difficulty: 'medium',
     planner_cost_usd: 0.15
   }, { rootDir, now: new Date() });
   const s = readStory(rootDir, 'STORY-SUMMARY');
   const summary = summarizeStory(s);
-  expect(summary.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(summary.executor_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(summary.difficulty).toBe('medium');
   expect(summary.planner_cost_usd).toBe(0.15);
   expect(summary.planner_model).toBe(null);

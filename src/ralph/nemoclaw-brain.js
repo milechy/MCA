@@ -27,7 +27,7 @@ const { recommendByContextBucket } = require('./routing-stats');
 // escalation has a single source of truth. Filtered against MODEL_PRICING at
 // call time so we never route to an unpriced/unallowlisted model.
 const ESCALATION_LADDER = Object.freeze([
-  'openrouter/moonshotai/kimi-k2.6',        // tier 0  trivial / easy
+  'openrouter/moonshotai/kimi-k3',          // tier 0  trivial / easy (upgraded 2026-07 from k2.6; no longer cheap — see kimi-cost-tracker.js)
   'openrouter/anthropic/claude-haiku-4.5',  // tier 1  medium
   'openrouter/anthropic/claude-sonnet-4.6', // tier 2  hard
   'openrouter/openai/gpt-5',                // tier 3  architectural

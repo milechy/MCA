@@ -38,7 +38,7 @@ function story() {
   return {
     story_id: 'STORY-KIMI',
     title: 'Kimi dispatcher smoke',
-    requirement: 'Generate a tiny markdown note via OpenCode + Kimi K2.',
+    requirement: 'Generate a tiny markdown note via OpenCode + Kimi K3.',
     requested_paths: ['docs/kimi-smoke.md'],
     risk: { score: 0, category: 'low', label: 'RISK_0_LOW' }
   };
@@ -132,7 +132,7 @@ test('Phase 8 #6: env KIMI_API_KEY beats auth.json when OPENROUTER_API_KEY missi
   expect(env.OPENROUTER_API_KEY).toBe('sk-kimi-from-env');
 });
 
-test('resolveModel sanitizes input and falls back to default Kimi K2 model', () => {
+test('resolveModel sanitizes input and falls back to default Kimi K3 model', () => {
   expect(resolveModel({})).toBe(DEFAULT_MODEL);
   expect(resolveModel({ OPENCODE_MODEL: 'openrouter/moonshotai/kimi-k2' })).toBe('openrouter/moonshotai/kimi-k2');
   expect(resolveModel({ OPENCODE_MODEL: 'bad model with spaces' })).toBe(DEFAULT_MODEL);
@@ -142,7 +142,7 @@ test('resolveModel sanitizes input and falls back to default Kimi K2 model', () 
 test('buildPrompt includes Ralph identity, requested paths, and Kimi role', () => {
   const prompt = buildPrompt({ task: 'do the thing', requested_paths: ['docs/x.md'], rootDir: tmpRoot() });
   expect(prompt).toContain('Ralph execution provider');
-  expect(prompt).toContain('Kimi K2');
+  expect(prompt).toContain('Kimi K3');
   expect(prompt).toContain('docs/x.md');
   expect(prompt).toContain('do the thing');
   expect(prompt).toContain('Return ONLY a unified git diff');
@@ -660,7 +660,7 @@ test('Phase 2 #5: dispatchOpenCodeKimi refuses dispatch when daily budget is exc
   const entry = {
     at: new Date().toISOString(),
     story_id: 'STORY-EXPENSIVE',
-    model: 'openrouter/moonshotai/kimi-k2.6',
+    model: 'openrouter/moonshotai/kimi-k3',
     input_tokens: 100_000_000,
     output_tokens: 100_000_000,
     cost_usd: 100.0
@@ -776,7 +776,7 @@ test('Phase 3 #1: resolveModel honors story.executor_model over env defaults', (
 });
 
 test('Phase 3 #5: dispatchOpenCodeKimi uses executor-router fallback when story.executor_model is unknown', () => {
-  // Story with an unknown executor_model should still dispatch — via the FALLBACK_EXECUTOR_MODEL (kimi-k2.6).
+  // Story with an unknown executor_model should still dispatch — via the FALLBACK_EXECUTOR_MODEL (kimi-k3).
   const rootDir = tmpRoot();
   const { spawnSync } = require('node:child_process');
   spawnSync('git', ['init', '-q'], { cwd: rootDir });
@@ -812,7 +812,7 @@ test('Phase 3 #5: dispatchOpenCodeKimi uses executor-router fallback when story.
   });
 
   expect(result.ok).toBe(true);
-  expect(seenModel).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(seenModel).toBe('openrouter/moonshotai/kimi-k3');
 });
 
 test('Phase 3 #5: dispatchOpenCodeKimi honors story.executor_model when it IS in the allowlist', () => {

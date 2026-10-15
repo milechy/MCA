@@ -7,7 +7,7 @@ const {
   selectModel
 } = require('../../src/ralph/nemoclaw-brain');
 
-const KIMI = 'openrouter/moonshotai/kimi-k2.6';
+const KIMI = 'openrouter/moonshotai/kimi-k3';
 const HAIKU = 'openrouter/anthropic/claude-haiku-4.5';
 const SONNET = 'openrouter/anthropic/claude-sonnet-4.6';
 const GPT5 = 'openrouter/openai/gpt-5';

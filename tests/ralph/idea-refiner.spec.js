@@ -23,7 +23,7 @@ function makeValidStdout(overrides = {}) {
     requirement: 'FILE 1 (CREATE): create a test file\nFILE 2 (MODIFY EXISTING): update existing file',
     requested_paths: ['src/test.js', 'tests/test.spec.js'],
     difficulty: 'easy',
-    recommended_executor: 'openrouter/moonshotai/kimi-k2.6',
+    recommended_executor: 'openrouter/moonshotai/kimi-k3',
     reasoning: 'This is a test.',
     ...overrides
   };
@@ -160,7 +160,7 @@ test('refineIdea returns success with correct story_spec shape', () => {
     requirement: expect.stringContaining('FILE 1'),
     requested_paths: ['src/test.js', 'tests/test.spec.js'],
     difficulty: 'easy',
-    recommended_executor: 'openrouter/moonshotai/kimi-k2.6',
+    recommended_executor: 'openrouter/moonshotai/kimi-k3',
     reasoning: 'This is a test.'
   });
   expect(result.planner_model).toBe(DEFAULT_PLANNER_MODEL);
@@ -196,12 +196,12 @@ test('refineIdea uses custom plannerModel and maxRetries=0', () => {
   const result = refineIdea({
     idea: 'add a feature',
     rootDir: tmpRoot(),
-    plannerModel: 'openrouter/moonshotai/kimi-k2.6',
+    plannerModel: 'openrouter/moonshotai/kimi-k3',
     maxRetries: 0,
     spawn
   });
   expect(result.ok).toBe(true);
-  expect(seenModel).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(seenModel).toBe('openrouter/moonshotai/kimi-k3');
 });
 
 test('refineIdea with maxRetries=0 does not retry on invalid JSON', () => {
@@ -533,7 +533,7 @@ test('Phase 3 E2E: refineIdea works against real opencode streaming envelope (re
     requirement: 'FILE 1 (CREATE): docs/streamed.md\nCreate a doc with one line.',
     requested_paths: ['docs/streamed.md'],
     difficulty: 'trivial',
-    recommended_executor: 'openrouter/moonshotai/kimi-k2.6',
+    recommended_executor: 'openrouter/moonshotai/kimi-k3',
     reasoning: 'Trivial single-file creation.'
   };
   const lines = [

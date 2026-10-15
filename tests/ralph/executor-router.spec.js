@@ -6,10 +6,12 @@ const {
   routeExecutor
 } = require('../../src/ralph/executor-router');
 
-test('estimateCostFromContext returns a positive number for kimi-k2.6 baseline', () => {
-  const cost = estimateCostFromContext({ prompt_chars: 4000, model: 'openrouter/moonshotai/kimi-k2.6' });
+test('estimateCostFromContext returns a positive number for kimi-k3 baseline', () => {
+  const cost = estimateCostFromContext({ prompt_chars: 4000, model: 'openrouter/moonshotai/kimi-k3' });
   expect(cost).toBeGreaterThan(0);
-  expect(cost).toBeLessThan(0.01);
+  // K3 is priced at Sonnet-tier rates ($3/$15 per 1M), not the old K2.6 cheap
+  // rate — 1000 input + 3000 default output tokens costs ~0.048.
+  expect(cost).toBeLessThan(0.1);
 });
 
 test('estimateCostFromContext uses Claude Sonnet pricing for sonnet model', () => {
@@ -23,9 +25,9 @@ test('estimateCostFromContext uses Claude Sonnet pricing for sonnet model', () =
 });
 
 test('estimateCostFromContext default output is 12000 chars (3000 tokens)', () => {
-  const cost = estimateCostFromContext({ prompt_chars: 0, model: 'openrouter/moonshotai/kimi-k2.6' });
-  // 0 input + 3000 * 0.0000008 = 0.0024
-  expect(cost).toBe(0.0024);
+  const cost = estimateCostFromContext({ prompt_chars: 0, model: 'openrouter/moonshotai/kimi-k3' });
+  // 0 input + 3000 * 0.000015 = 0.045
+  expect(cost).toBe(0.045);
 });
 
 test('routeExecutor uses story.executor_model when allowed', () => {
@@ -70,7 +72,7 @@ test('routeExecutor falls back when story.executor_model is empty string', () =>
 
 test('routeExecutor returns estimated_cost_usd > 0 for non-empty prompt', () => {
   const result = routeExecutor({
-    story: { executor_model: 'openrouter/moonshotai/kimi-k2.6' },
+    story: { executor_model: 'openrouter/moonshotai/kimi-k3' },
     prompt_chars: 4000
   });
   expect(result.estimated_cost_usd).toBeGreaterThan(0);
@@ -78,7 +80,7 @@ test('routeExecutor returns estimated_cost_usd > 0 for non-empty prompt', () => 
 
 test('routeExecutor with zero prompt_chars still returns a cost > 0 (default output tokens contribute)', () => {
   const result = routeExecutor({
-    story: { executor_model: 'openrouter/moonshotai/kimi-k2.6' },
+    story: { executor_model: 'openrouter/moonshotai/kimi-k3' },
     prompt_chars: 0
   });
   expect(result.estimated_cost_usd).toBeGreaterThan(0);
@@ -89,7 +91,7 @@ test('routeExecutor with zero prompt_chars still returns a cost > 0 (default out
 // ============================================================
 //
 // When no explicit story.executor_model is set, route by story.difficulty:
-//   trivial / easy → Kimi K2.6 (cost wins)
+//   trivial / easy → Kimi K3
 //   medium → Qwen3-Coder (mid-tier)
 //   hard → Claude Sonnet 4.6 (Phase 8 #1 proved $0.42/PR for real refactor)
 //   architectural → GPT-5 (best architectural judgment)
@@ -100,8 +102,8 @@ test('routeExecutor with zero prompt_chars still returns a cost > 0 (default out
 const { modelForDifficulty, DIFFICULTY_TIER_MODELS } = require('../../src/ralph/executor-router');
 
 test('Phase 8 #4: modelForDifficulty maps each canonical difficulty to its tier model', () => {
-  expect(modelForDifficulty('trivial')).toBe('openrouter/moonshotai/kimi-k2.6');
-  expect(modelForDifficulty('easy')).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(modelForDifficulty('trivial')).toBe('openrouter/moonshotai/kimi-k3');
+  expect(modelForDifficulty('easy')).toBe('openrouter/moonshotai/kimi-k3');
   // Phase 8 #5b: medium swapped Qwen3-Coder → Haiku 4.5 after live smoke
   // (task #24) showed Qwen failed 3/3 attempts on multi-file MODIFY EXISTING.
   expect(modelForDifficulty('medium')).toBe('openrouter/anthropic/claude-haiku-4.5');
@@ -111,7 +113,7 @@ test('Phase 8 #4: modelForDifficulty maps each canonical difficulty to its tier 
 
 test('Phase 8 #4: modelForDifficulty handles case-insensitive + trim, returns null for unknown', () => {
   expect(modelForDifficulty('  HARD  ')).toBe('openrouter/anthropic/claude-sonnet-4.6');
-  expect(modelForDifficulty('Easy')).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(modelForDifficulty('Easy')).toBe('openrouter/moonshotai/kimi-k3');
   expect(modelForDifficulty('LEGENDARY')).toBe(null);
   expect(modelForDifficulty(null)).toBe(null);
   expect(modelForDifficulty(undefined)).toBe(null);
@@ -139,7 +141,7 @@ test('Phase 8 #4: routeExecutor uses difficulty tier when no explicit executor_m
 test('Phase 8 #4: routeExecutor routes trivial/easy to Kimi via tier (not via no-difficulty fallback)', () => {
   for (const difficulty of ['trivial', 'easy']) {
     const r = routeExecutor({ story: { difficulty }, prompt_chars: 100 });
-    expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+    expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k3');
     expect(r.routing_source).toBe('difficulty_tier');
     expect(r.difficulty_tier).toBe(difficulty);
     // tier-routing to Kimi is the intended path, not a fallback.
@@ -163,12 +165,12 @@ test('Phase 8 #4: routeExecutor — story.executor_model ALWAYS wins over diffic
   // Story says hard (would route to Sonnet) but operator overrode with Kimi.
   const r = routeExecutor({
     story: {
-      executor_model: 'openrouter/moonshotai/kimi-k2.6',
+      executor_model: 'openrouter/moonshotai/kimi-k3',
       difficulty: 'hard'
     },
     prompt_chars: 50
   });
-  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(r.routing_source).toBe('story_explicit');
   expect(r.fallback_applied).toBe(false);
 });
@@ -178,7 +180,7 @@ test('Phase 8 #4: routeExecutor — unknown difficulty falls through to no-diffi
     story: { difficulty: 'godmode' }, // not in the ladder
     prompt_chars: 50
   });
-  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(r.routing_source).toBe('fallback_no_difficulty');
   expect(r.fallback_applied).toBe(true);
   expect(r.reason).toBe('no_executor_specified');
@@ -186,7 +188,7 @@ test('Phase 8 #4: routeExecutor — unknown difficulty falls through to no-diffi
 
 test('Phase 8 #4: routeExecutor without story falls through to Kimi (no crash on missing fields)', () => {
   const r = routeExecutor({ prompt_chars: 0 });
-  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(r.routing_source).toBe('fallback_no_difficulty');
   expect(r.ok).toBe(true);
 });
@@ -199,7 +201,7 @@ test('Phase 8 #4: explicit unallowlisted executor_model still drops back to Kimi
     },
     prompt_chars: 50
   });
-  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(r.routing_source).toBe('fallback_unallowed_explicit');
   expect(r.reason).toBe('executor_model_not_allowed');
   expect(r.ok).toBe(false);
@@ -239,7 +241,7 @@ test('Phase A: RALPH_BRAIN=off preserves the legacy static path exactly', () => 
     prompt_chars: 100
   });
   expect(r.routing_source).toBe('difficulty_tier'); // brain bypassed
-  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(r.executor_model).toBe('openrouter/moonshotai/kimi-k3');
 });
 
 test('Phase A: plain first attempt with no signal keeps the static contract', () => {

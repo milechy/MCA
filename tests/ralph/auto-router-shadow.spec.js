@@ -24,9 +24,11 @@ function fakeFetch(model, cost = 0.000001) {
 }
 
 test('blendedRate ranks known models by (input+output)/2', () => {
-  const kimi = blendedRate('openrouter/moonshotai/kimi-k2.6');
-  const sonnet = blendedRate('openrouter/anthropic/claude-sonnet-4.6');
-  expect(sonnet).toBeGreaterThan(kimi);
+  // Kimi K3 (upgraded 2026-07) is priced at Sonnet-tier rates, so compare
+  // against a genuinely pricier model (Opus) to keep this a real ranking test.
+  const kimi = blendedRate('openrouter/moonshotai/kimi-k3');
+  const opus = blendedRate('openrouter/anthropic/claude-opus-4.7');
+  expect(opus).toBeGreaterThan(kimi);
 });
 
 test('probeAutoRouter requires api key and prompt', async () => {
@@ -73,15 +75,17 @@ test('compareRouting detects agreement', () => {
 });
 
 test('compareRouting flags auto cheaper / pricier', () => {
+  // Kimi K3 (upgraded 2026-07) matches Sonnet-tier pricing, so use Opus
+  // (genuinely pricier) as the ladder model to exercise 'auto_cheaper'.
   const cheaper = compareRouting({
-    ladder_model: 'openrouter/anthropic/claude-sonnet-4.6',
-    auto_model: 'openrouter/moonshotai/kimi-k2.6'
+    ladder_model: 'openrouter/anthropic/claude-opus-4.7',
+    auto_model: 'openrouter/moonshotai/kimi-k3'
   });
   expect(cheaper.agree).toBe(false);
   expect(cheaper.cost_relation).toBe('auto_cheaper');
 
   const pricier = compareRouting({
-    ladder_model: 'openrouter/moonshotai/kimi-k2.6',
+    ladder_model: 'openrouter/moonshotai/kimi-k3',
     auto_model: 'openrouter/openai/gpt-5'
   });
   expect(pricier.cost_relation).toBe('auto_pricier');
@@ -95,7 +99,7 @@ test('compareRouting handles missing models', () => {
 test('compareRouting flags unpriced auto picks instead of faking equal_rate', () => {
   // auto-router picks a bleeding-edge model not in MODEL_PRICING
   const c = compareRouting({
-    ladder_model: 'openrouter/moonshotai/kimi-k2.6',
+    ladder_model: 'openrouter/moonshotai/kimi-k3',
     auto_model: 'google/gemini-3-flash-preview-20251217'
   });
   expect(c.agree).toBe(false);
@@ -106,21 +110,23 @@ test('compareRouting flags unpriced auto picks instead of faking equal_rate', ()
 
 test('recordShadow appends a jsonl entry', () => {
   const rootDir = tmpRoot();
+  // Kimi K3 (upgraded 2026-07) matches Sonnet-tier pricing, so use Opus
+  // (genuinely pricier) as the ladder model to exercise 'auto_cheaper'.
   const comparison = compareRouting({
-    ladder_model: 'openrouter/anthropic/claude-haiku-4.5',
-    auto_model: 'openrouter/moonshotai/kimi-k2.6'
+    ladder_model: 'openrouter/anthropic/claude-opus-4.7',
+    auto_model: 'openrouter/moonshotai/kimi-k3'
   });
   const r = recordShadow({
     rootDir,
     story: { story_id: 'S1', difficulty: 'medium' },
-    ladder_model: 'openrouter/anthropic/claude-haiku-4.5',
-    auto_result: { ok: true, chosen_model: 'openrouter/moonshotai/kimi-k2.6', probe_cost_usd: 1e-6 },
+    ladder_model: 'openrouter/anthropic/claude-opus-4.7',
+    auto_result: { ok: true, chosen_model: 'openrouter/moonshotai/kimi-k3', probe_cost_usd: 1e-6 },
     comparison
   });
   expect(r.ok).toBe(true);
   const parsed = JSON.parse(fs.readFileSync(r.path, 'utf8').trim());
   expect(parsed.story_id).toBe('S1');
-  expect(parsed.auto_model).toBe('openrouter/moonshotai/kimi-k2.6');
+  expect(parsed.auto_model).toBe('openrouter/moonshotai/kimi-k3');
   expect(parsed.comparison.cost_relation).toBe('auto_cheaper');
 });
 

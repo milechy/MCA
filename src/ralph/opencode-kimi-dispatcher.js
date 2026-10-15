@@ -24,7 +24,7 @@ const {
 const { routeExecutor } = require('./executor-router');
 
 const OPENCODE_COMMAND = 'opencode';
-const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k2.6';
+const DEFAULT_MODEL = 'openrouter/moonshotai/kimi-k3';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const PATCH_SOURCE = 'opencode_kimi_via_openrouter';
 const MEDIATOR = 'opencode-direct';
@@ -97,7 +97,7 @@ function safeEnv(env) {
 function resolveModel(env, story = null) {
   // Phase 3 #1: story.executor_model takes precedence over env defaults.
   // This lets the (Phase 3 #2) idea-refiner pick a model per-story based
-  // on difficulty assessment — e.g. trivial → kimi-k2.6, architectural →
+  // on difficulty assessment — e.g. trivial → kimi-k3, architectural →
   // claude-sonnet-4.6 — without changing global env state.
   if (story && story.executor_model) {
     const fromStory = String(story.executor_model).trim();
@@ -130,14 +130,14 @@ function buildRequestedPathsSection({ rootDir, requested_paths }) {
 function buildPrompt({ task, requested_paths, rootDir }) {
   const file_context = buildRequestedFileContext({ rootDir, requested_paths });
   const lines = buildOpenClawDiffOnlyPrompt({ task, requested_paths, file_context }).split('\n');
-  lines.splice(1, 0, 'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).');
+  lines.splice(1, 0, 'You are Ralph execution provider (Kimi K3 via OpenRouter through OpenCode).');
   return lines.join('\n');
 }
 
 function buildWorktreePrompt({ task, requested_paths, rootDir }) {
   const file_context = buildRequestedFileContext({ rootDir, requested_paths });
   return [
-    'You are Ralph execution provider (Kimi K2 via OpenRouter through OpenCode).',
+    'You are Ralph execution provider (Kimi K3 via OpenRouter through OpenCode).',
     'You are running inside an isolated git worktree owned by Ralph. Ralph will run `git diff` over the worktree after you finish, and the resulting unified diff IS the candidate patch.',
     'How to deliver your work:',
     '  - Modify or create files at the paths listed under "Requested paths" using normal write/edit tools.',

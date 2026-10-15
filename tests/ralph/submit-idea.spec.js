@@ -112,7 +112,7 @@ test('runSubmitIdea prints preview to stderr on refineIdea success', async () =>
   const storySpec = {
     title: 'Test Title',
     difficulty: 'easy',
-    recommended_executor: 'openrouter/moonshotai/kimi-k2.6',
+    recommended_executor: 'openrouter/moonshotai/kimi-k3',
     requested_paths: ['src/foo.js'],
     requirement: 'FILE 1 (CREATE): test'
   };
@@ -126,7 +126,7 @@ test('runSubmitIdea prints preview to stderr on refineIdea success', async () =>
       ok: true,
       story_spec: storySpec,
       planner_cost_usd: 0.005,
-      planner_model: 'openrouter/moonshotai/kimi-k2.6'
+      planner_model: 'openrouter/moonshotai/kimi-k3'
     }),
     createStory: () => ({ ok: true }),
     now: new Date()
@@ -135,7 +135,7 @@ test('runSubmitIdea prints preview to stderr on refineIdea success', async () =>
   const allStderr = stderr.join('');
   expect(allStderr).toContain('Title: Test Title');
   expect(allStderr).toContain('Difficulty: easy');
-  expect(allStderr).toContain('Executor: openrouter/moonshotai/kimi-k2.6');
+  expect(allStderr).toContain('Executor: openrouter/moonshotai/kimi-k3');
   expect(allStderr).toContain('src/foo.js');
   expect(allStderr).toContain('Planner cost USD: 0.005');
 });

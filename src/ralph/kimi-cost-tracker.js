@@ -3,20 +3,28 @@ const path = require('node:path');
 
 const DEFAULT_DAILY_BUDGET_USD = 5.00;
 
-// Phase 2 #5 default (Kimi K2.6 only) — kept as the fallback for any model
-// not in MODEL_PRICING below.
-const INPUT_COST_PER_TOKEN = 0.0000002;   // $0.20 / 1M tokens
-const OUTPUT_COST_PER_TOKEN = 0.0000008;  // $0.80 / 1M tokens
+// Kimi K3 default (upgraded 2026-07 from K2.6) — kept as the fallback for
+// any model not in MODEL_PRICING below.
+const INPUT_COST_PER_TOKEN = 0.000003;    // $3.00 / 1M tokens
+const OUTPUT_COST_PER_TOKEN = 0.000015;   // $15.00 / 1M tokens
 
 // Phase 3 #1: per-model pricing table. All rates are USD per token (not per
-// 1M). Rates approximate OpenRouter listed prices as of 2026-05; review
-// quarterly. If a model name is not in this table, fall back to Kimi rates
-// (defined above). The fallback is intentionally an UNDER-COUNT for
-// expensive models, which means a missing pricing entry is a SPEND LEAK
-// the operator must catch and patch. Phase 3 #5 surfaces fallback usage
-// in ledger entry metadata so dashboards can highlight stale entries.
+// 1M). Rates approximate OpenRouter listed prices as of 2026-05 (Kimi K3
+// entry added 2026-07); review quarterly. If a model name is not in this
+// table, fall back to Kimi rates (defined above). The fallback is
+// intentionally an UNDER-COUNT for expensive models, which means a missing
+// pricing entry is a SPEND LEAK the operator must catch and patch. Phase 3
+// #5 surfaces fallback usage in ledger entry metadata so dashboards can
+// highlight stale entries.
 const MODEL_PRICING = Object.freeze({
-  // Cheap executors (Phase 2 default)
+  // Default executor (upgraded 2026-07 from K2.6 to K3). K3 is priced at
+  // Sonnet-tier rates ($3/$15 per 1M vs K2.6's $0.20/$0.80) — no longer the
+  // "cheap workhorse" the trivial/easy tier design originally assumed;
+  // watch .ralph/cost-ledger.jsonl for budget pressure this introduces.
+  'openrouter/moonshotai/kimi-k3': { input: 0.000003, output: 0.000015, label: 'kimi-k3' },
+  // Legacy entries kept so any story still carrying an old explicit
+  // executor_model override is priced correctly rather than silently
+  // falling through to the (now much pricier) K3 fallback rate above.
   'openrouter/moonshotai/kimi-k2.6': { input: 0.0000002, output: 0.0000008, label: 'kimi-k2.6' },
   'openrouter/moonshotai/kimi-k2': { input: 0.0000002, output: 0.0000008, label: 'kimi-k2' },
 

@@ -22,8 +22,8 @@ Constraints:
 - requirement must use 'FILE N (CREATE)' or 'FILE N (MODIFY EXISTING)' headers for each path, with enough detail that a junior developer can implement without follow-up questions.
 - difficulty must be one of: trivial, easy, medium, hard, architectural.
 - recommended_executor:
-  * trivial/easy -> openrouter/moonshotai/kimi-k2.6
-  * medium -> openrouter/moonshotai/kimi-k2.6 (preferred for cost) or openrouter/anthropic/claude-haiku-4.5
+  * trivial/easy -> openrouter/moonshotai/kimi-k3
+  * medium -> openrouter/moonshotai/kimi-k3 (preferred for cost) or openrouter/anthropic/claude-haiku-4.5
   * hard -> openrouter/anthropic/claude-sonnet-4.6
   * architectural -> openrouter/anthropic/claude-sonnet-4.6 or openrouter/openai/gpt-5
 
@@ -33,7 +33,7 @@ Return ONLY valid JSON with this exact shape:
   "requirement": "string",
   "requested_paths": ["path1", "path2"],
   "difficulty": "easy",
-  "recommended_executor": "openrouter/moonshotai/kimi-k2.6",
+  "recommended_executor": "openrouter/moonshotai/kimi-k3",
   "reasoning": "string"
 }`;
 

@@ -24,9 +24,9 @@ test('estimateTokens divides character count by 4', () => {
   expect(estimateTokens(undefined)).toBe(0);
 });
 
-test('estimateCostUsd applies Kimi K2.6 OpenRouter rates', () => {
+test('estimateCostUsd applies Kimi K3 OpenRouter rates', () => {
   const cost = estimateCostUsd({ input_tokens: 1000, output_tokens: 1000 });
-  expect(cost).toBe(0.001);
+  expect(cost).toBe(0.018);
 });
 
 test('recordKimiCall appends one JSONL line and computes tokens from prompt_text / output_text', () => {
@@ -36,7 +36,7 @@ test('recordKimiCall appends one JSONL line and computes tokens from prompt_text
     story_id: 'STORY-1',
     prompt_text: 'a'.repeat(40),
     output_text: 'b'.repeat(80),
-    model: 'openrouter/moonshotai/kimi-k2.6'
+    model: 'openrouter/moonshotai/kimi-k3'
   });
   expect(result1.ok).toBe(true);
   expect(result1.entry).toBeTruthy();
@@ -49,7 +49,7 @@ test('recordKimiCall appends one JSONL line and computes tokens from prompt_text
     story_id: 'STORY-2',
     prompt_text: 'c'.repeat(20),
     output_text: 'd'.repeat(40),
-    model: 'openrouter/moonshotai/kimi-k2.6'
+    model: 'openrouter/moonshotai/kimi-k3'
   });
   expect(result2.ok).toBe(true);
   expect(result2.entry.story_id).toBe('STORY-2');
@@ -148,7 +148,7 @@ test('isOverBudget true when daily_spend exceeds cap', () => {
 const { MODEL_PRICING, pricingForModel } = require('../../src/ralph/kimi-cost-tracker');
 
 test('Phase 3 #1: MODEL_PRICING contains entries for Kimi, Claude, GPT-5, Gemini', () => {
-  expect(MODEL_PRICING['openrouter/moonshotai/kimi-k2.6']).toBeDefined();
+  expect(MODEL_PRICING['openrouter/moonshotai/kimi-k3']).toBeDefined();
   expect(MODEL_PRICING['openrouter/anthropic/claude-sonnet-4.6']).toBeDefined();
   expect(MODEL_PRICING['openrouter/openai/gpt-5']).toBeDefined();
   expect(MODEL_PRICING['openrouter/google/gemini-3.0-pro']).toBeDefined();
@@ -157,8 +157,8 @@ test('Phase 3 #1: MODEL_PRICING contains entries for Kimi, Claude, GPT-5, Gemini
 test('Phase 3 #1: pricingForModel returns Kimi rates for unknown models (fallback)', () => {
   const p = pricingForModel('some/unknown/model-xyz');
   expect(p.label).toBe('fallback_kimi_rates');
-  expect(p.input).toBe(0.0000002);
-  expect(p.output).toBe(0.0000008);
+  expect(p.input).toBe(0.000003);
+  expect(p.output).toBe(0.000015);
 });
 
 test('Phase 3 #1: estimateCostUsd uses Claude Sonnet pricing for that model', () => {
@@ -186,8 +186,8 @@ test('Phase 3 #1: estimateCostUsd uses GPT-5 pricing for that model', () => {
 test('Phase 3 #1: estimateCostUsd without model arg uses fallback Kimi rates', () => {
   // Backwards-compat: callers that don't pass model still work.
   const cost = estimateCostUsd({ input_tokens: 1000, output_tokens: 1000 });
-  // 1000 * 0.0000002 + 1000 * 0.0000008 = 0.001
-  expect(cost).toBe(0.001);
+  // 1000 * 0.000003 + 1000 * 0.000015 = 0.018
+  expect(cost).toBe(0.018);
 });
 
 test('Phase 3 #1: recordKimiCall records pricing_source = model label when known', () => {

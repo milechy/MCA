@@ -1,13 +1,16 @@
 const { MODEL_PRICING, pricingForModel, estimateCostUsd } = require('./kimi-cost-tracker');
 
-// Phase 3 #4/#5 set Kimi K2.6 as the workhorse fallback. Phase 8 #4 keeps
+// Phase 3 #4/#5 set Kimi as the workhorse fallback. Phase 8 #4 keeps
 // that posture but adds a difficulty-aware tier ladder ABOVE it: when the
 // planner classifies a story as medium/hard/architectural, route to a
 // model that can actually handle that complexity rather than wasting
 // Kimi attempts on tasks it cannot complete. Trivial/easy still goes to
-// Kimi by default (cost wins). Operator can override per-story via
-// story.executor_model, which always wins over the tier ladder.
-const FALLBACK_EXECUTOR_MODEL = 'openrouter/moonshotai/kimi-k2.6';
+// Kimi by default. Operator can override per-story via story.executor_model,
+// which always wins over the tier ladder.
+// Upgraded 2026-07 from kimi-k2.6 to kimi-k3 — note K3 is priced at
+// Sonnet-tier rates (see kimi-cost-tracker.js MODEL_PRICING), so this is no
+// longer strictly a "cost wins" pick for trivial/easy work.
+const FALLBACK_EXECUTOR_MODEL = 'openrouter/moonshotai/kimi-k3';
 
 // Phase 8 #4: difficulty → executor model mapping. Each tier's preferred
 // model must be in MODEL_PRICING (the allowlist); if missing, we fall back
@@ -15,8 +18,8 @@ const FALLBACK_EXECUTOR_MODEL = 'openrouter/moonshotai/kimi-k2.6';
 // safety checks still apply. The tier ladder is intentionally short — four
 // tiers covering the planner's four difficulty values.
 const DIFFICULTY_TIER_MODELS = Object.freeze({
-  trivial: 'openrouter/moonshotai/kimi-k2.6',
-  easy: 'openrouter/moonshotai/kimi-k2.6',
+  trivial: 'openrouter/moonshotai/kimi-k3',
+  easy: 'openrouter/moonshotai/kimi-k3',
   // Phase 8 #5b: medium was Qwen3-Coder, but the live smoke (#24, 2026-05-27)
   // failed all 3 attempts with `requested_paths_coverage_incomplete`. Qwen
   // wrote source-only output (skipped the requested test file) AND emitted
