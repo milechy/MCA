@@ -52,7 +52,9 @@ async function reply(env, chatId, text) {
 async function llm(req) {
   const res = await fetch(req.url, req.init);
   const json = await res.json();
-  return json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+  const content = json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+  if (!content) console.error('llm_no_content', res.status, JSON.stringify(json).slice(0, 500));
+  return content;
 }
 
 // ---- multi-project repo routing ----------------------------------------
@@ -176,8 +178,13 @@ async function clearSession(env, chatId) { await env.REFINE_KV.delete(sessionKey
 // analyze the doc (+qa); ask questions or move to decomposition
 async function runAnalyze(env, chatId, session) {
   const req = buildAnalyzeRequest({ apiKey: env.OPENROUTER_API_KEY, doc: session.doc, qa: session.qa });
-  const analysis = parseAnalysis(await llm(req));
-  if (!analysis) { await reply(env, chatId, '⚠️ 要件の解析に失敗しました。もう一度送ってください。'); await clearSession(env, chatId); return; }
+  const raw = await llm(req);
+  const analysis = parseAnalysis(raw);
+  if (!analysis) {
+    const fenceCount = ((raw || '').match(/```/g) || []).length;
+    console.error('analyze_parse_failed', 'len=' + (raw || '').length, 'fences=' + fenceCount, JSON.stringify(raw).slice(-600));
+    await reply(env, chatId, '⚠️ 要件の解析に失敗しました。もう一度送ってください。'); await clearSession(env, chatId); return;
+  }
   session.analysis = analysis;
   if (!analysis.ready && analysis.open_questions.length && session.rounds < MAX_ROUNDS) {
     session.phase = 'awaiting_answers';
@@ -278,7 +285,7 @@ async function handleRefinement(env, chatId, update, from, repo) {
 // ---- entry --------------------------------------------------------------
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method !== 'POST') return new Response('ralph telegram worker', { status: 200 });
 
     let update;
@@ -318,13 +325,16 @@ export default {
     let hasSession = false;
     if (env.REFINE_KV) { try { hasSession = !!(await env.REFINE_KV.get(sessionKey(chatId))); } catch { hasSession = false; } }
     if (env.REFINE_KV && (hasSession || looksLikeRequirements(doc))) {
-      await handleRefinement(env, chatId, update, parsed.from, repo);
+      // analyze/decompose can take longer than Telegram's webhook response
+      // window (~60s) — respond immediately via waitUntil so Telegram never
+      // retries the same update and re-runs (and duplicates) the LLM chain.
+      ctx.waitUntil(handleRefinement(env, chatId, update, parsed.from, repo));
       return new Response('ok', { status: 200 });
     }
 
     // else: quick one-issue (needs plain text)
     if (parsed.ok) {
-      await handleQuickIssue(env, chatId, parsed.text, parsed.from, repo);
+      ctx.waitUntil(handleQuickIssue(env, chatId, parsed.text, parsed.from, repo));
     }
     return new Response('ok', { status: 200 });
   }

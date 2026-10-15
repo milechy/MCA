@@ -79,7 +79,11 @@ function buildAnalyzeRequest({ apiKey, model, doc, qa = [] } = {}) {
           { role: 'system', content: ANALYZE_SYSTEM },
           { role: 'user', content: `--- Requirements document ---\n${doc}${qaBlock}` }
         ],
-        max_tokens: 2000,
+        // 2000 truncated the JSON mid-response on a multi-page (9-section)
+        // doc — extractJson then fed a dangling { .. } slice to JSON.parse
+        // and silently failed. 6000 gives room for a longer features/risks
+        // list without approaching the decompose call's 8000 budget.
+        max_tokens: 6000,
         temperature: 0.2
       })
     }
